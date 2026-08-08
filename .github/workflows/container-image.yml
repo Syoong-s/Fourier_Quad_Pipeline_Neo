@@ -1,13 +1,13 @@
 name: Build and publish container image
 
 # ==========================================
-# Trigger: publish every v* tag and support diagnostic manual builds.
+# Trigger: publish major-release tags (v<digits>.0.0) and support diagnostic manual builds.
 # Method: validate the source-external project, then push one amd64 GHCR image.
 # ==========================================
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]+.0.0"
   workflow_dispatch:
 
 permissions:
