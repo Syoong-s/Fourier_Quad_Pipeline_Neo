@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+*.d
+*.mod
+*.smod
+Fourier_Quad_Pipe
+
+# Superplan planning workspace
+.planning/
+
+# Editor / OS files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment files with secrets
+.env
+*.env
+!*.env.example

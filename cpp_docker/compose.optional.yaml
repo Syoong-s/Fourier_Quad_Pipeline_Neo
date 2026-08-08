@@ -1,0 +1,48 @@
+# Optional pipeline mounts.  Include with:
+#   docker compose -f compose.yaml -f compose.optional.yaml up
+#
+# All six mounts are optional.  The pipeline does not always run every
+# process stage, so unused mounts can be omitted entirely.
+#
+#   SCIENCE_ROOT  - science image archive (process_init / process_main)
+#   DQ_ROOT       - data-quality mask archive (process_main)
+#   EXTCAT_INPUT  - raw external catalog input (process_extcat)
+#   REARR_OUTPUT  - rearranged shear catalog output (process_rearr)
+#   EXPOLIST_DIR  - rearranged exposure-list directory (process_rearr)
+#   FD_OUTPUT     - field-distortion output (process_fd)
+#
+# When a mount is not included, the pipeline falls back to defaults that
+# live under PROCESS_DATA (already writable), or the process stage is
+# simply not run.
+
+services:
+  FourierQuad-CPP:
+    volumes:
+      - type: bind
+        source: ${SCIENCE_ROOT_HOST}
+        target: ${SCIENCE_ROOT_CONTAINER:-/data/archive/science}
+        read_only: true
+      - type: bind
+        source: ${DQ_ROOT_HOST}
+        target: ${DQ_ROOT_CONTAINER:-/data/archive/dqmask}
+        read_only: true
+      - type: bind
+        source: ${EXTCAT_INPUT_HOST}
+        target: ${EXTCAT_INPUT_CONTAINER:-/data/catalogs/ExtCatInput}
+        read_only: true
+      - type: bind
+        source: ${REARR_OUTPUT_HOST}
+        target: ${REARR_OUTPUT_CONTAINER:-/data/output/rearr}
+      - type: bind
+        source: ${EXPOLIST_DIR_HOST}
+        target: ${EXPOLIST_DIR_CONTAINER:-/data/output/expolist}
+      - type: bind
+        source: ${FD_OUTPUT_HOST}
+        target: ${FD_OUTPUT_CONTAINER:-/data/output/fdout}
+    environment:
+      SCIENCE_ROOT_CONTAINER: ${SCIENCE_ROOT_CONTAINER:-/data/archive/science}
+      DQ_ROOT_CONTAINER: ${DQ_ROOT_CONTAINER:-/data/archive/dqmask}
+      EXTCAT_INPUT_CONTAINER: ${EXTCAT_INPUT_CONTAINER:-/data/catalogs/ExtCatInput}
+      REARR_OUTPUT_CONTAINER: ${REARR_OUTPUT_CONTAINER:-/data/output/rearr}
+      EXPOLIST_DIR_CONTAINER: ${EXPOLIST_DIR_CONTAINER:-/data/output/expolist}
+      FD_OUTPUT_CONTAINER: ${FD_OUTPUT_CONTAINER:-/data/output/fdout}

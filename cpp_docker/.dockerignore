@@ -1,0 +1,11 @@
+.git
+.github
+.env
+runner/cpppipeline.env
+runner/site-env.sh
+*.docker.tar
+*.sif
+*.log
+logs/
+output/
+tmp/

@@ -1,0 +1,87 @@
+name: Publish release
+
+# ==========================================
+# Trigger: publish from a pushed v* tag or an explicitly selected tag.
+# Method: archive tracked source trees independently and attach checksums.
+# ==========================================
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v* tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_TAG}" == v* ]]
+
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Package tracked release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          git archive --format=zip \
+            --output="artifacts/cpp-standard-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" cpp_Standard
+          git archive --format=zip \
+            --output="artifacts/cpp-lite-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" cpp_Lite
+          git archive --format=zip \
+            --output="artifacts/cpp-docker-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" cpp_docker
+          git archive --format=zip \
+            --output="artifacts/docs-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" \
+            README.md CPP_GUIDE.md CPP_GUIDE_CN.md \
+            CPP_PIPELINE_PARAMETERS.md LICENSE
+
+          (
+            cd artifacts
+            sha256sum ./*.zip >SHA256SUMS
+          )
+          ls -lh artifacts
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" artifacts/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              --verify-tag \
+              --title "${RELEASE_TAG}" \
+              --generate-notes \
+              artifacts/*
+          fi

@@ -1,0 +1,81 @@
+name: Build and publish container image
+
+# ==========================================
+# Trigger: publish every v* tag and support diagnostic manual builds.
+# Method: validate the source-external project, then push one amd64 GHCR image.
+# ==========================================
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    name: Publish C++ toolchain image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate public container project
+        run: bash cpp_docker/scripts/check-public-repo.sh
+
+      - name: Resolve lowercase image name
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "name=${REGISTRY}/${repository}" >>"${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate OCI labels and tags
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=gxx12.3-openmpi4.1.8-pmi2
+            type=sha,format=short
+
+      - name: Build and publish linux/amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./cpp_docker
+          file: ./cpp_docker/Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BUILD_JOBS=4
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

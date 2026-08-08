@@ -1,0 +1,36 @@
+services:
+  FourierQuad-CPP:
+    image: ${IMAGE_NAME:-cpppipeline-dev:gxx12.3-openmpi4.1.8-pmi2}
+    platform: linux/amd64
+    build:
+      context: .
+      target: runtime
+      args:
+        BUILD_JOBS: ${BUILD_JOBS:-4}
+        CPP_UID: ${HOST_UID:-1000}
+        CPP_GID: ${HOST_GID:-1000}
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /workspace/src_pipe
+    stdin_open: true
+    tty: true
+    volumes:
+      - type: bind
+        source: ${CPP_SOURCE_HOST}
+        target: /workspace/src_pipe
+      - type: bind
+        source: ${ASTROMETRY_CAT_HOST}
+        target: ${ASTROMETRY_CAT_CONTAINER:-/data/catalogs/AstroDir}
+        read_only: true
+      - type: bind
+        source: ${SOURCE_CAT_HOST}
+        target: ${SOURCE_CAT_CONTAINER:-/data/catalogs/ExtSrcDir}
+        read_only: true
+      - type: bind
+        source: ${FLAT_PATH_HOST}
+        target: ${FLAT_PATH_CONTAINER:-/data/calib/FlatDir}
+        read_only: true
+      - type: bind
+        source: ${PROCESS_DATA_HOST}
+        target: ${PROCESS_DATA_CONTAINER:-/data/DataProcess}
+    environment:
+      PROCESS_DATA_CONTAINER: ${PROCESS_DATA_CONTAINER:-/data/DataProcess}

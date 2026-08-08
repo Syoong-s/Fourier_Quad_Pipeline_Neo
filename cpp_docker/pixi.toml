@@ -1,0 +1,19 @@
+[workspace]
+name = "fourier-quad-cpp-stack"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+bzip2 = "1.0.8.*"
+cfitsio = "4.6.4.*"
+curl = "8.20.*"
+eigen = "3.4.0.*"
+fftw = "3.3.11.*"
+gxx_linux-64 = "12.3.0.*"
+libblas = { version = "3.11.0.*", build = "*openblas" }
+liblapack = { version = "3.11.0.*", build = "*openblas" }
+libopenblas = "0.3.33.*"
+make = "4.4.1.*"
+perl = "5.32.*"
+pkg-config = "0.29.2.*"
+tar = "1.35.*"
