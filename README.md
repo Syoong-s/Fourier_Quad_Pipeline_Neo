@@ -69,7 +69,7 @@ cp .env.example .env
 
 Edit `.env` and set:
 
-- `IMAGE_NAME=ghcr.io/<owner>/<repository>:gxx12.3-openmpi4.1.8-pmi2`;
+- `IMAGE_NAME=ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest`;
 - `CPP_SOURCE_HOST` to the absolute host path of `cpp_Standard/` or
   `cpp_Lite/`;
 - the catalog, flat-field, and writable processing-data host paths;
@@ -194,6 +194,8 @@ cp cpppipeline.env.example cpppipeline.env
 Edit `cpppipeline.env` with the GHCR image, SIF destination, source/data mounts,
 site modules, and Slurm settings. Then validate in order:
 
+*Note:* GHCR image is available as `ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest`.
+
 ```bash
 bash pull-sif.sh
 bash run-apptainer.sh --check
@@ -209,6 +211,11 @@ Pin `OCI_IMAGE_URI` by digest for production. The supplied runtime expects a
 Slurm site with PMI2 support; verify the cluster interface before a multi-node
 science run. See [the runner guide](cpp_docker/runner/README.md) for resource
 templates and site-specific configuration.
+
+## Manual for AI
+
+Here also provides a manual wraped as a codex/claude code plugin, which gives agent abilities to help you build environment, switch parameters and run pipeline. For more details, please refer to the [Codex/Claude Code Plugin](https://github.com/Syoong-s/FQNeoAIManual).
+
 
 ## Documentation
 
