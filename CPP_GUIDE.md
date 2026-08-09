@@ -37,7 +37,8 @@ frozen-branch simplified build with `PSFRecons` removed. See
 | `src/process_main/PSFModel.cpp`, `include/process_main/PSFModel.hpp` | **Stage 5**: PSF modeling. |
 | `src/process_main/PSFRecons.cpp`, `include/process_main/PSFRecons.hpp` | PSF PCA reconstruction (`PSF_Ms=1` only). |
 | `src/process_main/FourierTransformSt2.cpp`, `include/process_main/FourierTransformSt2.hpp` | **Stage 6**: second-stage Fourier transform. |
-| `src/process_main/ShearMeasurement.cpp`, `include/process_main/ShearMeasurement.hpp` | **Stage 7**: Fourier\_Quad shear estimation. |
+| `src/process_main/ShearMeasurement.cpp`, `include/process_main/ShearMeasurement.hpp` | **Stage 7**: Fourier\_Quad shear estimation and point-source statistic integration. |
+| `src/process_main/PointSourceStatistics.cpp`, `include/process_main/PointSourceStatistics.hpp` | Single-beta Fourier-power point-source morphology statistics used by Stage 7. |
 | `src/process_main/ExposureInfo.cpp`, `include/process_main/ExposureInfo.hpp` | **Stage 8**: per-exposure statistics. |
 | `src/process_main/CatalogCombiner.cpp`, `include/process_main/CatalogCombiner.hpp` | **Stage 9**: catalog combination and calibration. |
 | `src/process_main/` and `include/process_main/` support modules | FITS I/O, linear algebra, image processing, MPI scheduling, and shared numerical utilities. |
@@ -88,7 +89,7 @@ all stages.
 | 4 | 7 | `proc_FFT_st1` / `FourierTransformSt1` | First-stage Fourier transform of galaxy stamps. |
 | 5 | 11 | `proc_PSF` / `PSFModel` | PSF modeling from stellar stamps via local polynomial fitting. Optional PCA reconstruction (`PSF_Ms=1`). |
 | 6 | 13 | `proc_FFT_st2` / `FourierTransformSt2` | Second-stage Fourier transform. |
-| 7 | 17 | `proc_shear` / `ShearMeasurement` | Fourier\_Quad shear estimation from fourth-order Fourier moments. |
+| 7 | 17 | `proc_shear` / `ShearMeasurement` | Fourier\_Quad shear estimation plus `delta_chi2` and `orth_ext` point-source statistics. |
 | 8 | 19 | `proc_info` / `ExposureInfo` | Collect per-exposure statistics (PSF FWHM, star count, etc.). |
 | 9 | 23 | `proc_combine_shear_catalog` / `CatalogCombiner` | Combine shear catalogs across exposures and apply calibration corrections. |
 
@@ -132,7 +133,7 @@ as `process_extcat`, the optional first phase before `process_init` and
 The generated exposure `_all.cat` files can then be repartitioned by celestial
 region with the self-contained fourth phase `process_rearr`. Its pass-through
 width uses `EXTCAT_TOTAL_COLUMNS` (default 18); its dedicated config derives the
-complete default width as `18 + 1 + ichi2(27) = 46`. RA/Dec remain configured
+complete default width as `18 + 1 + ichi2(29) = 48`. RA/Dec remain configured
 raw one-based positions when explicit projection is disabled and are converted
 automatically to projection positions when it is enabled. Outputs default to
 each dataset's `rearranged_catalog/` directory.
@@ -221,6 +222,17 @@ Run the self-contained rearrangement unit and MPI integration tests with:
 ```bash
 make test-rearr
 ```
+
+Run the Stage 7 synthetic point-source regression in either C++ variant with:
+
+```bash
+make test-point-source-statistics
+```
+
+The test covers PSF-like and fixed-beta extended sources, brightness scaling,
+negative noise-subtracted power, invalid inputs, and the 28/29-column catalog
+contract. Production runs use the normal `mpirun` commands below; no separate
+runtime dependency is introduced by the statistic module.
 
 
 ## Defaults and option syntax
@@ -346,8 +358,8 @@ mpirun -np 4 ./Fourier_Quad_Pipe \
 
 All rearrangement-specific parameters are in
 `include/process_rearr/ProcessRearrConfig.hpp`. With the default 18-field
-external catalog, `ichi2=27` and the complete row width is calculated there as
-`18 + 1 + 27 = 46`. The default 0.1-degree grid targets about 500,000 rows per
+external catalog, `ichi2=29` and the complete row width is calculated there as
+`18 + 1 + 29 = 48`. The default 0.1-degree grid targets about 500,000 rows per
 weighted k-d partition. Outputs are written below each dataset root in
 `rearranged_catalog/` as `subcat_NNNNNN.cat` plus
 `catalog_summary.txt`. Every data row must have the exact numeric width and

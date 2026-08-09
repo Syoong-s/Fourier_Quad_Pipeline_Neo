@@ -173,6 +173,8 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                      - dup_buf[i][fc::col_PSF]) / dup_buf[i][fc::col_PSF];
                 data.src_snr[idx] = dup_buf[i][fc::col_h_flux] /
                                      std::sqrt(dup_buf[i][fc::col_h_area]);
+                data.delta_chi2[idx] = dup_buf[i][fc::col_delta_chi2];
+                data.orth_ext[idx] = dup_buf[i][fc::col_orth_ext];
                 data.rra[idx]  = dup_buf[i][fc::col_ra];
                 data.ddec[idx] = dup_buf[i][fc::col_dec];
 
@@ -226,6 +228,8 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                  - dup_buf[i][fc::col_PSF]) / dup_buf[i][fc::col_PSF];
             data.src_snr[idx] = dup_buf[i][fc::col_h_flux] /
                                  std::sqrt(dup_buf[i][fc::col_h_area]);
+            data.delta_chi2[idx] = dup_buf[i][fc::col_delta_chi2];
+            data.orth_ext[idx] = dup_buf[i][fc::col_orth_ext];
             data.rra[idx]  = dup_buf[i][fc::col_ra];
             data.ddec[idx] = dup_buf[i][fc::col_dec];
 

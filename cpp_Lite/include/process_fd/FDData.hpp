@@ -22,6 +22,8 @@ struct FDData {
     std::vector<float> magg, magr, magi;  // magnitudes
     std::vector<float> sizerel;            // relative size
     std::vector<float> src_snr;            // source SNR
+    std::vector<float> delta_chi2;          // PSF-vs-extended residual difference
+    std::vector<float> orth_ext;            // PSF-orthogonal extension projection
     std::vector<float> rra, ddec;          // RA, Dec (degrees)
     std::vector<int>   iexpo;              // exposure index (per-exposure mode)
     std::vector<float> snrf;               // SNR_F (per-exposure mode)
@@ -29,6 +31,11 @@ struct FDData {
     // Jackknife region assignment
     std::vector<int>   labels;
 
+    // ==========================================
+    // Function: Allocate all per-source FD arrays to one shared capacity.
+    // Method: Resize every aligned field together so a single source index
+    //         addresses shear, metadata, and point-source statistics safely.
+    // ==========================================
     void reserve(int capacity) {
         x1.resize(capacity); x2.resize(capacity);
         y1.resize(capacity); y2.resize(capacity);
@@ -36,6 +43,7 @@ struct FDData {
         ww.resize(capacity);
         magg.resize(capacity); magr.resize(capacity); magi.resize(capacity);
         sizerel.resize(capacity); src_snr.resize(capacity);
+        delta_chi2.resize(capacity); orth_ext.resize(capacity);
         rra.resize(capacity); ddec.resize(capacity);
         iexpo.resize(capacity); snrf.resize(capacity);
         labels.resize(capacity);

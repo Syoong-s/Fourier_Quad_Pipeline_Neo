@@ -173,6 +173,10 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `gal_smooth` | — | `0*` Std / `2*` Lite | Galaxy/noise FFT power smoothing. `0` none; `1` linear 5×5 hole-aware; `2` log-power 5×5 hole-aware. This intentional default difference changes main-galaxy processing. |
 | `star_smooth` | — | `0`, `1`, `2*` | Star FFT power smoothing with the same modes. In star power normalization, `0` uses four neighboring central pixels while values `≥1` use the central pixel. |
 | `size_fit_rmax` | — | `4*` | Radius in Fourier pixels for the equal-weight low-frequency curvature fits that produce `gal_size_T` and `psf_size_T`. |
+| `point_stat_beta` | — | `0.10*` | Single survey-wide shape parameter for the Stage 7 extended template `P(k) exp[-beta (k/kmax)^2]`. Compile-time; tune offline and rebuild rather than fitting per source. |
+| `point_stat_k_frac` | — | `0.90*` | Fraction of the PSF reliable Fourier radius retained as `kmax` for `delta_chi2` and `orth_ext`. |
+| `point_stat_eps` | — | `1e-20*` | Numerical floor used only to reject singular point-source statistics and stabilize scalar normalization. It is not a science cut. |
+| `point_stat_min_corr` | — | `1e-6*` | Minimum absolute normalized source–PSF projection needed for stable `orth_ext`; numerical protection only. |
 | `SNR_PSF` | — | `100.0*` | S/N threshold used to select PSF-star candidates; some preliminary selection uses half this value. |
 | `saturation_thresh` | — | `25000.0*` | Raw-pixel saturation cutoff and normalized peak rejection reference. |
 | `pixel_size` | — | `0.2628` arcsec* | Detector pixel scale used to convert PSF sizes to angular units. |
@@ -186,8 +190,8 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `ngal_max` | — | `4000*` | Maximum galaxies stored per chip. Larger detected catalogs are truncated at this limit. |
 | `nstar_max` | — | `2000*` | Maximum stars stored per chip. Memory use includes arrays scaling as `nstar_max²`. |
 | `src_npara` | — | `12*` | Shared source/PSF/FFT2 internal row width. It exactly covers fields through `iSNR_F` and PSF parameter slot 11. |
-| `shear_cat_ncols` | — | `ipsfsizeT + 1 = 26*` | Stage 7 shear-catalog width through the appended galaxy and PSF curvature sizes. The exposure `chi2` appended later is not part of this count. |
-| `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 27*` | Exposure-catalog width containing the 26 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |
+| `shear_cat_ncols` | — | `iorth_ext + 1 = 28*` | Stage 7 shear-catalog width through `gal_size_T`, `psf_size_T`, `delta_chi2`, and `orth_ext`. The exposure `chi2` appended later is not part of this count. |
+| `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 29*` | Exposure-catalog width containing the 28 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |
 | `len_sam` | — | `50*` | Number of exposure-wide selected-star stamps placed in one FITS layout row/block. |
 | `npd` | — | `33*` | Number of astrometric PU distortion coefficients per coordinate. Must match astrometry file serialization and fitting code. |
 | `NMAX_EXPO` | — | `25000*` | Maximum exposure records allocated for aggregation. |
@@ -282,7 +286,9 @@ internal/output layout and requires coordinated reader/writer changes.
 | `iparity` | — | `23*` | WCS parity. |
 | `igalsizeT` | — | `24*` | Galaxy low-frequency Fourier-power curvature size `T` in pixel². |
 | `ipsfsizeT` | — | `25*` | PSF low-frequency Fourier-power curvature size `T` in pixel². |
-| `ichi2` | — | `shear_cat_ncols = 26*` | Zero-based index of the appended exposure chi2, immediately after the 26-field shear catalog. |
+| `idelta_chi2` | — | `26*` | Normalized PSF-minus-extended weighted residual; smaller/negative values are more PSF-like and positive values favor the fixed extended template. |
+| `iorth_ext` | — | `27*` | Source projection along the PSF-orthogonal extension direction; larger positive values are more extended. |
+| `ichi2` | — | `shear_cat_ncols = 28*` | Zero-based index of the appended exposure chi2, immediately after the 28-field shear catalog. |
 
 ### 3m. Calibration and camera geometry (compile-time)
 
@@ -319,9 +325,9 @@ identical in Standard and Lite.
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `ichi2` | — | `LensingConfig::expo_cat_ncols = 27*` | Derived count of the 26 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
+| `ichi2` | — | `LensingConfig::expo_cat_ncols = 29*` | Derived count of the 28 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
 | `CCD_COLUMN_COUNT` | — | `1*` | Derived fixed CCD_NUM field count. |
-| `ALL_CAT_TOTAL_COLUMNS` | — | `EXTCAT_TOTAL_COLUMNS + 1 + ichi2 = 46*` | Compile-time pass-through `_all.cat` width. Compile-time validation permits a different positive external width; focused tests verify the shipped 46-column default. |
+| `ALL_CAT_TOTAL_COLUMNS` | — | `EXTCAT_TOTAL_COLUMNS + 1 + ichi2 = 48*` | Compile-time pass-through `_all.cat` width. Compile-time validation permits a different positive external width; focused tests verify the shipped 48-column default. |
 | `externalCatalogColumns(options)` | — | `18*` (pass-through) or projection length | Runtime-effective external width. Explicit projection output contains exactly its selected fields. |
 | `allCatalogColumns(options)` | — | Effective external width `+ 1 + ichi2*` | Runtime-effective exact row width used by the parser and MPI transfers. |
 

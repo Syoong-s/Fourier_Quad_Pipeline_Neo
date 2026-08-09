@@ -32,7 +32,8 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 | `src/process_main/PSFModel.cpp`、`include/process_main/PSFModel.hpp` | **阶段 5**：PSF 建模。 |
 | `src/process_main/PSFRecons.cpp`、`include/process_main/PSFRecons.hpp` | PSF PCA 重建（仅 `PSF_Ms=1` 时启用）。 |
 | `src/process_main/FourierTransformSt2.cpp`、`include/process_main/FourierTransformSt2.hpp` | **阶段 6**：第二阶段傅里叶变换。 |
-| `src/process_main/ShearMeasurement.cpp`、`include/process_main/ShearMeasurement.hpp` | **阶段 7**：Fourier\_Quad 剪切估计。 |
+| `src/process_main/ShearMeasurement.cpp`、`include/process_main/ShearMeasurement.hpp` | **阶段 7**：Fourier\_Quad 剪切估计与点源统计量集成。 |
+| `src/process_main/PointSourceStatistics.cpp`、`include/process_main/PointSourceStatistics.hpp` | 阶段 7 使用的单 beta Fourier 功率谱点源形态统计模块。 |
 | `src/process_main/ExposureInfo.cpp`、`include/process_main/ExposureInfo.hpp` | **阶段 8**：单次曝光统计。 |
 | `src/process_main/CatalogCombiner.cpp`、`include/process_main/CatalogCombiner.hpp` | **阶段 9**：星表合并与标定。 |
 | `src/process_main/` 与 `include/process_main/` 中的支撑模块 | FITS 读写、线性代数、图像处理、MPI 调度与通用数值工具。 |
@@ -76,7 +77,7 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 | 4 | 7 | `proc_FFT_st1` / `FourierTransformSt1` | 星系 stamp 第一阶段傅里叶变换。 |
 | 5 | 11 | `proc_PSF` / `PSFModel` | 基于恒星 stamp 的 PSF 建模（局域多项式拟合）。可选 PCA 重建（`PSF_Ms=1`）。 |
 | 6 | 13 | `proc_FFT_st2` / `FourierTransformSt2` | 第二阶段傅里叶变换。 |
-| 7 | 17 | `proc_shear` / `ShearMeasurement` | 基于四阶傅里叶矩的 Fourier\_Quad 剪切估计。 |
+| 7 | 17 | `proc_shear` / `ShearMeasurement` | Fourier\_Quad 剪切估计，并生成 `delta_chi2` 与 `orth_ext` 点源统计量。 |
 | 8 | 19 | `proc_info` / `ExposureInfo` | 收集单次曝光统计（PSF FWHM、恒星数等）。 |
 | 9 | 23 | `proc_combine_shear_catalog` / `CatalogCombiner` | 跨曝光合并剪切星表并应用标定校正。 |
 
@@ -114,7 +115,7 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 
 流水线生成的曝光级 `_all.cat` 还可由自包含的第四个函数 `process_rearr` 按天区
 重新切分。直通模式的外部列宽来自 `EXTCAT_TOTAL_COLUMNS`（默认 18）；专属配置头
-按 `18 + 1 + ichi2(27) = 46` 派生默认总列数。关闭显式投影时直接使用配置的一基
+按 `18 + 1 + ichi2(29) = 48` 派生默认总列数。关闭显式投影时直接使用配置的一基
 RA/Dec 原始列号，开启后会按投影列表自动换算位置。输出默认位于每个数据集的
 `rearranged_catalog/` 目录。
 
@@ -190,6 +191,16 @@ make test-extcat-reader
 ```bash
 make test-rearr
 ```
+
+在任一 C++ 变体中运行阶段 7 点源统计合成回归测试：
+
+```bash
+make test-point-source-statistics
+```
+
+该测试覆盖 PSF-like 与固定 beta 扩展源、亮度缩放、负的去噪功率、无效输入，
+并验证 28/29 列星表契约。生产运行仍使用下文的常规 `mpirun` 命令；统计模块不引入
+新的运行时依赖。
 
 ## 默认值与选项语法
 

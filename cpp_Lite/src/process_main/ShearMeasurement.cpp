@@ -6,6 +6,7 @@
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
 #include "PSFModel.hpp"
+#include "PointSourceStatistics.hpp"
 #include "ExStar.hpp"
 #include "ImageProcessing.hpp"
 #include <iostream>
@@ -261,7 +262,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             fout10 << "poly_chi2 xc yc sigma nstar imax jmax "
                    << "half_light_flux half_light_area flag psf_FWHM SNR_F "
                    << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity "
-                   << "gal_size_T psf_size_T\n";
+                   << "gal_size_T psf_size_T delta_chi2 orth_ext\n";
             fout10.close();
         };
 
@@ -337,7 +338,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         fout10 << "poly_chi2 xc yc sigma nstar imax jmax "
                << "half_light_flux half_light_area flag psf_FWHM SNR_F "
                << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity "
-               << "gal_size_T psf_size_T\n";
+               << "gal_size_T psf_size_T delta_chi2 orth_ext\n";
 
         for (int i = 0; i < ngal; ++i) {
             std::vector<float> gal_p(ns * ns);
@@ -365,6 +366,11 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                 ns, gal_p, LensingConfig::size_fit_rmax);
             gal_para[i][LensingConfig::ipsfsizeT] = measurePowerCurvatureSize(
                 ns, psf_model, LensingConfig::size_fit_rmax);
+
+            const PointSourceStatisticsResult point_stats =
+                PointSourceStatistics::measure(ns, gal_p, psf_model);
+            gal_para[i][LensingConfig::idelta_chi2] = point_stats.delta_chi2;
+            gal_para[i][LensingConfig::iorth_ext] = point_stats.orth_ext;
 
             float poly_chi2 = 0.0f;
             ExStar::anaChi2Simple(ns, psf_model.data(), psf_model0.data(), poly_chi2);

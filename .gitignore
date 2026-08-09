@@ -4,6 +4,7 @@
 *.mod
 *.smod
 Fourier_Quad_Pipe
+test_point_source_statistics
 
 # Superplan planning workspace
 .planning/

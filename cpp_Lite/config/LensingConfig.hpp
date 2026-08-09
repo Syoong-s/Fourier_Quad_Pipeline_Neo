@@ -122,6 +122,22 @@ namespace LensingConfig {
     constexpr int star_smooth = 2;
     constexpr int size_fit_rmax = 4;
 
+    // Point-source Fourier-power morphology statistics. The beta value is a
+    // single survey-wide template shape, not a per-source fitted parameter.
+    constexpr double point_stat_beta = 0.10;
+    constexpr double point_stat_k_frac = 0.90;
+    constexpr double point_stat_eps = 1.0e-20;
+    constexpr double point_stat_min_corr = 1.0e-6;
+
+    static_assert(point_stat_beta > 0.0,
+                  "point-source template beta must be positive");
+    static_assert(point_stat_k_frac > 0.0 && point_stat_k_frac < 1.0,
+                  "point-source Fourier window fraction must lie in (0, 1)");
+    static_assert(point_stat_eps > 0.0,
+                  "point-source numerical epsilon must be positive");
+    static_assert(point_stat_min_corr > 0.0 && point_stat_min_corr < 1.0,
+                  "point-source minimum correlation must lie in (0, 1)");
+
     constexpr double SNR_PSF = 100.0;
     constexpr double saturation_thresh = 25000.0;
 
@@ -156,9 +172,18 @@ namespace LensingConfig {
     constexpr int iparity = 24 - 1;
     constexpr int igalsizeT = 25 - 1;
     constexpr int ipsfsizeT = 26 - 1;
-    constexpr int shear_cat_ncols = ipsfsizeT + 1;
+    constexpr int idelta_chi2 = 27 - 1;
+    constexpr int iorth_ext = 28 - 1;
+    constexpr int shear_cat_ncols = iorth_ext + 1;
     constexpr int expo_cat_ncols = shear_cat_ncols + 1;
     constexpr int ichi2 = shear_cat_ncols;
+
+    static_assert(idelta_chi2 == ipsfsizeT + 1,
+                  "delta_chi2 must follow the existing shear columns");
+    static_assert(iorth_ext == idelta_chi2 + 1,
+                  "orth_ext must follow delta_chi2");
+    static_assert(shear_cat_ncols == 28,
+                  "Stage 7 must emit 28 shear-catalog columns");
     
     // Max counts
     constexpr int NMAX_EXPO = 25000;

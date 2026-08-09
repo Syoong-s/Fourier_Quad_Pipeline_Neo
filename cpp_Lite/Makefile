@@ -38,6 +38,7 @@ SRCS = main.cpp \
        src/process_main/FourierTransformSt2.cpp \
        src/process_main/PSFModel.cpp \
        src/process_main/CurvatureSizeMeasurement.cpp \
+       src/process_main/PointSourceStatistics.cpp \
        src/process_main/ShearMeasurement.cpp \
        src/process_main/ExposureInfo.cpp \
        src/process_main/CatalogCombiner.cpp \
@@ -52,8 +53,19 @@ SRCS = main.cpp \
 OBJS = $(SRCS:.cpp=.o)
 DEPS = $(OBJS:.o=.d)
 TARGET = Fourier_Quad_Pipe
+POINT_SOURCE_TEST = tests/test_point_source_statistics
 
 all: $(TARGET)
+
+test-point-source-statistics: $(POINT_SOURCE_TEST)
+	./$(POINT_SOURCE_TEST)
+
+$(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
+                     src/process_main/PointSourceStatistics.cpp \
+                     include/process_main/PointSourceStatistics.hpp \
+                     config/LensingConfig.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/PointSourceStatisticsTest.cpp src/process_main/PointSourceStatistics.cpp -o $@
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
@@ -62,8 +74,8 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(TARGET)
+	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST)
 
 -include $(DEPS)
 
-.PHONY: all clean
+.PHONY: all clean test-point-source-statistics

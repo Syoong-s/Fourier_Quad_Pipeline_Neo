@@ -145,6 +145,8 @@ inline constexpr int col_sin2    = ccd_num_cols * LensingConfig::ext_cat + Lensi
 inline constexpr int col_parity  = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iparity;
 inline constexpr int col_galsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::igalsizeT;
 inline constexpr int col_psfsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipsfsizeT;
+inline constexpr int col_delta_chi2 = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::idelta_chi2;
+inline constexpr int col_orth_ext = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iorth_ext;
 inline constexpr int col_chi2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ichi2;
 
 // Total number of columns in the catalog
@@ -153,6 +155,10 @@ inline constexpr int ICHI2 = ccd_num_cols * LensingConfig::ext_cat
 
 static_assert(ICHI2 == col_chi2 + 1,
               "FD rows must end immediately after the appended chi2 column");
+static_assert(col_delta_chi2 == col_psfsizeT + 1,
+              "delta_chi2 must follow psf_size_T in FD rows");
+static_assert(col_orth_ext + 1 == col_chi2,
+              "orth_ext must be the final shear column in FD rows");
 
 // ==================== Bad CCD list (DES) ====================
 inline constexpr int bad_ccds[] = {2, 31, 53, 61};
