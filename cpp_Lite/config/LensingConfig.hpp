@@ -72,7 +72,7 @@ namespace LensingConfig {
     constexpr int len_s = 15;
     constexpr int ngal_max = 4000;
     constexpr int nstar_max = 2000;
-    constexpr int npara = 25;
+    constexpr int src_npara = 12;
     constexpr int len_sam = 50;
 
     constexpr int npd = 33;
@@ -153,7 +153,9 @@ namespace LensingConfig {
     constexpr int icos2 = 22 - 1;
     constexpr int isin2 = 23 - 1;
     constexpr int iparity = 24 - 1;
-    constexpr int ichi2 = 25 - 1;
+    constexpr int shear_cat_ncols = iparity + 1;
+    constexpr int expo_cat_ncols = shear_cat_ncols + 1;
+    constexpr int ichi2 = shear_cat_ncols;
     
     // Max counts
     constexpr int NMAX_EXPO = 25000;

@@ -184,7 +184,9 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `len_s` | — | `15*` | Star stamps per FITS layout row/block. |
 | `ngal_max` | — | `4000*` | Maximum galaxies stored per chip. Larger detected catalogs are truncated at this limit. |
 | `nstar_max` | — | `2000*` | Maximum stars stored per chip. Memory use includes arrays scaling as `nstar_max²`. |
-| `npara` | — | `25*` | Number of per-source/per-star parameter slots in internal tables. Must cover all configured indices. |
+| `src_npara` | — | `12*` | Shared source/PSF/FFT2 internal row width. It exactly covers fields through `iSNR_F` and PSF parameter slot 11. |
+| `shear_cat_ncols` | — | `iparity + 1 = 24*` | Stage 7 shear-catalog width through parity. The exposure `chi2` appended later is not part of this count. |
+| `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 25*` | Exposure-catalog width containing the 24 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |
 | `len_sam` | — | `50*` | Number of exposure-wide selected-star stamps placed in one FITS layout row/block. |
 | `npd` | — | `33*` | Number of astrometric PU distortion coefficients per coordinate. Must match astrometry file serialization and fitting code. |
 | `NMAX_EXPO` | — | `25000*` | Maximum exposure records allocated for aggregation. |
@@ -277,7 +279,7 @@ internal/output layout and requires coordinated reader/writer changes.
 | `icos2` | — | `21*` | Spin-2 cosine term. |
 | `isin2` | — | `22*` | Spin-2 sine term. |
 | `iparity` | — | `23*` | WCS parity. |
-| `ichi2` | — | `24*` | Zero-based index of the 25th field (exposure chi2); also consumed by `process_rearr` as `ProcessRearrConfig::ichi2 = 25`. |
+| `ichi2` | — | `shear_cat_ncols = 24*` | Zero-based index of the appended exposure chi2, immediately after the 24-field shear catalog. |
 
 ### 3m. Calibration and camera geometry (compile-time)
 
@@ -314,7 +316,7 @@ identical in Standard and Lite.
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `ichi2` | — | `LensingConfig::ichi2 + 1 = 25*` | Derived count of the 24 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
+| `ichi2` | — | `LensingConfig::expo_cat_ncols = 25*` | Derived count of the 24 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
 | `CCD_COLUMN_COUNT` | — | `1*` | Derived fixed CCD_NUM field count. |
 | `ALL_CAT_TOTAL_COLUMNS` | — | `EXTCAT_TOTAL_COLUMNS + 1 + ichi2 = 44*` | Compile-time pass-through `_all.cat` width. Compile-time validation permits a different positive external width; focused tests verify the shipped 44-column default. |
 | `externalCatalogColumns(options)` | — | `18*` (pass-through) or projection length | Runtime-effective external width. Explicit projection output contains exactly its selected fields. |

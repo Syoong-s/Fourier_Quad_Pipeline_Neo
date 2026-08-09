@@ -63,7 +63,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles, c
 
     int n = 0;
     int m = 0;
-    int num_cols = LensingConfig::iparity + 1; // 24 columns
+    int num_cols = LensingConfig::shear_cat_ncols;
 
     std::string last_prefix;
 

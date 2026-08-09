@@ -298,7 +298,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         while (std::getline(fin, line)) {
             if (line.empty()) continue;
             std::stringstream ss(line);
-            std::vector<float> row(LensingConfig::npara, 0.0f);
+            std::vector<float> row(LensingConfig::shear_cat_ncols, 0.0f);
             bool success = true;
             for (int i = 0; i <= LensingConfig::iSNR_F; ++i) {
                 if (!(ss >> row[i])) {

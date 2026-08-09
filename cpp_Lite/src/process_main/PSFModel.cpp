@@ -28,21 +28,21 @@ namespace PSFModel {
     // Heap-allocated structure representing the exposure-wide star catalog & chi^2 grid to prevent stack overflow
     struct ExposurePSFState {
         std::vector<int> nstar;
-        std::vector<double> star_para; // Size: NMAX_CHIP * nstar_max * npara
+        std::vector<double> star_para; // Size: NMAX_CHIP * nstar_max * src_npara
         std::vector<float> chi_d;      // Size: NMAX_CHIP * nstar_max * nstar_max
 
         ExposurePSFState() {
             nstar.assign(LensingConfig::NMAX_CHIP, 0);
-            star_para.assign(static_cast<size_t>(LensingConfig::NMAX_CHIP) * LensingConfig::nstar_max * LensingConfig::npara, 0.0);
+            star_para.assign(static_cast<size_t>(LensingConfig::NMAX_CHIP) * LensingConfig::nstar_max * LensingConfig::src_npara, 0.0);
             chi_d.assign(static_cast<size_t>(LensingConfig::NMAX_CHIP) * LensingConfig::nstar_max * LensingConfig::nstar_max, 0.0f);
         }
 
         double& getStarPara(int chip, int star, int para) {
-            return star_para[((static_cast<size_t>(chip) * LensingConfig::nstar_max) + star) * LensingConfig::npara + para];
+            return star_para[((static_cast<size_t>(chip) * LensingConfig::nstar_max) + star) * LensingConfig::src_npara + para];
         }
 
         const double& getStarPara(int chip, int star, int para) const {
-            return star_para[((static_cast<size_t>(chip) * LensingConfig::nstar_max) + star) * LensingConfig::npara + para];
+            return star_para[((static_cast<size_t>(chip) * LensingConfig::nstar_max) + star) * LensingConfig::src_npara + para];
         }
 
         float& getChiD(int chip, int star1, int star2) {

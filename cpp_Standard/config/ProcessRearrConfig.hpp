@@ -13,11 +13,11 @@ namespace ProcessRearrConfig {
 
 // ==========================================
 // Configuration: Derived _all.cat column layout
-// Method: Treat ichi2 as the 25 fields appended by process_main after CCD_NUM,
+// Method: Count the 24 shear fields plus the appended chi2 field after CCD_NUM,
 //         then apply external columns + 1 CCD column + ichi2 exactly once.
 // ==========================================
 inline constexpr std::size_t ichi2 =
-    static_cast<std::size_t>(LensingConfig::ichi2) + 1;
+    static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
 inline constexpr std::size_t CCD_COLUMN_COUNT = 1;
 inline constexpr std::size_t ALL_CAT_TOTAL_COLUMNS =
     ExtCatConfig::EXTCAT_TOTAL_COLUMNS + CCD_COLUMN_COUNT + ichi2;

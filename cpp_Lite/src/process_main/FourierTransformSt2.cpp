@@ -48,7 +48,7 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
     while (std::getline(fin, line)) {
         if (line.empty()) continue;
         std::stringstream ss(line);
-        std::vector<float> row(LensingConfig::npara, 0.0f);
+        std::vector<float> row(LensingConfig::src_npara, 0.0f);
         bool success = true;
         for (int i = 0; i < iflag_col; ++i) {
             if (!(ss >> row[i])) {

@@ -586,7 +586,7 @@ namespace SourceExtractor {
 
         std::vector<float> source_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
         std::vector<float> noise_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::npara, 0.0f));
+        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
 
         if (procError != 1) {
             std::string catname = OutputLayout::chipPath(
@@ -684,7 +684,7 @@ namespace SourceExtractor {
 
         std::vector<float> source_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
         std::vector<float> noise_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::npara, 0.0f));
+        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
         std::vector<int> sid(LensingConfig::ngal_max, 0);
         std::vector<std::string> accepted_orig_lines;
         std::string orig_header = "";

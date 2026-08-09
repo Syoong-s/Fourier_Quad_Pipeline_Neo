@@ -146,7 +146,11 @@ inline constexpr int col_parity  = ccd_num_cols * LensingConfig::ext_cat + Lensi
 inline constexpr int col_chi2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ichi2;
 
 // Total number of columns in the catalog
-inline constexpr int ICHI2 = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::npara;
+inline constexpr int ICHI2 = ccd_num_cols * LensingConfig::ext_cat
+                           + LensingConfig::expo_cat_ncols;
+
+static_assert(ICHI2 == col_chi2 + 1,
+              "FD rows must end immediately after the appended chi2 column");
 
 // ==================== Bad CCD list (DES) ====================
 inline constexpr int bad_ccds[] = {2, 31, 53, 61};
