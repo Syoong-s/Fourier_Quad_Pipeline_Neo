@@ -132,7 +132,7 @@ as `process_extcat`, the optional first phase before `process_init` and
 The generated exposure `_all.cat` files can then be repartitioned by celestial
 region with the self-contained fourth phase `process_rearr`. Its pass-through
 width uses `EXTCAT_TOTAL_COLUMNS` (default 18); its dedicated config derives the
-complete default width as `18 + 1 + ichi2(25) = 44`. RA/Dec remain configured
+complete default width as `18 + 1 + ichi2(27) = 46`. RA/Dec remain configured
 raw one-based positions when explicit projection is disabled and are converted
 automatically to projection positions when it is enabled. Outputs default to
 each dataset's `rearranged_catalog/` directory.
@@ -346,8 +346,8 @@ mpirun -np 4 ./Fourier_Quad_Pipe \
 
 All rearrangement-specific parameters are in
 `include/process_rearr/ProcessRearrConfig.hpp`. With the default 18-field
-external catalog, `ichi2=25` and the complete row width is calculated there as
-`18 + 1 + 25 = 44`. The default 0.1-degree grid targets about 500,000 rows per
+external catalog, `ichi2=27` and the complete row width is calculated there as
+`18 + 1 + 27 = 46`. The default 0.1-degree grid targets about 500,000 rows per
 weighted k-d partition. Outputs are written below each dataset root in
 `rearranged_catalog/` as `subcat_NNNNNN.cat` plus
 `catalog_summary.txt`. Every data row must have the exact numeric width and

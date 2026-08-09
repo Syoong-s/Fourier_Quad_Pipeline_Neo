@@ -29,7 +29,7 @@ All parameters are fixed to one set (DES defaults). Key parameters:
 - `fd_num=21` spatial bins, `PDF_BINS=4` inner bins, `gf_lim=0.0015`
 - `N_jack=50` jackknife regions, `Km_iter=100` k-means iterations
 - Quality cuts: `snrlow=20`, `starcut=20`, `chi2_thresh=0.01`, etc.
-- Column indices: DES format, 0-based, 44 total columns
+- Column indices: DES format, 0-based, 46 total columns
 
 ## Source Files
 

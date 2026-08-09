@@ -13,7 +13,7 @@ namespace ProcessRearrConfig {
 
 // ==========================================
 // Configuration: Derived _all.cat column layout
-// Method: Count the 24 shear fields plus the appended chi2 field after CCD_NUM,
+// Method: Count the 26 shear fields plus the appended chi2 field after CCD_NUM,
 //         then apply external columns + 1 CCD column + ichi2 exactly once.
 // ==========================================
 inline constexpr std::size_t ichi2 =
@@ -65,7 +65,7 @@ inline std::size_t allCatalogColumns(
     return externalCatalogColumns(options) + CCD_COLUMN_COUNT + ichi2;
 }
 
-static_assert(ichi2 == 25, "process_main must append 25 fields through exposure Chi2");
+static_assert(ichi2 == 27, "process_main must append 27 fields through exposure Chi2");
 static_assert(ExtCatConfig::EXTCAT_TOTAL_COLUMNS > 0,
               "the external catalog column count must be positive");
 static_assert(SKY_TILE_COUNT

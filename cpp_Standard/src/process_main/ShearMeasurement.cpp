@@ -313,7 +313,8 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             fout10 << std::setprecision(10);
             fout10 << "poly_chi2 xc yc sigma nstar imax jmax "
                    << "half_light_flux half_light_area flag psf_FWHM SNR_F "
-                   << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity\n";
+                   << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity "
+                   << "gal_size_T psf_size_T\n";
             fout10.close();
         };
 
@@ -388,7 +389,8 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         fout10 << std::setprecision(10);
         fout10 << "poly_chi2 xc yc sigma nstar imax jmax "
                << "half_light_flux half_light_area flag psf_FWHM SNR_F "
-               << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity\n";
+               << "ra dec gf1 gf2 g1 g2 de h1 h2 cos2 sin2 parity "
+               << "gal_size_T psf_size_T\n";
 
         for (int i = 0; i < ngal; ++i) {
             std::vector<float> gal_p(ns * ns);
@@ -417,13 +419,18 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             }
 
             if (std::isnan(psf_model[0])) {
-                for (int j = 0; j <= LensingConfig::iparity; ++j) {
+                for (int j = 0; j < LensingConfig::shear_cat_ncols; ++j) {
                     fout10 << "-999.0 ";
                 }
                 fout10 << "\n";
                 std::cerr << "Error / proc_shear PSF model layer1 for chip " << imageFiles[ichip] << std::endl;
                 continue;
             }
+
+            gal_para[i][LensingConfig::igalsizeT] = measurePowerCurvatureSize(
+                ns, gal_p, LensingConfig::size_fit_rmax);
+            gal_para[i][LensingConfig::ipsfsizeT] = measurePowerCurvatureSize(
+                ns, psf_model, LensingConfig::size_fit_rmax);
 
             float poly_chi2 = 0.0f;
             ExStar::anaChi2Simple(ns, psf_model.data(), psf_model0.data(), poly_chi2);
@@ -469,7 +476,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             gal_para[i][LensingConfig::isin2] = static_cast<float>(sin2);
             gal_para[i][LensingConfig::iparity] = static_cast<float>(parity);
 
-            for (int j = 0; j <= LensingConfig::iparity; ++j) {
+            for (int j = 0; j < LensingConfig::shear_cat_ncols; ++j) {
                 fout10 << gal_para[i][j] << " ";
             }
             fout10 << "\n";

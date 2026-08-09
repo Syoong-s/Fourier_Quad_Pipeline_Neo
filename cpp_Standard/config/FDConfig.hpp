@@ -143,6 +143,8 @@ inline constexpr int col_h2      = ccd_num_cols * LensingConfig::ext_cat + Lensi
 inline constexpr int col_cos2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::icos2;
 inline constexpr int col_sin2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::isin2;
 inline constexpr int col_parity  = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iparity;
+inline constexpr int col_galsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::igalsizeT;
+inline constexpr int col_psfsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipsfsizeT;
 inline constexpr int col_chi2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ichi2;
 
 // Total number of columns in the catalog

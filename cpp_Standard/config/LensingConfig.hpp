@@ -120,6 +120,7 @@ namespace LensingConfig {
 
     constexpr int gal_smooth = 0;
     constexpr int star_smooth = 2;
+    constexpr int size_fit_rmax = 4;
 
     constexpr double SNR_PSF = 100.0;
     constexpr double saturation_thresh = 25000.0;
@@ -153,7 +154,9 @@ namespace LensingConfig {
     constexpr int icos2 = 22 - 1;
     constexpr int isin2 = 23 - 1;
     constexpr int iparity = 24 - 1;
-    constexpr int shear_cat_ncols = iparity + 1;
+    constexpr int igalsizeT = 25 - 1;
+    constexpr int ipsfsizeT = 26 - 1;
+    constexpr int shear_cat_ncols = ipsfsizeT + 1;
     constexpr int expo_cat_ncols = shear_cat_ncols + 1;
     constexpr int ichi2 = shear_cat_ncols;
 

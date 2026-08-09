@@ -5,6 +5,7 @@
 #include <string>
 
 namespace ShearMeasurement {
+    float measurePowerCurvatureSize(int ns, const std::vector<float>& power, int rmax);
     void getWindowMinK(int ns, const std::vector<float>& psf_model, float thresh, float& k_win);
     void getWindowMinKVer2(int ns, const std::vector<float>& psf_model, float thresh, float& k_win);
     void getShear(int n, const float* gal, const float* psf, float& g1, float& g2, float& de, float& h1, float& h2);

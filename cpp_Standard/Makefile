@@ -38,6 +38,7 @@ SRCS = main.cpp \
        src/process_main/FourierTransformSt2.cpp \
        src/process_main/PSFModel.cpp \
        src/process_main/PSFRecons.cpp \
+       src/process_main/CurvatureSizeMeasurement.cpp \
        src/process_main/ShearMeasurement.cpp \
        src/process_main/ExposureInfo.cpp \
        src/process_main/CatalogCombiner.cpp \
