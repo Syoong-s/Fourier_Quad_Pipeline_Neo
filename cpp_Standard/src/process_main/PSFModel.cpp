@@ -824,7 +824,6 @@ namespace PSFModel {
         int len_s = LensingConfig::len_s;
         int nstar_max = LensingConfig::nstar_max;
         int npl = LensingConfig::npl;
-        int nplx = LensingConfig::nplx;
 
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string comp_filename = dirOutput + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
@@ -1024,7 +1023,6 @@ namespace PSFModel {
         int len_s = LensingConfig::len_s;
         int nstar_max = LensingConfig::nstar_max;
         int npl = LensingConfig::npl;
-        int nplx = LensingConfig::nplx;
         int npx = LensingConfig::npx;
         int npy = LensingConfig::npy;
         int step_psf = LensingConfig::step_psf;

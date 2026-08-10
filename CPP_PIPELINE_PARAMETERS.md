@@ -134,12 +134,12 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `psf_order` | — | `8*` | Reserved legacy PSF-order constant; currently unused. |
+| `psf_order` | — | `8*` (Lite legacy only) | Removed from Standard; retained as an unused compatibility constant in Lite. |
 | `npo` | — | `64*` | Reserved legacy PSF selection size; currently used only to derive `nstar_min`. |
-| `npox` | — | `8*` | Reserved legacy PSF basis-width constant; currently unused. |
+| `npox` | — | `8*` (Lite legacy only) | Removed from Standard; retained as an unused compatibility constant in Lite. |
 | `nstar_min` | — | `npo·3/2 = 96*` | Base exposure-wide star threshold. PSF star selection rejects an exposure when total candidate count is below `2·nstar_min` (192 by default). |
 | `npl` | — | `10*` | Number of ordered 2D polynomial terms fitted per PSF Fourier pixel; `10` includes terms through total degree 3. |
-| `nplx` | — | `2*` | Compatibility value copied into PSF routines; currently not consumed downstream. |
+| `nplx` | — | `2*` (Lite legacy only) | Removed from Standard; retained for the unchanged Lite compatibility path. |
 | `nstar_min_local` | — | `16*` | Minimum finite stars required for one local chip PSF fit. |
 | `step_psf` | — | `100*` (Std only) | Standard very-local PSF map grid spacing in pixels; used only with `PSF_type=2`. Absent in Lite. |
 | `n_neighbor` | — | `5*` (Std only) | Standard number of nearest stars used by the very-local PSF branch. Absent in Lite. |
@@ -162,7 +162,6 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `dz_thresh` | — | `0.1*` | Maximum redshift difference for keeping neighboring entries during external-catalog deblending. |
 | `source_thresh` | — | `2.0*` | Detection/defect connected-pixel threshold in noise-sigma units. |
 | `core_thresh` | — | `4.0*` | Detection-core/peak threshold in noise-sigma units. |
-| `flat_thresh` | — | `0.01*` (Std only) | Reserved Standard legacy flat threshold; currently unused. Absent in Lite. |
 | `area_max` | — | `ns·ns = 4096*` | Derived maximum connected-region workspace/area. |
 | `area_thresh` | — | `6*` | Minimum connected-region pixel count. |
 
@@ -243,7 +242,6 @@ parameters.
 | `n_pcs` | — | `100*` | Maximum number of residual principal components stored and fitted. |
 | `npp6th` | — | `28*` | Number of ordered 2D sixth-degree polynomial terms used for PCA coefficient surfaces. |
 | `pca_negative_eigenvalue_threshold` | — | `-1.0e-5*` | Eigenvalue below which a PCA covariance result is classified as invalid. |
-| `nmax_star_pchip` | — | `1000000*` | Reserved legacy per-chip PCA star capacity; currently unused. |
 
 ### 3k. File-system paths (compile-time)
 
@@ -307,8 +305,9 @@ internal/output layout and requires coordinated reader/writer changes.
 
 Redistributes per-exposure `_all.cat` rows into spatially sorted subcatalogs.
 Compile-time parameters are from `ProcessRearrConfig.hpp`; CLI-overridable
-parameters are from `ProcessConfig.hpp`. All rearrangement parameters are
-identical in Standard and Lite.
+parameters are from `ProcessConfig.hpp`. Operational rearrangement behavior is
+identical in Standard and Lite; Lite still declares the obsolete static
+pass-through-width compatibility constant documented below.
 
 ### 4a. Runtime (CLI-overridable) parameters
 
@@ -321,15 +320,19 @@ identical in Standard and Lite.
 | `EXTCAT_DEC_COLUMN_ONE_BASED` | `--extcat-dec-column` | Positive integer (default `6*`) | Raw Dec field position used by rearr to derive the effective Dec column in the `_all.cat` row. |
 | `EXPO_LIST` | `--expo-list` (or positional, or init output) | Path string (default `""*`) | Exposure-list file. Each per-exposure chip list is used to derive `result/<PREFIX>_all.cat` paths. |
 
-### 4b. Derived column layout (compile-time)
+### 4b. Derived column layout (compile-time components and runtime width)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
 | `ichi2` | — | `LensingConfig::expo_cat_ncols = 29*` | Derived count of the 28 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
 | `CCD_COLUMN_COUNT` | — | `1*` | Derived fixed CCD_NUM field count. |
-| `ALL_CAT_TOTAL_COLUMNS` | — | `EXTCAT_TOTAL_COLUMNS + 1 + ichi2 = 48*` | Compile-time pass-through `_all.cat` width. Compile-time validation permits a different positive external width; focused tests verify the shipped 48-column default. |
+| `ALL_CAT_TOTAL_COLUMNS` | — | `48*` (Lite legacy only) | Removed from Standard because runtime width calculation supersedes it; retained as an unused compatibility constant in Lite. |
 | `externalCatalogColumns(options)` | — | `18*` (pass-through) or projection length | Runtime-effective external width. Explicit projection output contains exactly its selected fields. |
 | `allCatalogColumns(options)` | — | Effective external width `+ 1 + ichi2*` | Runtime-effective exact row width used by the parser and MPI transfers. |
+
+There is no fixed total-width constant. The shipped pass-through layout has
+`18 + 1 + 29 = 48` columns, while an explicit projection with `N` external
+fields has `N + 30` columns.
 
 ### 4c. Spatial partitioning and output (compile-time)
 

@@ -21,7 +21,6 @@ namespace UniversalUtils {
             constexpr float tiny = 1.0e-20f;
             std::vector<int> indx(n, 0);
             std::vector<float> vv(n, 0.0f);
-            float d = 1.0f;
 
             for (int i = 0; i < n; ++i) {
                 float aamax = 0.0f;
@@ -65,7 +64,6 @@ namespace UniversalUtils {
                     for (int k = 0; k < n; ++k) {
                         std::swap(ma[imax * n + k], ma[j * n + k]);
                     }
-                    d = -d;
                     vv[imax] = vv[j];
                 }
                 indx[j] = imax;
@@ -113,7 +111,6 @@ namespace UniversalUtils {
                     ma_inv[row * n + col] = b[row];
                 }
             }
-            (void)d;
             return true;
         }
     }

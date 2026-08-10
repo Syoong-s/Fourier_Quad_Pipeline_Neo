@@ -39,13 +39,10 @@ namespace LensingConfig {
     constexpr int ncx = 3;
 
     // PSF selection and configuration
-    constexpr int psf_order = 8;
     constexpr int npo = 64;
-    constexpr int npox = 8;
     constexpr int nstar_min = npo * 3 / 2;
-   constexpr int npl = 10;
-   constexpr int nplx = 2;
-   constexpr int nstar_min_local = 16;
+    constexpr int npl = 10;
+    constexpr int nstar_min_local = 16;
 
     constexpr int step_psf = 100;
     constexpr int deblending = 1;
@@ -80,7 +77,6 @@ namespace LensingConfig {
     // Thresholds
     constexpr double source_thresh = 2.0;
     constexpr double core_thresh = 4.0;
-    constexpr double flat_thresh = 0.01;
 
     // ==========================================
     // Configuration: Function Set_Sig mode-bar noise-plane estimator
@@ -208,7 +204,6 @@ namespace LensingConfig {
     constexpr int n_pcs = 100;
     constexpr int npp6th = 28;
     constexpr double pca_negative_eigenvalue_threshold = -1.0e-5;
-    constexpr int nmax_star_pchip = 1000000;
 }
 
 #endif // LENSING_CONFIG_HPP

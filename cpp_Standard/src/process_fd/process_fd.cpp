@@ -20,7 +20,6 @@
 #include <vector>
 
 namespace fc = FDConfig;
-namespace lc = LensingConfig;
 
 // ==========================================
 // Function: Load and broadcast the exposure list on rank zero

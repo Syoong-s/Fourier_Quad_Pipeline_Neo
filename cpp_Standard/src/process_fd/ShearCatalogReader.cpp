@@ -11,7 +11,6 @@
 #include <vector>
 
 namespace fc = FDConfig;
-namespace lc = LensingConfig;
 
 // ==========================================
 // Function: readExposure
