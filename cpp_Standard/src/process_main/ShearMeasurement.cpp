@@ -1,4 +1,5 @@
 #include "ShearMeasurement.hpp"
+#include "MPIFailure.hpp"
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
@@ -45,82 +46,10 @@ void getWindowMinK(int ns, const std::vector<float>& psf_model, float thresh, fl
 }
 
 // ==========================================
-// Function: Find alternate PSF low-k cutoff radius.
-// Method: Mirrors F77 get_window_min_k_ver2 radial-bin stddev rule.
+// Function: Compute the five Fourier_Quad shear estimators
+// Method: Derive the PSF window from configured pi, deconvolve in Fourier
+//         space below the low-k cutoff, and accumulate spin-2/spin-4 moments.
 // ==========================================
-void getWindowMinKVer2(int ns, const std::vector<float>& psf_model, float thresh, float& k_win) {
-    int c_pix = ns / 2;
-    int nbins = static_cast<int>(ns * std::sqrt(2.0) / 0.5) + 2;
-
-    std::vector<int> cnt(nbins, 0);
-    std::vector<double> sum_log(nbins, 0.0);
-    std::vector<double> sum_sq(nbins, 0.0);
-    std::vector<double> stddev(nbins, 0.0);
-    double k_dent = 1e5;
-
-    for (int i = 0; i < ns; ++i) {
-        double kx = static_cast<double>(i - c_pix);
-        for (int j = 0; j < ns; ++j) {
-            double ky = static_cast<double>(j - c_pix);
-            double kval = std::sqrt(kx * kx + ky * ky);
-            float val = psf_model[i * ns + j];
-            if (val <= 0.0f) {
-                if (kval < k_dent) {
-                    k_dent = kval;
-                }
-                continue;
-            }
-            int bin_idx_cpp = static_cast<int>(kval / 0.5);
-            if (bin_idx_cpp < 0 || bin_idx_cpp >= nbins) continue;
-
-            double logval = std::log(static_cast<double>(val));
-            cnt[bin_idx_cpp]++;
-            sum_log[bin_idx_cpp] += logval;
-            sum_sq[bin_idx_cpp] += logval * logval;
-        }
-    }
-
-    for (int b = 0; b < nbins; ++b) {
-        if (cnt[b] > 1) {
-            double var = sum_sq[b] / cnt[b] - std::pow(sum_log[b] / cnt[b], 2.0);
-            stddev[b] = std::sqrt(std::max(0.0, var));
-        }
-    }
-
-    double a = 0.0;
-    int n_avg = 0;
-    for (int b = 0; b < nbins; ++b) {
-        double bin_k = b * 0.5;
-        if (bin_k >= 10.0) break;
-        if (cnt[b] > 1 && stddev[b] > 0.0) {
-            a += stddev[b];
-            n_avg++;
-        }
-    }
-
-    if (n_avg > 0) {
-        a /= n_avg;
-    } else {
-        k_win = 0.0f;
-        return;
-    }
-
-    k_win = 0.0f;
-    for (int b = 0; b < nbins; ++b) {
-        double bin_k = b * 0.5;
-        if (bin_k < 10.0) continue;
-        if (cnt[b] <= 1) continue;
-        if (stddev[b] > static_cast<double>(thresh) * a) {
-            k_win = static_cast<float>(bin_k);
-            return;
-        }
-    }
-
-    if (k_dent < k_win) {
-        k_win = static_cast<float>(k_dent);
-    }
-}
-
 void getShear(int n, const float* gal, const float* psf, float& g1, float& g2, float& de, float& h1, float& h2) {
     float peak = psf[0];
     for (int i = 0; i < n * n; ++i) {
@@ -138,7 +67,7 @@ void getShear(int n, const float* gal, const float* psf, float& g1, float& g2, f
         }
     }
 
-    float ks = std::sqrt(area / 3.1415926f);
+    float ks = static_cast<float>(std::sqrt(area / LensingConfig::pi));
     float PSFr_ratio = 0.75f;
     float ks_2 = std::pow(ks * PSFr_ratio, -2.0f);
 
@@ -180,6 +109,11 @@ void getShear(int n, const float* gal, const float* psf, float& g1, float& g2, f
     }
 }
 
+// ==========================================
+// Function: Convert the PSF Fourier-power area to FWHM
+// Method: Measure the one-over-e area and use the configured pixel scale for
+//         the final arcsecond conversion.
+// ==========================================
 void getPSFArea(const float* model, float& FWHM) {
     int ns = LensingConfig::ns;
     float model_center = model[(ns / 2) * ns + (ns / 2)];
@@ -197,7 +131,8 @@ void getPSFArea(const float* model, float& FWHM) {
     }
     float r = std::sqrt(area / LensingConfig::pi);
     float beta = ns / (2.0f * LensingConfig::pi) / r;
-    FWHM = beta * 2.0f * std::sqrt(2.0f * std::log(2.0f)) * 0.2628f;
+    FWHM = beta * 2.0f * std::sqrt(2.0f * std::log(2.0f))
+         * static_cast<float>(LensingConfig::pixel_size);
 }
 
 // ==========================================
@@ -224,8 +159,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         int nx = 0, ny = 0;
         std::vector<float> ePSF;
         if (!FitsIO::readImage(filename, nx, ny, ePSF)) {
-            std::cerr << "Error reading PSF fits: " << filename << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read external PSF", filename);
         }
         std::vector<float> ePSF_p(ns * ns);
         double dummy_pc = 0.0;
@@ -242,8 +176,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         std::string filename = dirOutput + "/stamps/dat_Rescale/" + prefix_expo + "_factor.dat";
         std::ifstream fin(filename);
         if (!fin.is_open()) {
-            std::cerr << "cannot find rescale factor file" << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read PSF rescale factor", filename);
         }
         fin >> res_factor;
         fin.close();
@@ -300,8 +233,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                     proc_error = 1;
                 }
             } else {
-                std::cerr << "Error / proc_shear PSF_local FITS file error!! " << filename << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld("read local PSF image", filename);
             }
         }
 
@@ -341,8 +273,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             dirOutput, "stamps/dat_SrcInfo", PREFIX, "_source_info.dat");
         std::ifstream fin(info_filename);
         if (!fin.is_open()) {
-            std::cerr << "Error / proc_shear source_info catalog file error!! " << info_filename << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read Stage 6 source info", info_filename);
         }
 
         std::string header;
@@ -382,8 +313,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         std::string power_fits = OutputLayout::chipPath(
             dirOutput, "stamps/fits_SrcP", PREFIX, "_source_p.fits");
         if (!FitsIO::readStamps(ngal_max, 1, ngal, ns, ns, gal_p_coll, nn1, nn2, power_fits)) {
-            std::cerr << "Error / proc_shear source_p FITS file error!! " << power_fits << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read Stage 6 source power", power_fits);
         }
 
         fout10.open(out_filename);

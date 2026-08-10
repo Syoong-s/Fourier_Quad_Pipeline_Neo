@@ -1,5 +1,6 @@
 #include "PSFRecons.hpp"
 #include "OutputFile.hpp"
+#include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "PSFModel.hpp"
@@ -281,7 +282,8 @@ namespace PSFRecons {
                             }
                         }
                     } else {
-                        std::exit(1);
+                        MPIFailure::abortWorld("read PCA residual stamps",
+                                               fits_filename);
                     }
                 }
             }
@@ -406,19 +408,15 @@ namespace PSFRecons {
         // Write PCA results to disk
         std::string filename_pcs = dirOutput + "/stamps/dat_Pcs/pcs_ccd" + c_chip_2digit + ".dat";
         MainIO::OutputFile pcs_file(filename_pcs);
-        if (pcs_file.is_open()) {
-            for (int k = 0; k < nsns; ++k) {
-                for (int j = 0; j < LensingConfig::n_pcs; ++j) {
-                    pcs_file << std::scientific << std::setprecision(17)
-                             << components[static_cast<size_t>(k) * LensingConfig::n_pcs + j] << " ";
-                }
-                pcs_file << std::scientific << std::setprecision(17) << mean_arr[k] << "\n";
+        for (int k = 0; k < nsns; ++k) {
+            for (int j = 0; j < LensingConfig::n_pcs; ++j) {
+                pcs_file << std::scientific << std::setprecision(17)
+                         << components[static_cast<size_t>(k) * LensingConfig::n_pcs + j] << " ";
             }
-            pcs_file.close();
-            std::cout << "PCA finished chip ..." << ichip << std::endl;
-        } else {
-            std::cerr << "Error writing PCA file: " << filename_pcs << std::endl;
+            pcs_file << std::scientific << std::setprecision(17) << mean_arr[k] << "\n";
         }
+        pcs_file.close();
+        std::cout << "PCA finished chip ..." << ichip << std::endl;
 
         // 2. Project PCA coefficients
         std::vector<double> coeff(static_cast<size_t>(ntot) * LensingConfig::n_pcs, 0.0);
@@ -519,10 +517,6 @@ namespace PSFRecons {
 
                 std::string filename_coeff = dirOutput + "/stamps/dat_Pcs/coeff_ccd" + c_chip_2digit + "_" + std::to_string(j) + std::to_string(k) + ".dat";
                 MainIO::OutputFile coeff_file(filename_coeff);
-                if (!coeff_file.is_open()) {
-                    std::cerr << "Error writing coeff file: " << filename_coeff << std::endl;
-                    continue;
-                }
 
                 if (pca_failed || fit_num <= (LensingConfig::npp6th + 10)) {
                     if (!pca_failed) {
@@ -640,16 +634,11 @@ namespace PSFRecons {
         if (rescale_file.is_open() && (rescale_file >> res_factor)) {
             rescale_file.close();
         } else {
-            std::cerr << "cannot find rescale factor file" << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read PSF rescale factor", rescale_filename);
         }
 
         std::string out_filename = dir_output + "/stamps/dat_StarCompV2/" + prefix_e + "_star_comp_expo_v2.dat";
         MainIO::OutputFile file11(out_filename);
-        if (!file11.is_open()) {
-            std::cerr << "plotResidualsV2: Error opening " << out_filename << std::endl;
-            return;
-        }
 
         std::string in_filename = dir_output + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
         std::ifstream file10(in_filename);
@@ -721,7 +710,8 @@ namespace PSFRecons {
 
             int chip_index = UniversalUtils::getChipId(image_files[ichip - 1]);
             if (chip_index < 0) {
-                std::exit(1);
+                MPIFailure::abortWorld("read CCD identifier",
+                                       image_files[ichip - 1]);
             }
             file11 << ichip << " " << nstar << " " << valid << "\n";
 
@@ -775,7 +765,11 @@ namespace PSFRecons {
         file11.close();
     }
 
-    // Hierarchical PSF model reconstruction at a specific position (x, y) on a CCD chip
+    // ==========================================
+    // Function: Reconstruct a hierarchical PSF model at one chip position
+    // Method: Combine the local polynomial layer with loaded PCA residual
+    //         surfaces and abort all ranks if the required shared model is absent.
+    // ==========================================
     void getPSFModelHierarchical(int i_ccd, double x, double y, float refactor, 
                                  const std::vector<double>& local_coe, std::vector<float>& psf_model) {
         int ns = LensingConfig::ns;
@@ -784,8 +778,9 @@ namespace PSFRecons {
         psf_model.assign(ns * ns, 0.0f);
 
         if (!PSFModel::is_data_loaded) {
-            std::cerr << "Error: PSF data not loaded! Call init first." << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld(
+                "reconstruct hierarchical PSF",
+                "PCA data is not loaded for CCD " + std::to_string(i_ccd));
         }
 
         double xx_norm = 2.0 * (x / static_cast<double>(LensingConfig::chipnx)) - 1.0;

@@ -194,7 +194,7 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 29*` | Exposure-catalog width containing the 28 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |
 | `len_sam` | — | `50*` | Number of exposure-wide selected-star stamps placed in one FITS layout row/block. |
 | `npd` | — | `33*` | Number of astrometric PU distortion coefficients per coordinate. Must match astrometry file serialization and fitting code. |
-| `NMAX_EXPO` | — | `25000*` | Maximum exposure records allocated for aggregation. |
+| `NMAX_EXPO` | — | `25000*` | Maximum accepted exposure records; Stage 8 allocates aggregation storage for the runtime `N_EXPO` count. |
 | `NMAX_CHIP` | — | `62*` | Maximum chips represented in fixed-capacity PSF/exposure arrays. |
 
 ### 3i. Mode-bar noise-plane estimator (compile-time)

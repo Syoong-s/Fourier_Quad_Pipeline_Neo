@@ -14,6 +14,10 @@ extern std::vector<std::string> EXPO_FILE;
 
 namespace FourierTransformSt1 {
 
+    // ==========================================
+    // Function: Run the Stage-4 star FFT for one exposure
+    // Method: Resolve the exposure's chip list and process each chip serially.
+    // ==========================================
     void procFourierTSt1(int iexpo) {
         if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
@@ -29,7 +33,13 @@ namespace FourierTransformSt1 {
         }
     }
 
-    void chipProcessFourierTSt1(const std::string& imageFile, const std::string& dirOutput) {
+    // ==========================================
+    // Function: Transform one chip's star-candidate stamps to Fourier power
+    // Method: Reuse four fixed-size scratch vectors across all sources while
+    //         preserving the existing FFT, noise subtraction, and regularization.
+    // ==========================================
+    void chipProcessFourierTSt1(const std::string& imageFile,
+                                const std::string& dirOutput) {
         if (LensingConfig::ext_PSF == 1) {
             return;
         }
@@ -83,16 +93,17 @@ namespace FourierTransformSt1 {
             }
 
             std::vector<float> power_coll(static_cast<size_t>(ngal_max) * ns * ns, 0.0f);
+            const std::size_t stamp_size =
+                static_cast<std::size_t>(ns) * static_cast<std::size_t>(ns);
+            std::vector<float> source(stamp_size);
+            std::vector<float> noise(stamp_size);
+            std::vector<float> source_p(stamp_size);
+            std::vector<float> noise_p(stamp_size);
 
             for (int i = 0; i < nsource; ++i) {
-                std::vector<float> source(ns * ns);
-                std::vector<float> noise(ns * ns);
-
-                std::copy(source_coll.begin() + i * ns * ns, source_coll.begin() + (i + 1) * ns * ns, source.begin());
-                std::copy(noise_coll.begin() + i * ns * ns, noise_coll.begin() + (i + 1) * ns * ns, noise.begin());
-
-                std::vector<float> source_p(ns * ns);
-                std::vector<float> noise_p(ns * ns);
+                const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
+                std::copy_n(source_coll.data() + offset, stamp_size, source.data());
+                std::copy_n(noise_coll.data() + offset, stamp_size, noise.data());
                 double source_pc = 0.0;
                 double noise_pc = 0.0;
 
@@ -101,7 +112,8 @@ namespace FourierTransformSt1 {
                 ImageProcessing::processPowers(ns, source_p, noise_p);
                 ImageProcessing::regularizePower(ns, ns, source_p, LensingConfig::star_smooth);
 
-                std::copy(source_p.begin(), source_p.end(), power_coll.begin() + i * ns * ns);
+                std::copy_n(source_p.data(), stamp_size,
+                            power_coll.data() + offset);
             }
 
             std::string filename_star_can_power = OutputLayout::chipPath(

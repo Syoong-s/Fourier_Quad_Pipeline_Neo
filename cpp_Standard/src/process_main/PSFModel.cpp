@@ -1,5 +1,6 @@
 #include "PSFModel.hpp"
 #include "OutputFile.hpp"
+#include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "FitsIO.hpp"
@@ -103,7 +104,11 @@ namespace PSFModel {
         return true;
     }
 
-    // Load and broadcast PSF PCA components
+    // ==========================================
+    // Function: Load and broadcast all PCA PSF components
+    // Method: Let rank zero read the component/coefficient files, abort the
+    //         MPI world on fatal input loss, and broadcast aligned arrays.
+    // ==========================================
     void initAndLoadAllPSF(const std::string& dirOutput, int myRank) {
         if (is_data_loaded) return;
 
@@ -140,8 +145,7 @@ namespace PSFModel {
                     }
                 } else {
                     global_components[getCompIndex(i_ccd - 1, 0, 0)] = -1.0e30;
-                    std::cout << "CCD " << i_ccd << " PCS data read error: " << filename << std::endl;
-                    std::exit(1);
+                    MPIFailure::abortWorld("read PCA components", filename);
                 }
 
                 for (int bx = 1; bx <= LensingConfig::nblocks; ++bx) {
@@ -164,8 +168,8 @@ namespace PSFModel {
                             }
                         } else {
                             global_poly_coefs[getPolyIndex(i_ccd - 1, bx - 1, by - 1, 0, 0)] = -1.0e30f;
-                            std::cout << "CCD " << i_ccd << " field " << bx << " " << by << " polynomial data read error: " << filename_coeff << std::endl;
-                            std::exit(1);
+                            MPIFailure::abortWorld("read PCA polynomial coefficients",
+                                                   filename_coeff);
                         }
                     }
                 }
@@ -197,7 +201,11 @@ namespace PSFModel {
         is_data_loaded = false;
     }
 
-    // Stage 5 main entry
+    // ==========================================
+    // Function: Run Stage-5 PSF modeling for one exposure
+    // Method: Execute candidate loading, selection, diagnostics, and configured
+    //         local/hybrid fitting with MPI-wide handling of fatal inputs.
+    // ==========================================
     void procPSF(int iexpo) {
         if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
@@ -233,8 +241,9 @@ namespace PSFModel {
         } else if (LensingConfig::PSF_type == 2) {
             makePSFHybrid(nchip, imageFiles, dirOutput, state);
         } else {
-            std::cerr << "Error / PSF Invalid PSF fitting method!" << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld(
+                "select PSF fitting method",
+                "PSF_type=" + std::to_string(LensingConfig::PSF_type));
         }
     }
 
@@ -336,8 +345,11 @@ namespace PSFModel {
         model_in = psf_out;
     }
 
-    // Local Helper Routines
-
+    // ==========================================
+    // Function: Load star candidates and Fourier-power stamps for one exposure
+    // Method: Read chip catalogs and stamps into the shared exposure state,
+    //         aborting every rank when an existing fatal input is unavailable.
+    // ==========================================
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
         int len_s = LensingConfig::len_s;
@@ -381,9 +393,7 @@ namespace PSFModel {
 
             std::ifstream infile(filepath);
             if (!infile.is_open()) {
-                std::cerr << filepath << "\n";
-                std::cerr << "Error / PSF star_can_info catalog file error!!" << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld("read PSF star-candidate info", filepath);
             }
 
             // Skip header line
@@ -414,8 +424,8 @@ namespace PSFModel {
                     dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
                 std::vector<float> star(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
                 if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, stampPath)) {
-                    std::cerr << "readInCandidates: readStamps failed for " << stampPath << std::endl;
-                    std::exit(1);
+                    MPIFailure::abortWorld("read PSF star-candidate power",
+                                           stampPath);
                 }
 
                 for (int i = 0; i < state.nstar[k]; ++i) {
@@ -637,6 +647,11 @@ namespace PSFModel {
         }
     }
 
+    // ==========================================
+    // Function: Assemble exposure-wide selected-star Fourier power
+    // Method: Read each chip's stamp collection, retain selected stars, and
+    //         publish the existing exposure FITS product.
+    // ==========================================
     void plotStarExpo(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
         int len_s = LensingConfig::len_s;
@@ -664,8 +679,7 @@ namespace PSFModel {
                 dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
 
             if (!FitsIO::readStamps(nstar_max, 1, state.nstar[ichip], ns, ns, star, nn1, nn2, filepath)) {
-                std::cerr << "plotStarExpo: readStamps failed for " << filepath << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld("read exposure PSF star power", filepath);
             }
 
             for (int i = 0; i < state.nstar[ichip]; ++i) {
@@ -712,10 +726,6 @@ namespace PSFModel {
 
         std::string info_filename = dirOutput + "/stamps/dat_StarInfo/" + prefix_e + "_star_info_expo.dat";
         MainIO::OutputFile outfile(info_filename);
-        if (!outfile.is_open()) {
-            std::cerr << "plotStars: Error opening " << info_filename << std::endl;
-            return;
-        }
         outfile << std::setprecision(10);
 
         outfile << "# ichip nstar FWHM e1 e2 chi_d\n";
@@ -801,12 +811,8 @@ namespace PSFModel {
         std::string prefix = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string filename = dirOutput + "/stamps/dat_Rescale/" + prefix + "_factor.dat";
         MainIO::OutputFile outfile(filename);
-        if (outfile.is_open()) {
-            outfile << std::scientific << std::setprecision(10) << summ << std::endl;
-            outfile.close();
-        } else {
-            std::cerr << "saveRescaleFactor: Error opening file " << filename << std::endl;
-        }
+        outfile << std::scientific << std::setprecision(10) << summ << std::endl;
+        outfile.close();
     }
 
     // ==========================================
@@ -823,10 +829,6 @@ namespace PSFModel {
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string comp_filename = dirOutput + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
         MainIO::OutputFile file90(comp_filename);
-        if (!file90.is_open()) {
-            std::cerr << "makePSFLocalFit: Error opening " << comp_filename << std::endl;
-            return;
-        }
         file90 << std::setprecision(17);
 
         float res_factor = 1.0f;
@@ -837,8 +839,8 @@ namespace PSFModel {
                 rescale_file >> res_factor;
                 rescale_file.close();
             } else {
-                std::cerr << "cannot find rescale factor file" << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld("read PSF rescale factor",
+                                       rescale_filename);
             }
         }
 
@@ -853,18 +855,14 @@ namespace PSFModel {
                 std::string filepath = OutputLayout::chipPath(
                     dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
                 if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, filepath)) {
-                    std::cerr << "makePSFLocalFit: readStamps failed for " << filepath << std::endl;
-                    std::exit(1);
+                    MPIFailure::abortWorld("read local-fit PSF star power",
+                                           filepath);
                 }
             }
 
             std::string coe_filename = OutputLayout::chipPath(
                 dirOutput, "stamps/dat_PsfFit", prefix, "_PSF_coe_local.dat");
             MainIO::OutputFile file10(coe_filename);
-            if (!file10.is_open()) {
-                std::cerr << "makePSFLocalFit: Error opening " << coe_filename << std::endl;
-                continue;
-            }
             file10 << std::setprecision(17);
 
             std::vector<std::array<double, 2>> posi;
@@ -1034,10 +1032,6 @@ namespace PSFModel {
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string comp_filename = dirOutput + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
         MainIO::OutputFile file90(comp_filename);
-        if (!file90.is_open()) {
-            std::cerr << "makePSFHybrid: Error opening " << comp_filename << std::endl;
-            return;
-        }
         file90 << std::setprecision(17);
 
         for (int k = 0; k < nchip; ++k) {
@@ -1050,17 +1044,13 @@ namespace PSFModel {
             std::string filepath = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
             if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, filepath)) {
-                std::cerr << "makePSFHybrid: readStamps failed for " << filepath << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld("read hybrid-fit PSF star power",
+                                       filepath);
             }
 
             std::string coe_filename = OutputLayout::chipPath(
                 dirOutput, "stamps/dat_PsfFit", prefix, "_PSF_coe_local.dat");
             MainIO::OutputFile file10(coe_filename);
-            if (!file10.is_open()) {
-                std::cerr << "makePSFHybrid: Error opening " << coe_filename << std::endl;
-                continue;
-            }
             file10 << std::setprecision(17);
 
             std::vector<std::array<double, 2>> posi;
@@ -1125,8 +1115,8 @@ namespace PSFModel {
 
                 int nx = 0, ny = 0;
                 if (!FitsIO::readPara(imageFiles[k], nx, ny)) {
-                    std::cerr << "makePSFHybrid: readPara failed for " << imageFiles[k] << std::endl;
-                    std::exit(1);
+                    MPIFailure::abortWorld("read hybrid-fit image dimensions",
+                                           imageFiles[k]);
                 }
                 genPSFFits(psfmap, nums, nx, ny, star_residual, posi);
 

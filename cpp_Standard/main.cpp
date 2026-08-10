@@ -899,7 +899,7 @@ int main(int argc, char* argv[]) {
                               << "  dataset_root: " << fd_dataset_root << std::endl;
                 }
                 return_code = process_fd(fd_expo_list, options,
-                                         fd_dataset_root, MPI_COMM_WORLD);
+                                         fd_dataset_root);
             }
 
             if (return_code == 0 && index + 1 < options.datasets.size()) {
