@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 std::vector<std::string> EXPO_FILE;
@@ -193,24 +194,25 @@ int process_main(const std::string& exposure_list,
     }
     MPIScheduler::barrier();
 
-    ExposureInfo::expo_para.assign(
-        static_cast<std::size_t>(LensingConfig::NMAX_EXPO) * 6, 0.0f);
     if (LensingConfig::PROCESS_stage % 19 == 0) {
+        const int mpi_parameter_count = N_EXPO * 6;
+        const std::size_t parameter_count =
+            static_cast<std::size_t>(mpi_parameter_count);
+
+        ExposureInfo::expo_para.assign(parameter_count, 0.0f);
         MPIScheduler::distribute(N_EXPO, ExposureInfo::procInfo, "Info ...");
-    }
-    MPIScheduler::barrier();
+        MPIScheduler::barrier();
 
-    std::vector<float> reduced_exposure_parameters(
-        static_cast<std::size_t>(LensingConfig::NMAX_EXPO) * 6, 0.0f);
-    MPI_Allreduce(ExposureInfo::expo_para.data(), reduced_exposure_parameters.data(),
-                  LensingConfig::NMAX_EXPO * 6, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-    ExposureInfo::expo_para = reduced_exposure_parameters;
+        std::vector<float> reduced_exposure_parameters(parameter_count, 0.0f);
+        MPI_Allreduce(ExposureInfo::expo_para.data(),
+                      reduced_exposure_parameters.data(),
+                      mpi_parameter_count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        ExposureInfo::expo_para = std::move(reduced_exposure_parameters);
 
-    if (rank == 0) {
-        const std::string root_directory = UniversalUtils::getDir(exposure_list, 1);
-        const std::string filename = root_directory + "/expo_info.dat";
-        MainIO::OutputFile output(filename);
-        if (output.is_open()) {
+        if (rank == 0) {
+            const std::string root_directory = UniversalUtils::getDir(exposure_list, 1);
+            const std::string filename = root_directory + "/expo_info.dat";
+            MainIO::OutputFile output(filename);
             output << std::setprecision(10);
             output << "N-valid-chip PSF-FWHM(arcsec) chi_d-stars nstar-per-chip "
                       "cRVAL1 cRVAL2 expo_name\n";
@@ -220,11 +222,10 @@ int process_main(const std::string& exposure_list,
                 }
                 output << EXPO_FILE[exposure] << "\n";
             }
-        } else {
-            std::cerr << "Error: cannot write to expo_info.dat file: " << filename << std::endl;
+            output.close();
         }
+        MPIScheduler::barrier();
     }
-    MPIScheduler::barrier();
 
     if (LensingConfig::PROCESS_stage % 23 == 0) {
         MPIScheduler::distribute(N_EXPO, CatalogCombiner::procComb, "combine ...");

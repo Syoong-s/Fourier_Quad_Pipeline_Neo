@@ -59,7 +59,8 @@
 ## 四、刻意保留的东西
 
 `LinearSolve.cpp/.hpp`、`UniversalUtils.cpp/.hpp`、`FitsIO.cpp/.hpp`
-**未做任何改动**。它们是通用数值 / IO 工具库，地位等同 f77 树里的
+在最初冻结分支重构时**未做 Lite 专属改动**；后续共享修正继续与 Standard
+同步。它们是通用数值 / IO 工具库，地位等同 f77 树里的
 `FFTPACK.f` / `press.f`，因此即使个别函数随 `PSFRecons` 一起失去了调用者，
 也整体保留。失去调用者的清单（供你决定是否进一步清理）：
 
@@ -74,25 +75,22 @@
 注意 `LeastSquaresQR::unscaledCovariance` **仍被调用**（来自
 `UniversalUtils::fit2D2Cov`），它不是孤儿。
 
-以下是**原版就已经存在**的死代码，与本次重构无关，未作处理：
-`ShearMeasurement::getWindowMinKVer2`（f77 侧 `get_window_min_k_ver2` 同样从未被调用）。
-
-`PSFModel.cpp` 中 `makePSFLocalFit` 里的 `int nplx = LensingConfig::nplx;`
-在原版就是未使用变量（`itpNormPSF` 的签名不含 `nplx`），本次一并保留，
-`-Wall` 下的警告与原版相同。
+原版就已经存在、且在最初 Lite 重构中保留的
+`ShearMeasurement::getWindowMinKVer2` 与 `PSFModel::makePSFLocalFit` 的
+未使用 `nplx` 局部量，已在 2026-08-10 的 Standard 共享清理同步中删除。
 
 `PreProcess.cpp` 的掩膜错误信息仍沿用原版措辞
 （`"Error / wrong size of flat file!"`、局部变量名 `flat_weight`）。这段字符串
 在原版的 `include_Mask==2` 分支里就是这样写的，改动会让程序输出与原版不一致，
 故保持原样——但请注意这里指的是 DQ mask，不是 super-flat。
 
-`CatalogCombiner::combineExpoCatalog` 里 `g1c`/`g2c` 在保留分支中恒为 0，
-两行 shear 修正因此是恒等运算；`g1_c`/`g2_c` 常量只剩注释引用。这与原版
-`ext_cat=1` 路径完全一致（原版就是这样写的），保留以便随时恢复该修正。
+`CatalogCombiner::combineExpoCatalog` 的 Lite 保留分支仍执行零 shear 修正式，
+因此有限值输出不变，NaN 等异常值的 IEEE 传播也与 Standard 外部星表分支一致；
+旧的注释校准代码已删除。`g1_c`/`g2_c` 常量仍作为 Standard 非外部星表分支的
+共享配置保留。
 
 失去引用的常量（保留在 `include/process_main/LensingConfig.hpp`，供你决定是否清理）：
-`Camera_ccd_num`、`psf_order`（原版就未使用）、`npox`（原版就未使用）、
-`g1_c`、`g2_c`（仍被 `CatalogCombiner.cpp` 中注释掉的代码引用）、`nplx`。
+`g1_c`、`g2_c`。`psf_order`、`npox`、`nplx` 已随 Standard 共享清理删除。
 
 不再被写入的输出目录（也确认没有任何 lite 代码去**读**它们）：
 `rescale/`、`starxy/`、`fits_psfresi/`、`dat_pcs/`、`dat_starcomp/`。
@@ -125,3 +123,29 @@ make CXX=mpicxx STACK_PREFIX=<scientific-stack-prefix> \
 C++17 编译和链接成功。新增 `tests/SetSigVerification.cpp` 输出 `PASS`，并与主 C++
 得到相同结果：纯噪声恢复 `1.001715`、拥挤度漂移 `0.2580%`、归一化 RMS
 `1.002392`，失败 amp 不修改自身图像且不回滚已应用的前一 amp。
+
+## 七、2026-08-10 同步 Standard 最新共享修改
+
+Lite 已同步 Standard 提交 `1d7ca29` 与 `8eba467` 中所有适用于冻结分支的修改：
+MPI-wide 致命错误处理、Stage 8 按需分配与完整门控、FFT scratch 复用、FD 读取与
+重复组刷新、运行时 rearr 行宽、统一初始化器 API 清理、矩阵与 PSF 死量清理，
+以及 Stage 7/9 的共享解析和常量替换。`CatalogCombiner`、`SourceExtractor`、
+`FourierTransformSt1`、`PSFModel`、`ShearMeasurement` 和 `process_main` 按 Lite
+现存单分支做了等价适配；Standard-only `PSFRecons`、PCA、hybrid/external PSF、
+备用 astrometry/flat/mask、非外部星表和关闭 deblending 的实现没有恢复。
+
+本地验证使用 GCC 15.2.0、Open MPI 5.0.10、CFITSIO 4.6.4、FFTW 3.3.11、
+Eigen 3.4.0、BLAS/LAPACK 3.11.0（OpenBLAS 0.3.33）。干净构建、统一 `--help`、
+point-source statistics、两进程 MPI 失败退出、最小 Science/DQ 初始化器、默认
+48 列与显式 35 列 rearr、Lite 外部星表 Stage 9 合并、矩阵逆和 Stage 8 关闭测试
+均通过。同步移除了原有 `process_fd` communicator 与 `nplx` 两条编译告警，
+没有新增告警；其余告警是既有未使用量或 Eigen 模板诊断。
+
+可移植构建与运行示例（远端集群应先加载站点提供的 GCC、Open MPI、CFITSIO、
+FFTW、Eigen、BLAS/LAPACK 模块，并设置科学计算库前缀）：
+
+```bash
+make -C cpp_Lite -j CXX=mpicxx STACK_PREFIX="$SCI_STACK" \
+  EIGEN_INCLUDE="$EIGEN_INCLUDE"
+mpirun -np "$N_RANKS" ./cpp_Lite/Fourier_Quad_Pipe --help
+```

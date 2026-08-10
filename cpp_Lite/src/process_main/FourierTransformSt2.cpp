@@ -12,7 +12,6 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 extern std::vector<std::string> EXPO_FILE;
 
@@ -93,19 +92,22 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
     }
 
     std::vector<float> power_coll(static_cast<size_t>(ngal_max) * ns * ns, 0.0f);
+    const std::size_t stamp_size =
+        static_cast<std::size_t>(ns) * static_cast<std::size_t>(ns);
+    std::vector<float> source(stamp_size);
+    std::vector<float> noise(stamp_size);
+    std::vector<float> source_p(stamp_size);
+    std::vector<float> noise_p(stamp_size);
 
     for (int i = 0; i < nsource; ++i) {
-        std::vector<float> source(ns * ns);
-        std::vector<float> noise(ns * ns);
-        std::copy(source_coll.begin() + i * ns * ns, source_coll.begin() + (i + 1) * ns * ns, source.begin());
-        std::copy(noise_coll.begin() + i * ns * ns, noise_coll.begin() + (i + 1) * ns * ns, noise.begin());
-
-        std::vector<float> source_p(ns * ns);
-        std::vector<float> noise_p(ns * ns);
+        const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
+        std::copy_n(source_coll.data() + offset, stamp_size, source.data());
+        std::copy_n(noise_coll.data() + offset, stamp_size, noise.data());
         double pc = 0.0;
 
         // SNR calculation uses star_smooth (2)
-        ImageProcessing::getPower(ns, ns, source, source_p, 2, pc);
+        ImageProcessing::getPower(ns, ns, source, source_p,
+                                  LensingConfig::star_smooth, pc);
 
         int ns_2 = LensingConfig::ns_2;
         float cen_val = source_p[ns_2 * ns + ns_2];
@@ -117,14 +119,10 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
         ImageProcessing::getPower(ns, ns, noise, noise_p, LensingConfig::gal_smooth, pc);
         ImageProcessing::processPowers(ns, source_p, noise_p);
 
-        std::copy(source_p.begin(), source_p.end(), power_coll.begin() + i * ns * ns);
+        std::copy_n(source_p.data(), stamp_size, power_coll.data() + offset);
     }
 
     MainIO::OutputFile fout(info_filename);
-    if (!fout.is_open()) {
-        std::cerr << "Error opening " << info_filename << " for output" << std::endl;
-        return;
-    }
     fout << "ig xp yp sigma peak imax jmax half_light_flux half_light_area flag flux2 SNR_F\n";
     for (int i = 0; i < nsource; ++i) {
         for (int j = 0; j <= LensingConfig::iSNR_F; ++j) {
@@ -137,11 +135,15 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
     std::string power_fits = OutputLayout::chipPath(
         dirOutput, "stamps/fits_SrcP", raw_prefix, "_source_p.fits");
     if (!FitsIO::writeStamps(ngal_max, 1, nsource, ns, ns, power_coll, nn1, nn2, power_fits)) {
-        std::cerr << "Error / FFT2 source_p FITS write failed: " << power_fits << std::endl;
-        std::exit(EXIT_FAILURE);
+        MainIO::failOutput("write FFT2 source power FITS", power_fits,
+                           "FitsIO::writeStamps returned false");
     }
 }
 
+// ==========================================
+// Function: Run the Stage-6 galaxy FFT for one exposure
+// Method: Resolve the exposure's chip list and process each chip serially.
+// ==========================================
 void procFourierTSt2(int iexpo) {
     if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
         std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;

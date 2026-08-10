@@ -1,5 +1,6 @@
 #include "SourceExtractor.hpp"
 #include "OutputFile.hpp"
+#include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
@@ -16,7 +17,6 @@
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
-#include <cstdlib>
 #include <system_error>
 
 // Global/extern variables representing exposure filenames list (defined in main.cpp)
@@ -299,11 +299,6 @@ namespace SourceExtractor {
         std::string catname = OutputLayout::chipPath(
             dirOutput, "stamps/cat_Orig", prefix, ".cat");
         MainIO::OutputFile fout(catname);
-        if (!fout.is_open()) {
-            std::cerr << "Error: could not open catalog file for writing: " << catname << std::endl;
-            ierror = 1;
-            return;
-        }
 
         fout << " xp yp total_area half_light_area sig sig_normed_total_flux sig_normed_half_light_flux sig_normed_peak rmax\n";
 
@@ -556,31 +551,27 @@ namespace SourceExtractor {
         std::string filename_info = OutputLayout::chipPath(
             dirOutput, "stamps/dat_SrcInfo", prefix, "_source_info.dat");
         MainIO::OutputFile fout(filename_info);
-        if (fout.is_open()) {
-            fout << "ig xp yp sigma peak imax jmax half_light_flux half_light_area flag\n";
-            for (int i = 0; i < ngal; ++i) {
-                for (int j = 0; j < LensingConfig::iflag + 1; ++j) {
-                    fout << source_para[i][j] << (j == LensingConfig::iflag ? "" : " ");
-                }
-                fout << "\n";
+        fout << "ig xp yp sigma peak imax jmax half_light_flux half_light_area flag\n";
+        for (int i = 0; i < ngal; ++i) {
+            for (int j = 0; j < LensingConfig::iflag + 1; ++j) {
+                fout << source_para[i][j] << (j == LensingConfig::iflag ? "" : " ");
             }
-            fout.close();
+            fout << "\n";
         }
+        fout.close();
 
         std::string filename_orig = OutputLayout::chipPath(
             dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
         MainIO::OutputFile fout_orig(filename_orig);
-        if (fout_orig.is_open()) {
-            if (procError == 1 || ngal == 0) {
-                fout_orig << "No sources!!\n";
-            } else {
-                fout_orig << orig_header << "\n";
-                for (const auto& line : accepted_orig_lines) {
-                    fout_orig << line << "\n";
-                }
+        if (procError == 1 || ngal == 0) {
+            fout_orig << "No sources!!\n";
+        } else {
+            fout_orig << orig_header << "\n";
+            for (const auto& line : accepted_orig_lines) {
+                fout_orig << line << "\n";
             }
-            fout_orig.close();
         }
+        fout_orig.close();
     }
 
     void findNoise(int& flag, std::vector<float>& stamps, int nx, int ny, const std::vector<float>& array,
@@ -802,9 +793,8 @@ namespace SourceExtractor {
                 dirOutput, "stamps/cat_Orig", prefix, ".cat");
             std::ifstream fin(catname);
             if (!fin.is_open()) {
-                std::cerr << catname << std::endl;
-                std::cerr << "Error / gen_star_candidate_direct catalog file error!!" << std::endl;
-                std::exit(1);
+                MPIFailure::abortWorld(
+                    "read source catalog for direct star candidates", catname);
             }
 
             std::string header;
@@ -854,13 +844,11 @@ namespace SourceExtractor {
         std::string filename_star_info = OutputLayout::chipPath(
             dirOutput, "stamps/dat_StarCanInfo", prefix, "_star_can_info.dat");
         MainIO::OutputFile fout(filename_star_info);
-        if (fout.is_open()) {
-            fout << "ig xp yp SNR\n";
-            for (int i = 0; i < nstar; ++i) {
-                fout << star_para[i][0] << " " << star_para[i][1] << " " << star_para[i][2] << " " << star_para[i][3] << "\n";
-            }
-            fout.close();
+        fout << "ig xp yp SNR\n";
+        for (int i = 0; i < nstar; ++i) {
+            fout << star_para[i][0] << " " << star_para[i][1] << " " << star_para[i][2] << " " << star_para[i][3] << "\n";
         }
+        fout.close();
 
         if (nstar > 0) {
             int nn1_s = LensingConfig::ns * LensingConfig::len_s;

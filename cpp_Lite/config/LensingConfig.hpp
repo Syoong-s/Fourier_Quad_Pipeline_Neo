@@ -47,13 +47,10 @@ namespace LensingConfig {
     constexpr int ncx = 3;
 
     // PSF selection and configuration
-    constexpr int psf_order = 8;
     constexpr int npo = 64;
-    constexpr int npox = 8;
     constexpr int nstar_min = npo * 3 / 2;
-   constexpr int npl = 10;
-   constexpr int nplx = 2;
-   constexpr int nstar_min_local = 16;
+    constexpr int npl = 10;
+    constexpr int nstar_min_local = 16;
 
     // Stamp dimensions
     constexpr int ns = 64;

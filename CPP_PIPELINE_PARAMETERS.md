@@ -134,12 +134,9 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `psf_order` | — | `8*` (Lite legacy only) | Removed from Standard; retained as an unused compatibility constant in Lite. |
 | `npo` | — | `64*` | Reserved legacy PSF selection size; currently used only to derive `nstar_min`. |
-| `npox` | — | `8*` (Lite legacy only) | Removed from Standard; retained as an unused compatibility constant in Lite. |
 | `nstar_min` | — | `npo·3/2 = 96*` | Base exposure-wide star threshold. PSF star selection rejects an exposure when total candidate count is below `2·nstar_min` (192 by default). |
 | `npl` | — | `10*` | Number of ordered 2D polynomial terms fitted per PSF Fourier pixel; `10` includes terms through total degree 3. |
-| `nplx` | — | `2*` (Lite legacy only) | Removed from Standard; retained for the unchanged Lite compatibility path. |
 | `nstar_min_local` | — | `16*` | Minimum finite stars required for one local chip PSF fit. |
 | `step_psf` | — | `100*` (Std only) | Standard very-local PSF map grid spacing in pixels; used only with `PSF_type=2`. Absent in Lite. |
 | `n_neighbor` | — | `5*` (Std only) | Standard number of nearest stars used by the very-local PSF branch. Absent in Lite. |
@@ -306,8 +303,7 @@ internal/output layout and requires coordinated reader/writer changes.
 Redistributes per-exposure `_all.cat` rows into spatially sorted subcatalogs.
 Compile-time parameters are from `ProcessRearrConfig.hpp`; CLI-overridable
 parameters are from `ProcessConfig.hpp`. Operational rearrangement behavior is
-identical in Standard and Lite; Lite still declares the obsolete static
-pass-through-width compatibility constant documented below.
+identical in Standard and Lite, including runtime width derivation.
 
 ### 4a. Runtime (CLI-overridable) parameters
 
@@ -326,7 +322,6 @@ pass-through-width compatibility constant documented below.
 |:---|:---|:---|:---|
 | `ichi2` | — | `LensingConfig::expo_cat_ncols = 29*` | Derived count of the 28 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
 | `CCD_COLUMN_COUNT` | — | `1*` | Derived fixed CCD_NUM field count. |
-| `ALL_CAT_TOTAL_COLUMNS` | — | `48*` (Lite legacy only) | Removed from Standard because runtime width calculation supersedes it; retained as an unused compatibility constant in Lite. |
 | `externalCatalogColumns(options)` | — | `18*` (pass-through) or projection length | Runtime-effective external width. Explicit projection output contains exactly its selected fields. |
 | `allCatalogColumns(options)` | — | Effective external width `+ 1 + ichi2*` | Runtime-effective exact row width used by the parser and MPI transfers. |
 

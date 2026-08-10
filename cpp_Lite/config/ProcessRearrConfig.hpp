@@ -12,15 +12,13 @@
 namespace ProcessRearrConfig {
 
 // ==========================================
-// Configuration: Derived _all.cat column layout
-// Method: Count the 28 shear fields plus the appended chi2 field after CCD_NUM,
-//         then apply external columns + 1 CCD column + ichi2 exactly once.
+// Configuration: Derived _all.cat layout components
+// Method: Keep fixed downstream field counts here and compute the complete row
+//         width at runtime from the effective external-catalog projection.
 // ==========================================
 inline constexpr std::size_t ichi2 =
     static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
 inline constexpr std::size_t CCD_COLUMN_COUNT = 1;
-inline constexpr std::size_t ALL_CAT_TOTAL_COLUMNS =
-    ExtCatConfig::EXTCAT_TOTAL_COLUMNS + CCD_COLUMN_COUNT + ichi2;
 
 // ==========================================
 // Configuration: Spatial partitioning and output defaults
@@ -56,9 +54,9 @@ inline std::size_t externalCatalogColumns(
 }
 
 // ==========================================
-// Function: Compute the complete _all.cat row width
-// Method: Apply external catalog total columns + 1 + ichi2 in the
-//         process_rearr-specific parameter header as required.
+// Function: Compute the runtime _all.cat row width
+// Method: Use the effective process_extcat output width so explicit column
+//         projection is handled without a fixed 48-column assumption.
 // ==========================================
 inline std::size_t allCatalogColumns(
     const ProcessConfig::RuntimeOptions& options) {

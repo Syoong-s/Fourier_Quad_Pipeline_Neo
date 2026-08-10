@@ -3,8 +3,6 @@
 
 #include "ProcessConfig.hpp"
 
-#include <mpi.h>
-
 #include <string>
 
 // ==========================================
@@ -17,7 +15,6 @@
 // ==========================================
 int process_fd(const std::string& exposure_list,
                const ProcessConfig::RuntimeOptions& options,
-               const std::string& dataset_root,
-               MPI_Comm communicator = MPI_COMM_WORLD);
+               const std::string& dataset_root);
 
 #endif  // PROCESS_FD_PROCESS_FD_HPP

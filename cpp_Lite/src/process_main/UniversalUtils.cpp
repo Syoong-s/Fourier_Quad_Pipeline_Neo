@@ -1,13 +1,13 @@
 #include "UniversalUtils.hpp"
 #include "FitsIO.hpp"
 #include "LinearSolve.hpp"
+#include "MPIFailure.hpp"
 #include <cmath>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-#include <cstdlib>
 #include <Eigen/Dense>
 
 namespace UniversalUtils {
@@ -21,7 +21,6 @@ namespace UniversalUtils {
             constexpr float tiny = 1.0e-20f;
             std::vector<int> indx(n, 0);
             std::vector<float> vv(n, 0.0f);
-            float d = 1.0f;
 
             for (int i = 0; i < n; ++i) {
                 float aamax = 0.0f;
@@ -65,7 +64,6 @@ namespace UniversalUtils {
                     for (int k = 0; k < n; ++k) {
                         std::swap(ma[imax * n + k], ma[j * n + k]);
                     }
-                    d = -d;
                     vv[imax] = vv[j];
                 }
                 indx[j] = imax;
@@ -113,7 +111,6 @@ namespace UniversalUtils {
                     ma_inv[row * n + col] = b[row];
                 }
             }
-            (void)d;
             return true;
         }
     }
@@ -607,8 +604,7 @@ namespace UniversalUtils {
         size_t p_slash = imagefile.find_last_of('/');
         size_t p_dot = imagefile.find_last_of('.');
         if (p_dot == std::string::npos || p_slash == std::string::npos || p_dot <= p_slash + 1) {
-            std::cerr << "Image_file name is NOT normal: " << imagefile << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("extract chip file prefix", imagefile);
         }
         return imagefile.substr(p_slash + 1, p_dot - p_slash - 1);
     }
@@ -629,8 +625,9 @@ namespace UniversalUtils {
                 }
             }
         }
-        std::cerr << "Image_file name is NOT normal for level " << level << ": " << imagefile << std::endl;
-        std::exit(1);
+        MPIFailure::abortWorld(
+            "extract parent directory",
+            imagefile + " level=" + std::to_string(level));
     }
 
     // ==========================================
@@ -641,8 +638,7 @@ namespace UniversalUtils {
         size_t p_slash = imagefile.find_last_of('/');
         size_t p_under = imagefile.find_last_of('_');
         if (p_under == std::string::npos || p_slash == std::string::npos || p_under <= p_slash + 1) {
-            std::cerr << "Image_file name is NOT normal: " << imagefile << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("extract exposure file prefix", imagefile);
         }
         return imagefile.substr(p_slash + 1, p_under - p_slash - 1);
     }
@@ -712,12 +708,18 @@ namespace UniversalUtils {
         return res;
     }
 
-    void getImageList(const std::string& expo_file_path, std::vector<std::string>& image_files, std::string& dir_output) {
+    // ==========================================
+    // Function: Load one exposure's chip-image list and derive its output root
+    // Method: Parse non-empty trimmed paths and treat missing or empty exposure
+    //         lists as MPI-wide fatal input errors.
+    // ==========================================
+    void getImageList(const std::string& expo_file_path,
+                      std::vector<std::string>& image_files,
+                      std::string& dir_output) {
         image_files.clear();
         std::ifstream infile(expo_file_path);
         if (!infile.is_open()) {
-            std::cerr << "EXPO_FILE reading error: " << expo_file_path << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("read exposure chip list", expo_file_path);
         }
         std::string line;
         while (std::getline(infile, line)) {
@@ -736,8 +738,8 @@ namespace UniversalUtils {
         infile.close();
 
         if (image_files.empty()) {
-            std::cerr << "EXPO_FILE contains no image entries: " << expo_file_path << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld("validate exposure chip list",
+                                   expo_file_path + " contains no image entries");
         }
 
         dir_output = getDir(image_files[0], 3);

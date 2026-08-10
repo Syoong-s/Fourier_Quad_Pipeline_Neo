@@ -53,35 +53,6 @@ bool startsWith(const std::string& value, const std::string& prefix) {
 }
 
 // ==========================================
-// Function: Read the value following one command-line option
-// Method: Advance the shared argument index and reject a missing value.
-// ==========================================
-std::string optionValue(int& index, int argc, char** argv, const std::string& option) {
-    if (index + 1 >= argc) {
-        throw std::runtime_error("missing value after " + option);
-    }
-    ++index;
-    return argv[index];
-}
-
-// ==========================================
-// Function: Parse the existing-output policy name
-// Method: Accept only the three explicit safe lifecycle modes.
-// ==========================================
-ExistingPolicy parseExistingPolicy(const std::string& value) {
-    if (value == "fail") {
-        return ExistingPolicy::Fail;
-    }
-    if (value == "resume") {
-        return ExistingPolicy::Resume;
-    }
-    if (value == "overwrite") {
-        return ExistingPolicy::Overwrite;
-    }
-    throw std::runtime_error("--existing must be fail, resume, or overwrite");
-}
-
-// ==========================================
 // Function: Convert the existing-output policy to manifest text
 // Method: Return one stable lowercase schema value for each policy.
 // ==========================================
@@ -554,64 +525,9 @@ std::string makeManifest(const Config& config,
 }  // namespace
 
 // ==========================================
-// Function: Parse the standalone initializer command line
-// Method: Require explicit archive/output roots and matching keys while
-//         retaining safe defaults for existing outputs and F77 path limits.
-// ==========================================
-Config parseArguments(int argc, char** argv) {
-    Config config;
-    bool contains_option_seen = false;
-    for (int index = 1; index < argc; ++index) {
-        const std::string option = argv[index];
-        if (option == "--science-root") {
-            config.science_root = optionValue(index, argc, argv, option);
-        } else if (option == "--dq-root") {
-            config.dq_root = optionValue(index, argc, argv, option);
-        } else if (option == "--output-root") {
-            config.output_root = optionValue(index, argc, argv, option);
-        } else if (option == "--target") {
-            config.target = optionValue(index, argc, argv, option);
-        } else if (option == "--prefix") {
-            config.filename_prefix = optionValue(index, argc, argv, option);
-        } else if (option == "--contains") {
-            const std::string token = optionValue(index, argc, argv, option);
-            if (token.empty()) {
-                throw std::runtime_error("--contains must not be empty");
-            }
-            if (!contains_option_seen) {
-                config.filename_tokens.clear();
-                contains_option_seen = true;
-            }
-            config.filename_tokens.push_back(token);
-        } else if (option == "--existing") {
-            config.existing_policy = parseExistingPolicy(optionValue(index, argc, argv, option));
-        } else if (option == "--f77-max-path") {
-            const std::string value = optionValue(index, argc, argv, option);
-            std::size_t parsed_characters = 0;
-            try {
-                config.f77_max_path = std::stoi(value, &parsed_characters);
-            } catch (const std::exception&) {
-                throw std::runtime_error("--f77-max-path must be an integer");
-            }
-            if (parsed_characters != value.size()) {
-                throw std::runtime_error("--f77-max-path must be an integer");
-            }
-            if (config.f77_max_path < 0) {
-                throw std::runtime_error("--f77-max-path must be zero or positive");
-            }
-        } else if (option != "--help") {
-            throw std::runtime_error("unknown option: " + option);
-        }
-    }
-
-    normalizeAndValidateConfig(config);
-    return config;
-}
-
-// ==========================================
 // Function: Normalize and validate one initializer configuration
 // Method: Resolve all paths and enforce the same required-field and target-name
-//         contract for standalone parsing and integrated workflow execution.
+//         contract for integrated workflow execution.
 // ==========================================
 void normalizeAndValidateConfig(Config& config) {
     if (config.science_root.empty() || config.dq_root.empty() || config.output_root.empty()
@@ -636,25 +552,6 @@ void normalizeAndValidateConfig(Config& config) {
     config.dq_root = normalizedAbsolute(config.dq_root);
     config.output_root = normalizedAbsolute(config.output_root);
     validatePipelinePath(config.output_root / config.target, 0);
-}
-
-// ==========================================
-// Function: Print the portable initializer command-line contract
-// Method: Describe required paths, filters, existing-output policy, and limits.
-// ==========================================
-void printUsage(const char* program_name) {
-    std::cerr
-        << "Usage: " << program_name << " [options]\n"
-        << "  --science-root PATH    Original read-only science FITS/FZ repository\n"
-        << "  --dq-root PATH         Original read-only DQ FITS/FZ repository\n"
-        << "  --output-root PATH     Parent of target and expo_<target>.list\n"
-        << "  --target NAME          Target directory, for example z2015\n"
-        << "  --prefix TEXT          Required filename prefix, for example c4d_15\n"
-        << "  --contains TEXT        Repeatable filename token; matches any token (default: v1)\n"
-        << "  --existing MODE        fail (default), resume, or overwrite\n"
-        << "  --f77-max-path N       Maximum generated path length; 0 disables (default: "
-        << InitConfig::F77_MAX_PATH << ")\n"
-        << "  --help                  Show this help\n";
 }
 
 // ==========================================

@@ -1,5 +1,6 @@
 #include "ExposureInfo.hpp"
 #include "OutputFile.hpp"
+#include "MPIFailure.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Astrometry.hpp"
@@ -9,7 +10,6 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
-#include <cstdlib>
 
 extern std::vector<std::string> EXPO_FILE;
 
@@ -28,16 +28,11 @@ void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const st
     std::string fexpo = dirOutput + "/stamps/dat_ExpoInfo/" + prefix_expo + "_expo_info.dat";
 
     MainIO::OutputFile fout10(fexpo);
-    if (!fout10.is_open()) {
-        std::cerr << "Error: cannot open output expo info file: " << fexpo << std::endl;
-        std::exit(1);
-    }
     fout10 << "# ichip nstar FWHM e1 e2 chi_d cRPIX_1 cRPIX_2 cD_11 cD_12 cD_21 cD_22\n";
 
     std::ifstream fin20(fstar);
     if (!fin20.is_open()) {
-        std::cerr << "Error: cannot open star info file: " << fstar << std::endl;
-        std::exit(1);
+        MPIFailure::abortWorld("read exposure star info", fstar);
     }
     
     std::string header;
@@ -56,8 +51,9 @@ void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const st
         float FWHM = 0.0f, e1 = 0.0f, e2 = 0.0f, chi_d = 0.0f;
         
         if (!(fin20 >> i >> nstar >> FWHM >> e1 >> e2 >> chi_d)) {
-            std::cerr << "Error reading chip info from star info file at chip: " << ichip + 1 << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld(
+                "parse exposure star info",
+                fstar + " chip=" + std::to_string(ichip + 1));
         }
 
         if (nstar == 0) {
@@ -78,9 +74,9 @@ void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const st
 
         Astrometry::readAstrometryPara(fastro, ichip + 1, cRPIX, cD, cRVAL, PU, LensingConfig::npd, ierror);
         if (ierror != 0) {
-            std::cerr << "Error reading astrometry head file: " << fastro
-                      << " at chip: " << ichip + 1 << std::endl;
-            std::exit(1);
+            MPIFailure::abortWorld(
+                "read exposure astrometry",
+                fastro + " chip=" + std::to_string(ichip + 1));
         }
         
         cRVAL1 = cRVAL[0];
@@ -110,6 +106,11 @@ void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const st
     para[5] = static_cast<float>(cRVAL2);
 }
 
+// ==========================================
+// Function: Compute and store Stage-8 diagnostics for one exposure
+// Method: Aggregate the assigned exposure and grow only to the current
+//         exposure's six-value slot when the orchestrator buffer is absent.
+// ==========================================
 void procInfo(int iexpo) {
     if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
         std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
@@ -123,9 +124,10 @@ void procInfo(int iexpo) {
     float para[6] = {0.0f};
     getExpoInfo(image_files, image_files.size(), dir_output, para);
 
-    // Initialize expo_para if it is not allocated or empty (it is defined in main.cpp, but here we can write directly to it)
-    if (expo_para.size() < static_cast<size_t>(LensingConfig::NMAX_EXPO) * 6) {
-        expo_para.resize(static_cast<size_t>(LensingConfig::NMAX_EXPO) * 6, 0.0f);
+    const std::size_t required_parameter_count =
+        static_cast<std::size_t>(iexpo) * 6;
+    if (expo_para.size() < required_parameter_count) {
+        expo_para.resize(required_parameter_count, 0.0f);
     }
 
     for (int i = 0; i < 6; ++i) {

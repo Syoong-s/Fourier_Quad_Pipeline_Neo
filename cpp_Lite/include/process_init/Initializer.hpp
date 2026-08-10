@@ -25,24 +25,11 @@ struct Config {
 };
 
 // ==========================================
-// Function: Parse the standalone initializer command line
-// Method: Require explicit archive/output roots and matching keys while
-//         retaining safe defaults for existing outputs and F77 path limits.
-// ==========================================
-Config parseArguments(int argc, char** argv);
-
-// ==========================================
 // Function: Normalize and validate one initializer configuration
 // Method: Resolve all paths and enforce the same required-field and target-name
-//         contract for standalone parsing and integrated workflow execution.
+//         contract for integrated workflow execution.
 // ==========================================
 void normalizeAndValidateConfig(Config& config);
-
-// ==========================================
-// Function: Print the portable initializer command-line contract
-// Method: Describe required paths, filters, existing-output policy, and limits.
-// ==========================================
-void printUsage(const char* program_name);
 
 // ==========================================
 // Function: Build the pipeline input layout from the original FITS/FZ archives

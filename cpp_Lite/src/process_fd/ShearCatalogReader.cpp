@@ -1,6 +1,8 @@
 #include "process_fd/ShearCatalogReader.hpp"
 #include "FDConfig.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -9,7 +11,6 @@
 #include <vector>
 
 namespace fc = FDConfig;
-namespace lc = LensingConfig;
 
 // ==========================================
 // Function: readExposure
@@ -37,19 +38,78 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
     std::string header;
     std::getline(file, header);
 
-    // Duplicate-detection buffer (stores up to MAX_DUP rows per source)
-    std::vector<std::vector<float>> dup_buf(fc::MAX_DUP,
-                                            std::vector<float>(fc::ICHI2));
+    using CatalogRow = std::array<float, fc::ICHI2>;
+    using DuplicateBuffer = std::array<CatalogRow, fc::MAX_DUP>;
+
+    DuplicateBuffer dup_buf{};
+    CatalogRow item{};
     int ndup = 0;
     float last_dec = -999.0, last_ra = -999.0;
-    const float multisam_thrsh = 1e-7;
+    constexpr float multisam_thrsh = 1e-7f;
+
+    // ==========================================
+    // Function: Flush one duplicate group into the FD arrays
+    // Method: Preserve first-MAX_DUP ordering and all derived shear, weight,
+    //         magnitude, size, diagnostic, coordinate, and exposure fields.
+    // ==========================================
+    auto flushDuplicates = [&]() -> bool {
+        const int count = std::min(ndup, fc::MAX_DUP);
+        for (int i = 0; i < count; ++i) {
+            const int idx = data.ng;
+            if (idx >= fc::nmax_per_core) {
+                std::cerr << "nmax_per_core is too small!" << std::endl;
+                return false;
+            }
+
+            const CatalogRow& row = dup_buf[i];
+            data.x1[idx] = row[fc::col_gf1];
+            data.y1[idx] = row[fc::col_g1];
+            data.de1[idx] = row[fc::col_de] - row[fc::col_h1];
+            data.x2[idx] = row[fc::col_gf2];
+            data.y2[idx] = row[fc::col_g2];
+            data.de2[idx] = row[fc::col_de] + row[fc::col_h1];
+
+            const float de_val = row[fc::col_de];
+            const float y1j = row[fc::col_g1] / de_val;
+            const float y2j = row[fc::col_g2] / de_val;
+            const float gmag = std::sqrt(y1j * y1j + y2j * y2j);
+            const float sign = de_val >= 0.0f ? 1.0f : -1.0f;
+            data.ww[idx] = gmag > 0.0f ? sign / gmag : 0.0f;
+
+            data.magr[idx] = row[fc::col_mag_r];
+            data.magg[idx] = row[fc::col_mag_g];
+            data.magi[idx] = row[fc::col_mag_i];
+            data.sizerel[idx] =
+                ((std::sqrt(row[fc::col_h_area] / LensingConfig::pi)
+                  * LensingConfig::pixel_size * 2.0)
+                 - row[fc::col_PSF])
+                / row[fc::col_PSF];
+            data.src_snr[idx] =
+                row[fc::col_h_flux] / std::sqrt(row[fc::col_h_area]);
+            data.delta_chi2[idx] = row[fc::col_delta_chi2];
+            data.orth_ext[idx] = row[fc::col_orth_ext];
+            data.rra[idx] = row[fc::col_ra];
+            data.ddec[idx] = row[fc::col_dec];
+
+            if (fc::FD_PER_EXPOSURE_STAR_BAR) {
+                data.iexpo[idx] =
+                    static_cast<int>(std::lround(row[fc::col_chi2]));
+                data.snrf[idx] = row[fc::col_SNR_F];
+            }
+            ++data.ng;
+        }
+
+        ndup = 0;
+        return true;
+    };
 
     std::string line;
+    std::istringstream iss;
     while (std::getline(file, line)) {
         if (line.empty()) continue;
 
-        std::istringstream iss(line);
-        std::vector<float> item(fc::ICHI2);
+        iss.clear();
+        iss.str(line);
         bool parse_ok = true;
         for (int u = 0; u < fc::ICHI2; ++u) {
             if (!(iss >> item[u])) { parse_ok = false; break; }
@@ -102,7 +162,10 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
         }
 
         // Magnitude cut
-        if (item[fc::col_mag_i] < 10.0 || item[fc::col_mag_i] > 30.0) continue;
+        if (item[fc::col_mag_i] < fc::mag_min_val ||
+            item[fc::col_mag_i] > fc::mag_max_val) {
+            continue;
+        }
 
         // PSF polychi2 cut
         if (item[fc::col_polychi2] > fc::psf_chi2_mltp) continue;
@@ -127,8 +190,8 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
         if (item[fc::col_zp] >= fc::zphigh) continue;
 
         // Field-distortion range cut
-        if (std::fabs(item[fc::col_gf1]) > 0.0015) continue;
-        if (std::fabs(item[fc::col_gf2]) > 0.0015) continue;
+        if (std::fabs(item[fc::col_gf1]) > fc::gf_lim) continue;
+        if (std::fabs(item[fc::col_gf2]) > fc::gf_lim) continue;
 
         // --- Duplicate detection ---
         bool new_galaxy = false;
@@ -141,104 +204,19 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
 
         // Flush previous duplicates when a new galaxy is detected
         if (new_galaxy && ndup > 0) {
-            for (int i = 0; i < ndup && i < fc::MAX_DUP; ++i) {
-                int idx = data.ng;
-                if (idx >= fc::nmax_per_core) {
-                    std::cerr << "nmax_per_core is too small!" << std::endl;
-                    file.close();
-                    return;
-                }
-                data.x1[idx]  = dup_buf[i][fc::col_gf1];
-                data.y1[idx]  = dup_buf[i][fc::col_g1];
-                data.de1[idx] = dup_buf[i][fc::col_de] - dup_buf[i][fc::col_h1];
-                data.x2[idx]  = dup_buf[i][fc::col_gf2];
-                data.y2[idx]  = dup_buf[i][fc::col_g2];
-                data.de2[idx] = dup_buf[i][fc::col_de] + dup_buf[i][fc::col_h1];
-
-                // Jackknife weight: ww = ±1/sqrt((g1/de)² + (g2/de)²)
-                {
-                    float de_val = dup_buf[i][fc::col_de];
-                    float y1j = dup_buf[i][fc::col_g1] / de_val;
-                    float y2j = dup_buf[i][fc::col_g2] / de_val;
-                    float gmag = std::sqrt(y1j * y1j + y2j * y2j);
-                    float sign = (de_val >= 0.0) ? 1.0 : -1.0;
-                    data.ww[idx] = (gmag > 0.0) ? sign / gmag : 0.0;
-                }
-
-                data.magr[idx]    = dup_buf[i][fc::col_mag_r];
-                data.magg[idx]    = dup_buf[i][fc::col_mag_g];
-                data.magi[idx]    = dup_buf[i][fc::col_mag_i];
-                data.sizerel[idx] =
-                    ((std::sqrt(dup_buf[i][fc::col_h_area] / LensingConfig::pi) * LensingConfig::pixel_size * 2.0)
-                     - dup_buf[i][fc::col_PSF]) / dup_buf[i][fc::col_PSF];
-                data.src_snr[idx] = dup_buf[i][fc::col_h_flux] /
-                                     std::sqrt(dup_buf[i][fc::col_h_area]);
-                data.delta_chi2[idx] = dup_buf[i][fc::col_delta_chi2];
-                data.orth_ext[idx] = dup_buf[i][fc::col_orth_ext];
-                data.rra[idx]  = dup_buf[i][fc::col_ra];
-                data.ddec[idx] = dup_buf[i][fc::col_dec];
-
-                if (fc::FD_PER_EXPOSURE_STAR_BAR) {
-                    data.iexpo[idx] = static_cast<int>(std::lround(dup_buf[i][fc::col_chi2]));
-                    data.snrf[idx]  = dup_buf[i][fc::col_SNR_F];
-                }
-                data.ng++;
-            }
-            ndup = 0;
+            if (!flushDuplicates()) return;
         }
 
         // Store current row in duplicate buffer
         if (ndup < fc::MAX_DUP) {
-            for (int u = 0; u < fc::ICHI2; ++u)
-                dup_buf[ndup][u] = item[u];
+            dup_buf[ndup] = item;
         }
-        ndup++;
+        ++ndup;
     }
 
     // Flush remaining duplicates
     if (ndup > 0) {
-        for (int i = 0; i < ndup && i < fc::MAX_DUP; ++i) {
-            int idx = data.ng;
-            if (idx >= fc::nmax_per_core) {
-                std::cerr << "nmax_per_core is too small!" << std::endl;
-                break;
-            }
-            data.x1[idx]  = dup_buf[i][fc::col_gf1];
-            data.y1[idx]  = dup_buf[i][fc::col_g1];
-            data.de1[idx] = dup_buf[i][fc::col_de] - dup_buf[i][fc::col_h1];
-            data.x2[idx]  = dup_buf[i][fc::col_gf2];
-            data.y2[idx]  = dup_buf[i][fc::col_g2];
-            data.de2[idx] = dup_buf[i][fc::col_de] + dup_buf[i][fc::col_h1];
-
-            // Jackknife weight: ww = ±1/sqrt((g1/de)² + (g2/de)²)
-            {
-                float de_val = dup_buf[i][fc::col_de];
-                float y1j = dup_buf[i][fc::col_g1] / de_val;
-                float y2j = dup_buf[i][fc::col_g2] / de_val;
-                float gmag = std::sqrt(y1j * y1j + y2j * y2j);
-                float sign = (de_val >= 0.0) ? 1.0 : -1.0;
-                data.ww[idx] = (gmag > 0.0) ? sign / gmag : 0.0;
-            }
-
-            data.magr[idx]    = dup_buf[i][fc::col_mag_r];
-            data.magg[idx]    = dup_buf[i][fc::col_mag_g];
-            data.magi[idx]    = dup_buf[i][fc::col_mag_i];
-            data.sizerel[idx] =
-                ((std::sqrt(dup_buf[i][fc::col_h_area] / LensingConfig::pi) * LensingConfig::pixel_size * 2.0)
-                 - dup_buf[i][fc::col_PSF]) / dup_buf[i][fc::col_PSF];
-            data.src_snr[idx] = dup_buf[i][fc::col_h_flux] /
-                                 std::sqrt(dup_buf[i][fc::col_h_area]);
-            data.delta_chi2[idx] = dup_buf[i][fc::col_delta_chi2];
-            data.orth_ext[idx] = dup_buf[i][fc::col_orth_ext];
-            data.rra[idx]  = dup_buf[i][fc::col_ra];
-            data.ddec[idx] = dup_buf[i][fc::col_dec];
-
-            if (fc::FD_PER_EXPOSURE_STAR_BAR) {
-                data.iexpo[idx] = static_cast<int>(std::lround(dup_buf[i][fc::col_chi2]));
-                data.snrf[idx]  = dup_buf[i][fc::col_SNR_F];
-            }
-            data.ng++;
-        }
+        if (!flushDuplicates()) return;
     }
     file.close();
 }

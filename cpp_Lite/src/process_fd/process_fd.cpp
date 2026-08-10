@@ -7,6 +7,7 @@
 #include "process_fd/FDMeasurement.hpp"
 #include "process_main/MPIScheduler.hpp"
 #include "process_main/NumericalRecipes.hpp"
+#include "process_main/OutputFile.hpp"
 
 #include <mpi.h>
 
@@ -15,10 +16,10 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace fc = FDConfig;
-namespace lc = LensingConfig;
 
 // ==========================================
 // Function: Load and broadcast the exposure list on rank zero
@@ -79,8 +80,7 @@ void broadcastExposureList(std::vector<std::string>& files, int rank) {
 // ==========================================
 int process_fd(const std::string& exposure_list,
                const ProcessConfig::RuntimeOptions& options,
-               const std::string& dataset_root,
-               MPI_Comm communicator) {
+               const std::string& dataset_root) {
     const int rank = MPIScheduler::my_id;
     const int num_procs = MPIScheduler::num_procs;
 
@@ -207,17 +207,28 @@ int process_fd(const std::string& exposure_list,
         } else if (configured_output.is_relative()) {
             configured_output = base_dir / configured_output;
         }
-        const std::string output_directory =
-            std::filesystem::absolute(configured_output)
-                .lexically_normal().string();
-        std::filesystem::create_directories(output_directory);
-        std::string filename =
-            (std::filesystem::path(output_directory) / "FD_test_comb.dat").string();
-        std::ofstream out(filename, std::ios::trunc);
-        if (!out.is_open()) {
-            std::cerr << "Error opening output: " << filename << std::endl;
-            return 1;
+        std::error_code absolute_error;
+        const std::filesystem::path absolute_output =
+            std::filesystem::absolute(configured_output, absolute_error);
+        if (absolute_error) {
+            MainIO::failOutput("resolve FD output directory",
+                               configured_output.string(),
+                               absolute_error.message());
         }
+
+        const std::string output_directory =
+            absolute_output.lexically_normal().string();
+        std::error_code directory_error;
+        std::filesystem::create_directories(output_directory, directory_error);
+        if (directory_error) {
+            MainIO::failOutput("create FD output directory",
+                               output_directory,
+                               directory_error.message());
+        }
+
+        const std::string filename =
+            (std::filesystem::path(output_directory) / "FD_test_comb.dat").string();
+        MainIO::OutputFile out(filename, std::ios::out | std::ios::trunc);
         out << "Selected_NUM1  g1(FD)  g1(GAL)  sigma1"
             << "  Selected_NUM2  g2(FD)  g2(GAL)  sigma2\n";
         for (int i = 0; i < nbin; ++i) {
