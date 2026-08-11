@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <limits>
 #include <sstream>
+#include <filesystem>
 
 namespace FitsIO {
 
@@ -178,6 +179,61 @@ namespace FitsIO {
             return false;
         }
         return true;
+    }
+
+    // ==========================================
+    // Function: Read the first pixel of one two-dimensional FITS image
+    // Method: Distinguish a missing path before opening, validate positive 2D axes, and read
+    //         exactly one float while mapping every existing-file failure to ReadError.
+    // ==========================================
+    PixelReadStatus readFirstPixel(const std::string& filename, float& value) {
+        std::error_code filesystemError;
+        const bool exists = std::filesystem::exists(filename, filesystemError);
+        if (filesystemError) {
+            return PixelReadStatus::ReadError;
+        }
+        if (!exists) {
+            return PixelReadStatus::Missing;
+        }
+
+        fitsfile* fptr = nullptr;
+        int status = 0;
+        fits_open_file(&fptr, filename.c_str(), READONLY, &status);
+        if (status != 0) {
+            fits_clear_errmsg();
+            return PixelReadStatus::ReadError;
+        }
+
+        int naxis = 0;
+        long naxes[2] = {0, 0};
+        fits_get_img_dim(fptr, &naxis, &status);
+        if (status == 0 && naxis == 2) {
+            fits_get_img_size(fptr, 2, naxes, &status);
+        }
+        if (status != 0 || naxis != 2 || naxes[0] <= 0 || naxes[1] <= 0) {
+            closeAfterFailure(fptr);
+            fits_clear_errmsg();
+            return PixelReadStatus::ReadError;
+        }
+
+        long firstPixel[2] = {1, 1};
+        float nullValue = std::numeric_limits<float>::quiet_NaN();
+        int anyNull = 0;
+        fits_read_pix(fptr, TFLOAT, firstPixel, 1, &nullValue, &value,
+                      &anyNull, &status);
+        if (status != 0) {
+            closeAfterFailure(fptr);
+            fits_clear_errmsg();
+            return PixelReadStatus::ReadError;
+        }
+
+        int closeStatus = 0;
+        fits_close_file(fptr, &closeStatus);
+        if (closeStatus != 0) {
+            fits_clear_errmsg();
+            return PixelReadStatus::ReadError;
+        }
+        return PixelReadStatus::Ok;
     }
 
     // ==========================================

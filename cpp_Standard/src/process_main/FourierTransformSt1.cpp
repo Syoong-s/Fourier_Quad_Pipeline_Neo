@@ -3,6 +3,7 @@
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
 #include <iostream>
@@ -36,11 +37,21 @@ namespace FourierTransformSt1 {
 
     // ==========================================
     // Function: Transform one chip's star-candidate stamps to Fourier power
-    // Method: Reuse four fixed-size scratch vectors across all sources while
-    //         preserving the existing FFT, noise subtraction, and regularization.
+    // Method: Apply the shared norm gate before chip-product reads, then reuse fixed-size scratch
+    //         vectors while preserving the existing FFT, subtraction, and regularization.
     // ==========================================
     void chipProcessFourierTSt1(const std::string& imageFile,
                                 const std::string& dirOutput) {
+        const Universalblock::NormStatus normStatus =
+            Universalblock::checkNorm(imageFile, dirOutput);
+        if (normStatus == Universalblock::NormStatus::Invalid) {
+            return;
+        }
+        if (normStatus != Universalblock::NormStatus::Valid) {
+            Universalblock::reportNormError(normStatus, imageFile, dirOutput);
+            return;
+        }
+
         if (LensingConfig::ext_PSF == 1) {
             return;
         }

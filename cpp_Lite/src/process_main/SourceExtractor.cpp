@@ -4,6 +4,7 @@
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
 #include "ExternalCatalogReader.hpp"
@@ -56,10 +57,21 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Process one chip for source and star catalog generation
-    // Method: Reject a failed Stage 1 normalized-map sentinel before reading coefficients or
-    //         constructing a sigma map, then follow the lite external-catalog branch.
+    // Method: Apply the shared norm gate before any chip input, then read the full valid norm map
+    //         for coefficients and source extraction through the Lite external-catalog branch.
     // ==========================================
     void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput) {
+        const std::string& imageFile = imageFiles[ichip - 1];
+        const Universalblock::NormStatus normStatus =
+            Universalblock::checkNorm(imageFile, dirOutput);
+        if (normStatus == Universalblock::NormStatus::Invalid) {
+            return;
+        }
+        if (normStatus != Universalblock::NormStatus::Valid) {
+            Universalblock::reportNormError(normStatus, imageFile, dirOutput);
+            return;
+        }
+
         int proc_error = 0;
         int nstar = 0;
         int ngal = 0;
@@ -67,12 +79,12 @@ namespace SourceExtractor {
         int nx = 0, ny = 0;
         std::vector<float> array;
 
-        if (!FitsIO::readImage(imageFiles[ichip - 1], nx, ny, array)) {
-            std::cerr << "Error reading image: " << imageFiles[ichip - 1] << std::endl;
+        if (!FitsIO::readImage(imageFile, nx, ny, array)) {
+            std::cerr << "Error reading image: " << imageFile << std::endl;
             return;
         }
 
-        std::string raw_prefix = UniversalUtils::getPrefix(imageFiles[ichip - 1]);
+        std::string raw_prefix = UniversalUtils::getPrefix(imageFile);
         std::string PREFIX = raw_prefix;
         std::string filename = OutputLayout::chipPath(
             dirOutput, "stamps/Norm", PREFIX, "_norm.fits");
@@ -85,10 +97,10 @@ namespace SourceExtractor {
         }
         const size_t expected_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
         if (nx <= LensingConfig::CCD_split || ny < 3
-            || norm_nx != nx || norm_ny != ny || normap.size() < expected_size || normap.empty()
-            || !std::isfinite(normap[0]) || normap[0] >= 0.0f || normap[0] < -99990.0f) {
-            std::cerr << "Error / proc_source rejected failed norm chip "
-                      << imageFiles[ichip - 1] << std::endl;
+            || norm_nx != nx || norm_ny != ny || normap.size() < expected_size
+            || normap.empty()) {
+            std::cerr << "Error / proc_source malformed norm chip "
+                      << imageFile << std::endl;
             return;
         }
 
@@ -158,7 +170,7 @@ namespace SourceExtractor {
         genStarCandidateDirect(dirOutput, PREFIX, nx, ny, array, weight, nstar, proc_error);
 
         if (proc_error != 0) {
-            std::cout << "Error / proc_source " << imageFiles[ichip - 1] << " " << proc_error << " " << nstar << " " << ngal << std::endl;
+            std::cout << "Error / proc_source " << imageFile << " " << proc_error << " " << nstar << " " << ngal << std::endl;
         }
     }
 

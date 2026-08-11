@@ -7,6 +7,7 @@
 #include "Astrometry.hpp"
 #include "NumericalRecipes.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "ImageProcessing.hpp"
 #include "ExStar.hpp"
 #include "LinearSolve.hpp"
@@ -146,8 +147,8 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Load star candidates and Fourier-power stamps for one exposure
-    // Method: Read chip catalogs and stamps into the shared exposure state,
-    //         aborting every rank when an existing fatal input is unavailable.
+    // Method: Apply the shared norm gate before astrometry or candidate products, then load only
+    //         valid chips and abort every rank when an expected downstream input is unavailable.
     // ==========================================
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
@@ -160,6 +161,17 @@ namespace PSFModel {
 
         for (int k = 0; k < nchip; ++k) {
             state.nstar[k] = 0;
+
+            const Universalblock::NormStatus normStatus =
+                Universalblock::checkNorm(imageFiles[k], dirOutput);
+            if (normStatus == Universalblock::NormStatus::Invalid) {
+                continue;
+            }
+            if (normStatus != Universalblock::NormStatus::Valid) {
+                Universalblock::reportNormError(
+                    normStatus, imageFiles[k], dirOutput);
+                continue;
+            }
 
             double cRPIX[2] = {0.0, 0.0};
             double cD[2][2] = {{0.0, 0.0}, {0.0, 0.0}};

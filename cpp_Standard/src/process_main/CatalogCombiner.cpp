@@ -4,6 +4,7 @@
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "ExposureInfo.hpp"
 #include <iostream>
 #include <vector>
@@ -87,8 +88,8 @@ void applyCombinedCatalogCalibration(std::vector<float>& cat,
 
 // ==========================================
 // Function: Combine one exposure's chip catalogs into the final result catalog
-// Method: Share Stage-7 parsing, cuts, calibration, counters, and shear-column
-//         output while conditionally aligning external-catalog rows.
+// Method: Leave header discovery file-driven, gate each data chip before Stage-7/original-catalog
+//         reads, and share parsing, cuts, calibration, counters, and output alignment.
 // ==========================================
 void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                         const std::string& dirOutput, float chi2) {
@@ -121,10 +122,22 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
     int n = 0;
     int m = 0;
     int num_cols = LensingConfig::shear_cat_ncols;
+    bool output_header_written = false;
 
     std::string last_prefix;
 
     for (int ichip = 0; ichip < nchip; ++ichip) {
+        const Universalblock::NormStatus normStatus =
+            Universalblock::checkNorm(imageFiles[ichip], dirOutput);
+        if (normStatus == Universalblock::NormStatus::Invalid) {
+            continue;
+        }
+        if (normStatus != Universalblock::NormStatus::Valid) {
+            Universalblock::reportNormError(
+                normStatus, imageFiles[ichip], dirOutput);
+            continue;
+        }
+
         int chip_index = UniversalUtils::getChipId(imageFiles[ichip]);
         std::string prefix = UniversalUtils::getPrefix(imageFiles[ichip]);
         last_prefix = prefix;
@@ -153,7 +166,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             std::getline(fin15, dummy_orig_header);
         }
 
-        if (ichip == 0) {
+        if (!output_header_written) {
             if constexpr (use_external_catalog) {
                 fout20 << original_header << " ccD_NUM " << cat_list1 << " Chi2\n";
             } else {
@@ -168,6 +181,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                 std::cout << prefix << " contains no valid sources!" << std::endl;
                 return;
             }
+            output_header_written = true;
         }
 
         std::vector<float> cat(num_cols);

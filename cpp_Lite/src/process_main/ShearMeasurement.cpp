@@ -4,6 +4,7 @@
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
 #include "PSFModel.hpp"
@@ -136,7 +137,8 @@ void getPSFArea(const float* model, float& FWHM) {
 
 // ==========================================
 // Function: Measure shear for every source in one exposure.
-// Method: Mirrors F77 expo_shear chip loop, PSF model evaluation, FQ estimator, and catalog write.
+// Method: Apply the shared norm gate before chip products, then mirror the Lite local-PSF
+//         evaluation, Fourier_Quad estimator, and catalog write for valid chips.
 // ==========================================
 void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int chipnx, int chipny) {
     int ns = LensingConfig::ns;
@@ -154,6 +156,17 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
     std::vector<double> local_coe(ns * ns * (npl + 1), 0.0);
 
     for (int ichip = 0; ichip < nchip; ++ichip) {
+        const Universalblock::NormStatus normStatus =
+            Universalblock::checkNorm(imageFiles[ichip], dirOutput);
+        if (normStatus == Universalblock::NormStatus::Invalid) {
+            continue;
+        }
+        if (normStatus != Universalblock::NormStatus::Valid) {
+            Universalblock::reportNormError(
+                normStatus, imageFiles[ichip], dirOutput);
+            continue;
+        }
+
         proc_error = 0;
         std::string PREFIX = UniversalUtils::getPrefix(imageFiles[ichip]);
         {

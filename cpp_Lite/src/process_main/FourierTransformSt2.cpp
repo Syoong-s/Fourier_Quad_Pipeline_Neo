@@ -4,6 +4,7 @@
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
+#include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
 #include <iostream>
@@ -20,10 +21,20 @@ namespace FourierTransformSt2 {
 
 // ==========================================
 // Function: Transform one chip's source stamps into Fourier-space products
-// Method: Read Stage-3 source data, update source diagnostics, and publish all
-//         text/FITS outputs through checked main-process writers.
+// Method: Apply the shared norm gate before Stage-3 products, update source diagnostics, and
+//         publish all text/FITS outputs through checked main-process writers.
 // ==========================================
 void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dirOutput) {
+    const Universalblock::NormStatus normStatus =
+        Universalblock::checkNorm(imageFile, dirOutput);
+    if (normStatus == Universalblock::NormStatus::Invalid) {
+        return;
+    }
+    if (normStatus != Universalblock::NormStatus::Valid) {
+        Universalblock::reportNormError(normStatus, imageFile, dirOutput);
+        return;
+    }
+
     int ns = LensingConfig::ns;
 
     std::string raw_prefix = UniversalUtils::getPrefix(imageFile);

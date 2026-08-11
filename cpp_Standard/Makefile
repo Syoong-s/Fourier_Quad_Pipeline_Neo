@@ -45,6 +45,7 @@ SRCS = main.cpp \
        src/process_main/CatalogCombiner.cpp \
        src/process_main/FitsIO.cpp \
        src/process_main/LinearSolve.cpp \
+       src/process_main/Universalblock.cpp \
        src/process_main/UniversalUtils.cpp \
        src/process_main/ImageProcessing.cpp \
        src/process_main/NumericalRecipes.cpp \
@@ -57,6 +58,7 @@ TARGET = Fourier_Quad_Pipe
 POINT_SOURCE_TEST = tests/test_point_source_statistics
 STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
 PSF_RECONS_ORIENTATION_TEST = tests/test_psf_recons_orientation
+UNIVERSALBLOCK_TEST = tests/test_universalblock
 
 all: $(TARGET)
 
@@ -68,6 +70,9 @@ test-stamp-cube-io: $(STAMP_CUBE_IO_TEST)
 
 test-psf-recons-orientation: $(PSF_RECONS_ORIENTATION_TEST)
 	./$(PSF_RECONS_ORIENTATION_TEST)
+
+test-universalblock: $(UNIVERSALBLOCK_TEST)
+	./$(UNIVERSALBLOCK_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -88,6 +93,22 @@ $(PSF_RECONS_ORIENTATION_TEST): tests/PSFReconsOrientationTest.cpp \
 	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
 		tests/PSFReconsOrientationTest.cpp -o $@
 
+$(UNIVERSALBLOCK_TEST): tests/UniversalblockTest.cpp \
+                       src/process_main/Universalblock.cpp \
+                       src/process_main/UniversalUtils.cpp \
+                       src/process_main/FitsIO.cpp \
+                       src/process_main/LinearSolve.cpp \
+                       include/process_main/Universalblock.hpp \
+                       include/process_main/FitsIO.hpp \
+                       include/OutputLayout.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/UniversalblockTest.cpp \
+		src/process_main/Universalblock.cpp \
+		src/process_main/UniversalUtils.cpp \
+		src/process_main/FitsIO.cpp \
+		src/process_main/LinearSolve.cpp \
+		$(LDFLAGS) -o $@ $(LDLIBS)
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -96,9 +117,10 @@ $(TARGET): $(OBJS)
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
-	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST)
+	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
+	      $(UNIVERSALBLOCK_TEST)
 
 -include $(DEPS)
 
 .PHONY: all clean test-point-source-statistics test-stamp-cube-io \
-        test-psf-recons-orientation
+        test-psf-recons-orientation test-universalblock

@@ -44,6 +44,7 @@ SRCS = main.cpp \
        src/process_main/CatalogCombiner.cpp \
        src/process_main/FitsIO.cpp \
        src/process_main/LinearSolve.cpp \
+       src/process_main/Universalblock.cpp \
        src/process_main/UniversalUtils.cpp \
        src/process_main/ImageProcessing.cpp \
        src/process_main/NumericalRecipes.cpp \
@@ -55,6 +56,7 @@ DEPS = $(OBJS:.o=.d)
 TARGET = Fourier_Quad_Pipe
 POINT_SOURCE_TEST = tests/test_point_source_statistics
 STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
+UNIVERSALBLOCK_TEST = tests/test_universalblock
 
 all: $(TARGET)
 
@@ -63,6 +65,9 @@ test-point-source-statistics: $(POINT_SOURCE_TEST)
 
 test-stamp-cube-io: $(STAMP_CUBE_IO_TEST)
 	./$(STAMP_CUBE_IO_TEST)
+
+test-universalblock: $(UNIVERSALBLOCK_TEST)
+	./$(UNIVERSALBLOCK_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -78,6 +83,22 @@ $(STAMP_CUBE_IO_TEST): tests/StampCubeIOTest.cpp \
 	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
 		tests/StampCubeIOTest.cpp src/process_main/FitsIO.cpp -o $@ -lcfitsio
 
+$(UNIVERSALBLOCK_TEST): tests/UniversalblockTest.cpp \
+                       src/process_main/Universalblock.cpp \
+                       src/process_main/UniversalUtils.cpp \
+                       src/process_main/FitsIO.cpp \
+                       src/process_main/LinearSolve.cpp \
+                       include/process_main/Universalblock.hpp \
+                       include/process_main/FitsIO.hpp \
+                       include/OutputLayout.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/UniversalblockTest.cpp \
+		src/process_main/Universalblock.cpp \
+		src/process_main/UniversalUtils.cpp \
+		src/process_main/FitsIO.cpp \
+		src/process_main/LinearSolve.cpp \
+		$(LDFLAGS) -o $@ $(LDLIBS)
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -86,8 +107,9 @@ $(TARGET): $(OBJS)
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
-	      $(STAMP_CUBE_IO_TEST)
+	      $(STAMP_CUBE_IO_TEST) $(UNIVERSALBLOCK_TEST)
 
 -include $(DEPS)
 
-.PHONY: all clean test-point-source-statistics test-stamp-cube-io
+.PHONY: all clean test-point-source-statistics test-stamp-cube-io \
+        test-universalblock
