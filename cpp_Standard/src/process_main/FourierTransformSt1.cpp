@@ -1,4 +1,5 @@
 #include "FourierTransformSt1.hpp"
+#include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "UniversalUtils.hpp"
@@ -69,32 +70,40 @@ namespace FourierTransformSt1 {
 
         if (nsource > 0) {
             int ns = LensingConfig::ns;
-            int len_s = LensingConfig::len_s;
-            int ngal_max = LensingConfig::ngal_max;
-
-            int nn1 = ns * len_s;
-            int nn2 = ns * (nsource / len_s + 1);
 
             std::vector<float> source_coll;
             std::vector<float> noise_coll;
 
             std::string filename_star_can = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCan", raw_prefix, "_star_can.fits");
-            if (!FitsIO::readStamps(ngal_max, 1, nsource, ns, ns, source_coll, nn1, nn2, filename_star_can)) {
-                std::cerr << "Error reading stamps: " << filename_star_can << "\n";
-                return;
+            FitsIO::StampCubeShape sourceShape;
+            if (!FitsIO::readStampCube(
+                    filename_star_can, sourceShape, source_coll)
+                || !sourceShape.matches(ns, ns, nsource)) {
+                MPIFailure::abortWorld(
+                    "read star-candidate cube with expected shape "
+                        + std::to_string(ns) + "x" + std::to_string(ns) + "x"
+                        + std::to_string(nsource),
+                    filename_star_can);
             }
 
             std::string filename_star_can_noise = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanN", raw_prefix, "_star_can_noise.fits");
-            if (!FitsIO::readStamps(ngal_max, 1, nsource, ns, ns, noise_coll, nn1, nn2, filename_star_can_noise)) {
-                std::cerr << "Error reading stamps: " << filename_star_can_noise << "\n";
-                return;
+            FitsIO::StampCubeShape noiseShape;
+            if (!FitsIO::readStampCube(
+                    filename_star_can_noise, noiseShape, noise_coll)
+                || !noiseShape.matches(ns, ns, nsource)) {
+                MPIFailure::abortWorld(
+                    "read star-candidate noise cube with expected shape "
+                        + std::to_string(ns) + "x" + std::to_string(ns) + "x"
+                        + std::to_string(nsource),
+                    filename_star_can_noise);
             }
 
-            std::vector<float> power_coll(static_cast<size_t>(ngal_max) * ns * ns, 0.0f);
             const std::size_t stamp_size =
                 static_cast<std::size_t>(ns) * static_cast<std::size_t>(ns);
+            std::vector<float> power_coll(
+                static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
             std::vector<float> source(stamp_size);
             std::vector<float> noise(stamp_size);
             std::vector<float> source_p(stamp_size);
@@ -118,7 +127,8 @@ namespace FourierTransformSt1 {
 
             std::string filename_star_can_power = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanP", raw_prefix, "_star_can_power.fits");
-            FitsIO::writeStamps(ngal_max, 1, nsource, ns, ns, power_coll, nn1, nn2, filename_star_can_power);
+            FitsIO::writeStampCube(filename_star_can_power, ns, ns, nsource,
+                                   power_coll);
         }
     }
 }

@@ -7,10 +7,11 @@
 `include/process_main/`；初始化器独立位于 `src/process_init/` 与
 `include/process_init/`。下文未写目录的数值文件名均指这两个 `process_main` 目录。
 
-未修改的文件（`FitsIO.*`、`ImageProcessing.*`、`LinearSolve.*`、`NumericalRecipes.*`、
-`UniversalUtils.*`、`ExStar.*`、`ExposureInfo.*`、`FourierTransformSt2.*`、
-`FourierTransformSt1.hpp`、`CatalogCombiner.hpp`、`ShearMeasurement.hpp`）
-是逐字节拷贝，未作任何改动。
+最初冻结分支时未做 Lite 专属修改的文件（`FitsIO.*`、`ImageProcessing.*`、
+`LinearSolve.*`、`NumericalRecipes.*`、`UniversalUtils.*`、`ExStar.*`、
+`ExposureInfo.*`、`FourierTransformSt2.*`、`FourierTransformSt1.hpp`、
+`CatalogCombiner.hpp`、`ShearMeasurement.hpp`）均从 Standard 逐字节拷贝；其后的
+共享修正继续同步，详见第七、八节。
 
 ## 一、冻结的开关
 
@@ -149,3 +150,18 @@ make -C cpp_Lite -j CXX=mpicxx STACK_PREFIX="$SCI_STACK" \
   EIGEN_INCLUDE="$EIGEN_INCLUDE"
 mpirun -np "$N_RANKS" ./cpp_Lite/Fourier_Quad_Pipe --help
 ```
+
+## 八、2026-08-11 三维 stamp cube 同步
+
+在 Standard 通过干净构建、方向测试和旧符号审计后，Lite 按冻结分支的实际路径
+同步三维 stamp cube：`FitsIO` 使用 header-derived `(x, y, stamp)` 轴和连续
+`[stamp][row][col]` 内存；`SourceExtractor`、两个 FFT 阶段、局域 `PSFModel` 与
+`ShearMeasurement` 全部改为精确数量的 cube 读写，并验证目录计数和 stamp 尺寸。
+旧 `readStamps`、`writeStamps`、`writeStamps2`、二维 mosaic 几何和 `len_*`
+布局常量已删除。
+
+曝光级恒星诊断不再预分配 `NMAX_CHIP * nstar_max * ns * ns` 图像缓存，而是依
+chip 实际 plane 数追加，再保持原选择顺序写出 dense cube。Lite 仍保持
+`PSF_Ms=0`，没有引入 `PSFRecons`、PCA helper、hybrid 或 external-PSF 分支。
+`test-stamp-cube-io` 与 Standard 共享同一非方形方向、FITS header 和 selected-plane
+验收契约。

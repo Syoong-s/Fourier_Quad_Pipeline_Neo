@@ -254,16 +254,15 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             continue;
         }
 
-        int len_g = LensingConfig::len_g;
-        int ngal_max = LensingConfig::ngal_max;
-        int nn1 = ns * len_g;
-        int nn2 = ns * (ngal / len_g + 1);
-
         std::vector<float> gal_p_coll;
         std::string power_fits = OutputLayout::chipPath(
             dirOutput, "stamps/fits_SrcP", PREFIX, "_source_p.fits");
-        if (!FitsIO::readStamps(ngal_max, 1, ngal, ns, ns, gal_p_coll, nn1, nn2, power_fits)) {
-            MPIFailure::abortWorld("read Stage 6 source power", power_fits);
+        FitsIO::StampCubeShape powerShape;
+        if (!FitsIO::readStampCube(power_fits, powerShape, gal_p_coll)
+            || !powerShape.matches(ns, ns, ngal)) {
+            MPIFailure::abortWorld(
+                "read Stage 6 source-power cube with expected shape",
+                power_fits);
         }
 
         fout10.open(out_filename);

@@ -1,4 +1,5 @@
 #include "PSFRecons.hpp"
+#include "PCAImageLayout.hpp"
 #include "OutputFile.hpp"
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
@@ -246,13 +247,14 @@ namespace PSFRecons {
             if (xy_file >> nstar_file >> valid_file) {
                 if (nstar_file > 0 && valid_file >= 0) {
                     std::vector<float> psf_residual;
-                    int nn1 = ns * LensingConfig::len_s;
-                    int nn2 = ns * ((nstar_file / LensingConfig::len_s) + 1);
                     std::string fits_filename = OutputLayout::chipPath(
                         dir_out, "stamps/fits_PsfResi",
                         prefix_e + "_" + std::to_string(ichip), "_psf_p_resi.fits");
-                    
-                    if (FitsIO::readStamps(nstar_file, 1, nstar_file, ns, ns, psf_residual, nn1, nn2, fits_filename)) {
+
+                    FitsIO::StampCubeShape residualShape;
+                    if (FitsIO::readStampCube(
+                            fits_filename, residualShape, psf_residual)
+                        && residualShape.matches(ns, ns, nstar_file)) {
                         double px = 0.0, py = 0.0;
                         int valid_num = 0;
                         while (xy_file >> px >> py) {
@@ -270,11 +272,9 @@ namespace PSFRecons {
                             buf_cnt++;
 
                             size_t dest_offset = static_cast<size_t>(buf_cnt - 1) * nsns;
-                            for (int row = 0; row < ns; ++row) {
-                                for (int col = 0; col < ns; ++col) {
-                                    block_dble[dest_offset + col * ns + row] = psf_residual[src_offset + row * ns + col];
-                                }
-                            }
+                            PCAImageLayout::copySampleRowMajor(
+                                psf_residual.data() + src_offset, nsns,
+                                block_dble.data() + dest_offset);
 
                             if (buf_cnt == block_size) {
                                 accumulateBlock(block_size, nsns, block_dble, mean_arr, cov_arr);
@@ -282,8 +282,9 @@ namespace PSFRecons {
                             }
                         }
                     } else {
-                        MPIFailure::abortWorld("read PCA residual stamps",
-                                               fits_filename);
+                        MPIFailure::abortWorld(
+                            "read PCA residual cube with expected shape",
+                            fits_filename);
                     }
                 }
             }
@@ -440,14 +441,15 @@ namespace PSFRecons {
                     if (xy_file >> nstar_file >> valid_file) {
                         if (nstar_file > 0 && valid_file >= 0) {
                             std::vector<float> psf_residual;
-                            int nn1 = ns * LensingConfig::len_s;
-                            int nn2 = ns * ((nstar_file / LensingConfig::len_s) + 1);
                             std::string fits_filename = OutputLayout::chipPath(
                                 dir_out, "stamps/fits_PsfResi",
                                 prefix_e + "_" + std::to_string(ichip),
                                 "_psf_p_resi.fits");
-                            
-                            if (FitsIO::readStamps(nstar_file, 1, nstar_file, ns, ns, psf_residual, nn1, nn2, fits_filename)) {
+
+                            FitsIO::StampCubeShape residualShape;
+                            if (FitsIO::readStampCube(
+                                    fits_filename, residualShape, psf_residual)
+                                && residualShape.matches(ns, ns, nstar_file)) {
                                 double px = 0.0, py = 0.0;
                                 int valid_num = 0;
                                 while (xy_file >> px >> py) {
@@ -466,12 +468,9 @@ namespace PSFRecons {
                                     yc[curr_tot] = py;
 
                                     std::vector<double> res_slice(nsns, 0.0);
-                                    for (int row = 0; row < ns; ++row) {
-                                        for (int col = 0; col < ns; ++col) {
-                                            int idx = col * ns + row;
-                                            res_slice[idx] = psf_residual[src_offset + row * ns + col] - mean_arr[idx];
-                                        }
-                                    }
+                                    PCAImageLayout::centerSampleRowMajor(
+                                        psf_residual.data() + src_offset,
+                                        mean_arr.data(), nsns, res_slice.data());
                                     for (int j = 0; j < effective_pcs; ++j) {
                                         double value = 0.0;
                                         for (int idx = 0; idx < nsns; ++idx) {
@@ -481,12 +480,16 @@ namespace PSFRecons {
                                     }
                                     curr_tot++;
                                 }
-                }
+                            } else {
+                                MPIFailure::abortWorld(
+                                    "read PCA residual cube with expected shape",
+                                    fits_filename);
+                            }
+                        }
                     }
                     xy_file.close();
                 }
             }
-        }
         }
 
         // 3. Fit PCA coefficients as functions of position
@@ -849,17 +852,13 @@ namespace PSFRecons {
             }
             coeff_val[u] = static_cast<float>(val);
         }
-        for (int row = 0; row < ns; ++row) {
-            for (int col = 0; col < ns; ++col) {
-                int k_idx = col * ns + row;
-                double mean_val = PSFModel::global_mean_psf[PSFModel::getMeanIndex(i_ccd - 1, k_idx)];
-                double val = mean_val;
-                for (int j = 0; j < LensingConfig::n_pcs; ++j) {
-                    val += PSFModel::global_components[PSFModel::getCompIndex(i_ccd - 1, k_idx, j)] * coeff_val[j];
-                }
-                psf_layer2[row * ns + col] = static_cast<float>(val);
-            }
-        }
+        PCAImageLayout::reconstructRowMajor(
+            PSFModel::global_mean_psf.data()
+                + PSFModel::getMeanIndex(i_ccd - 1, 0),
+            PSFModel::global_components.data()
+                + PSFModel::getCompIndex(i_ccd - 1, 0, 0),
+            ns * ns, LensingConfig::n_pcs, coeff_val.data(),
+            psf_layer2.data());
 
         PSFModel::PSF_unscale(psf_layer2, refactor);
 

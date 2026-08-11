@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 
 namespace FitsIO {
@@ -65,6 +66,40 @@ namespace FitsIO {
         if (fptr == nullptr) return;
         int closeStatus = 0;
         fits_close_file(fptr, &closeStatus);
+    }
+
+    // ==========================================
+    // Function: Compute the exact storage size of one stamp cube
+    // Method: Reject non-positive axes and guard both size_t and CFITSIO
+    //         LONGLONG multiplication before allocating or performing I/O.
+    // ==========================================
+    static bool stampCubeElementCount(int nx, int ny, int count,
+                                      std::size_t& elementCount,
+                                      LONGLONG& fitsElementCount) {
+        elementCount = 0;
+        fitsElementCount = 0;
+        if (nx <= 0 || ny <= 0 || count <= 0) {
+            return false;
+        }
+
+        const std::size_t sx = static_cast<std::size_t>(nx);
+        const std::size_t sy = static_cast<std::size_t>(ny);
+        const std::size_t sc = static_cast<std::size_t>(count);
+        if (sx > std::numeric_limits<std::size_t>::max() / sy) {
+            return false;
+        }
+        const std::size_t planeSize = sx * sy;
+        if (planeSize > std::numeric_limits<std::size_t>::max() / sc) {
+            return false;
+        }
+        elementCount = planeSize * sc;
+        if (elementCount > static_cast<std::size_t>(
+                std::numeric_limits<LONGLONG>::max())) {
+            elementCount = 0;
+            return false;
+        }
+        fitsElementCount = static_cast<LONGLONG>(elementCount);
+        return true;
     }
 
     bool readCCDNUM(const std::string& filename, int& ccdNum) {
@@ -327,118 +362,194 @@ namespace FitsIO {
         return true;
     }
 
-    bool readStamps(int np, int nstart, int n, int nsx, int nsy, std::vector<float>& stamps, int n1, int n2, const std::string& filename) {
-        int lnx = 0, lny = 0;
-        std::vector<float> largeStamp;
-        if (!readImage(filename, lnx, lny, largeStamp)) {
-            std::cerr << "Error opening large file: " << filename << std::endl;
+    // ==========================================
+    // Function: Read one contiguous three-dimensional stamp cube
+    // Method: Derive all axes from the FITS header, require positive
+    //         (x, y, stamp) dimensions, and read the row-major planes once.
+    // ==========================================
+    bool readStampCube(const std::string& filename, StampCubeShape& shape,
+                       std::vector<float>& stamps) {
+        shape = {};
+        stamps.clear();
+
+        fitsfile* fptr = nullptr;
+        int status = 0;
+        fits_open_file(&fptr, filename.c_str(), READONLY, &status);
+        if (status != 0) {
+            std::cerr << "Error opening stamp cube: " << filename << std::endl;
+            printError(status);
             return false;
         }
 
-        if (lnx != n1 || lny != n2) {
-            std::cerr << "Warning: FITS size (" << lnx << "x" << lny << ") does not match requested (" << n1 << "x" << n2 << ")." << std::endl;
+        int naxis = 0;
+        fits_get_img_dim(fptr, &naxis, &status);
+        if (status != 0 || naxis != 3) {
+            if (status != 0) {
+                printError(status);
+            } else {
+                std::cerr << "Stamp cube must have NAXIS=3: " << filename
+                          << " (actual NAXIS=" << naxis << ")" << std::endl;
+            }
+            closeAfterFailure(fptr);
+            return false;
         }
 
-        stamps.resize(static_cast<size_t>(np) * nsx * nsy, 0.0f);
+        long naxes[3] = {0, 0, 0};
+        fits_get_img_size(fptr, 3, naxes, &status);
+        if (status != 0 || naxes[0] <= 0 || naxes[1] <= 0 || naxes[2] <= 0
+            || naxes[0] > std::numeric_limits<int>::max()
+            || naxes[1] > std::numeric_limits<int>::max()
+            || naxes[2] > std::numeric_limits<int>::max()) {
+            if (status != 0) {
+                printError(status);
+            } else {
+                std::cerr << "Stamp cube axes must be positive int values: "
+                          << filename << std::endl;
+            }
+            closeAfterFailure(fptr);
+            return false;
+        }
 
-        int offx = 0;
-        int offy = 0;
+        shape.nx = static_cast<int>(naxes[0]);
+        shape.ny = static_cast<int>(naxes[1]);
+        shape.count = static_cast<int>(naxes[2]);
+        std::size_t elementCount = 0;
+        LONGLONG fitsElementCount = 0;
+        if (!stampCubeElementCount(shape.nx, shape.ny, shape.count,
+                                   elementCount, fitsElementCount)) {
+            std::cerr << "Stamp cube element count overflows supported storage: "
+                      << filename << std::endl;
+            closeAfterFailure(fptr);
+            shape = {};
+            return false;
+        }
 
-        // Fortran nstart is 1-based, we map to 0-based k
-        for (int k = nstart - 1; k < n; ++k) {
-            if (offy + nsy > lny) {
-                std::cerr << "large_stamp is too small for reading!" << std::endl;
-                return false;
-            }
-            for (int y = 0; y < nsy; ++y) {
-                for (int x = 0; x < nsx; ++x) {
-                    size_t stampIdx = static_cast<size_t>(k) * nsx * nsy + y * nsx + x;
-                    size_t largeIdx = static_cast<size_t>(y + offy) * lnx + (x + offx);
-                    stamps[stampIdx] = largeStamp[largeIdx];
-                }
-            }
-            offx += nsx;
-            if (offx + nsx > lnx) {
-                offx = 0;
-                offy += nsy;
-            }
+        stamps.resize(elementCount);
+        long fpixel[3] = {1, 1, 1};
+        float nullval = 0.0f;
+        int anynull = 0;
+        fits_read_pix(fptr, TFLOAT, fpixel, fitsElementCount, &nullval,
+                      stamps.data(), &anynull, &status);
+        if (status != 0) {
+            printError(status);
+            closeAfterFailure(fptr);
+            shape = {};
+            stamps.clear();
+            return false;
+        }
+
+        int closeStatus = 0;
+        fits_close_file(fptr, &closeStatus);
+        if (closeStatus != 0) {
+            printError(closeStatus);
+            shape = {};
+            stamps.clear();
+            return false;
         }
         return true;
     }
 
     // ==========================================
-    // Function: Pack and write a collection of image stamps.
-    // Method: Match F77 write_stamps packing and terminate on fixed-buffer overflow.
+    // Function: Write one contiguous three-dimensional stamp cube
+    // Method: Validate the exact collection size, create axes
+    //         (x, y, stamp), add format metadata, and write all pixels once.
     // ==========================================
-    bool writeStamps(int np, int nstart, int n, int nsx, int nsy, const std::vector<float>& stamps, int n1, int n2, const std::string& filename) {
-        constexpr int f77Nmax = 7000;
-        if (n2 > f77Nmax) {
+    bool writeStampCube(const std::string& filename, int nx, int ny, int count,
+                        const std::vector<float>& stamps) {
+        std::size_t elementCount = 0;
+        LONGLONG fitsElementCount = 0;
+        if (!stampCubeElementCount(nx, ny, count, elementCount,
+                                   fitsElementCount)) {
             MainIO::failOutput(
-                "pack FITS stamps", filename,
-                "requested output height exceeds the retained 7000-row stamp buffer contract");
+                "validate stamp cube", filename,
+                "nx, ny, and count must be positive and their product must fit supported storage");
+        }
+        if (stamps.size() != elementCount) {
+            MainIO::failOutput(
+                "validate stamp cube", filename,
+                "stamp collection size does not equal count * ny * nx");
         }
 
-        std::vector<float> largeStamp(static_cast<size_t>(n1) * n2, 0.0f);
-
-        int offx = 0;
-        int offy = 0;
-
-        for (int k = nstart - 1; k < n; ++k) {
-            if (offy + nsy > n2) {
-                MainIO::failOutput(
-                    "pack FITS stamps", filename,
-                    "stamp collection exceeds the requested FITS image dimensions");
-            }
-            for (int y = 0; y < nsy; ++y) {
-                for (int x = 0; x < nsx; ++x) {
-                    size_t stampIdx = static_cast<size_t>(k) * nsx * nsy + y * nsx + x;
-                    size_t largeIdx = static_cast<size_t>(y + offy) * n1 + (x + offx);
-                    largeStamp[largeIdx] = stamps[stampIdx];
-                }
-            }
-            offx += nsx;
-            if (offx + nsx > n1) {
-                offx = 0;
-                offy += nsy;
-            }
+        fitsfile* fptr = nullptr;
+        int status = 0;
+        const std::string createName = "!" + filename;
+        fits_create_file(&fptr, createName.c_str(), &status);
+        if (status != 0) {
+            failFitsOutput("create stamp cube", filename, status);
         }
 
-        return writeImage(filename, n1, n2, largeStamp);
+        int bitpix = FLOAT_IMG;
+        int naxis = 3;
+        long naxes[3] = {nx, ny, count};
+        fits_write_imghdr(fptr, bitpix, naxis, naxes, &status);
+
+        char format[] = "STAMP_CUBE";
+        char order[] = "X,Y,STAMP";
+        fits_update_key(fptr, TSTRING, "FQFMT", format,
+                        "Fourier_Quad stamp collection format", &status);
+        fits_update_key(fptr, TSTRING, "FQORDER", order,
+                        "FITS axis semantic order", &status);
+
+        long fpixel[3] = {1, 1, 1};
+        fits_write_pix(fptr, TFLOAT, fpixel, fitsElementCount,
+                       const_cast<float*>(stamps.data()), &status);
+        if (status != 0) {
+            failFitsOutput("write stamp cube", filename, status);
+        }
+
+        int closeStatus = 0;
+        fits_close_file(fptr, &closeStatus);
+        if (closeStatus != 0) {
+            failFitsOutput("close stamp cube", filename, closeStatus);
+        }
+        return true;
     }
 
     // ==========================================
-    // Function: Pack selected image stamps into one checked FITS image
-    // Method: Abort the complete MPI program on packing overflow and delegate
-    //         creation/write failure handling to writeImage.
+    // Function: Compact selected stamp planes into one output cube
+    // Method: Preserve input order, copy only matching planes, and delegate
+    //         the single contiguous FITS write to writeStampCube.
     // ==========================================
-    bool writeStamps2(int np, int n, int nsx, int nsy, const std::vector<float>& stamps, const std::vector<int>& opt, int val, int n1, int n2, const std::string& filename) {
-        std::vector<float> largeStamp(static_cast<size_t>(n1) * n2, 0.0f);
-
-        int offx = 0;
-        int offy = 0;
-
-        for (int k = 0; k < n; ++k) {
-            if (opt[k] != val) continue;
-            if (offy + nsy > n2) {
-                MainIO::failOutput(
-                    "pack selected FITS stamps", filename,
-                    "selected stamp collection exceeds the requested FITS image dimensions");
-            }
-            for (int y = 0; y < nsy; ++y) {
-                for (int x = 0; x < nsx; ++x) {
-                    size_t stampIdx = static_cast<size_t>(k) * nsx * nsy + y * nsx + x;
-                    size_t largeIdx = static_cast<size_t>(y + offy) * n1 + (x + offx);
-                    largeStamp[largeIdx] = stamps[stampIdx];
-                }
-            }
-            offx += nsx;
-            if (offx + nsx > n1) {
-                offx = 0;
-                offy += nsy;
-            }
+    bool writeSelectedStampCube(const std::string& filename, int nx, int ny,
+                                const std::vector<float>& stamps,
+                                int inputCount,
+                                const std::vector<int>& selection,
+                                int selectedValue) {
+        std::size_t inputElementCount = 0;
+        LONGLONG ignoredFitsCount = 0;
+        if (!stampCubeElementCount(nx, ny, inputCount, inputElementCount,
+                                   ignoredFitsCount)) {
+            MainIO::failOutput(
+                "validate selected stamp cube", filename,
+                "nx, ny, and inputCount must be positive and fit supported storage");
+        }
+        if (stamps.size() != inputElementCount
+            || selection.size() != static_cast<std::size_t>(inputCount)) {
+            MainIO::failOutput(
+                "validate selected stamp cube", filename,
+                "input stamp or selection size does not match inputCount");
         }
 
-        return writeImage(filename, n1, n2, largeStamp);
+        const int selectedCount = static_cast<int>(std::count(
+            selection.begin(), selection.end(), selectedValue));
+        if (selectedCount <= 0) {
+            MainIO::failOutput(
+                "validate selected stamp cube", filename,
+                "selection contains no output stamp");
+        }
+
+        const std::size_t planeSize = static_cast<std::size_t>(nx) * ny;
+        std::vector<float> selected;
+        selected.reserve(static_cast<std::size_t>(selectedCount) * planeSize);
+        for (int stamp = 0; stamp < inputCount; ++stamp) {
+            if (selection[stamp] != selectedValue) {
+                continue;
+            }
+            const std::size_t offset = static_cast<std::size_t>(stamp) * planeSize;
+            selected.insert(selected.end(), stamps.begin() + offset,
+                            stamps.begin() + offset + planeSize);
+        }
+        return writeStampCube(filename, nx, ny, selectedCount, selected);
     }
 
     // ==========================================

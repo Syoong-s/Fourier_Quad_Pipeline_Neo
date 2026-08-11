@@ -63,13 +63,10 @@ namespace LensingConfig {
 
     constexpr double dz_thresh = 0.1;
 
-    // Catalog sizes and limits
-    constexpr int len_g = 40;
-    constexpr int len_s = 15;
+    // Catalog capacity limits
     constexpr int ngal_max = 4000;
     constexpr int nstar_max = 2000;
     constexpr int src_npara = 12;
-    constexpr int len_sam = 50;
 
     constexpr int npd = 33;
     constexpr int blocksize = 200;

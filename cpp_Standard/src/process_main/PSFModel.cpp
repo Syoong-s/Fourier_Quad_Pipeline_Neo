@@ -105,6 +105,27 @@ namespace PSFModel {
     }
 
     // ==========================================
+    // Function: Read one PSF stamp cube with its catalog-defined shape
+    // Method: Decode the FITS axes first and abort the MPI world unless width,
+    //         height, and plane count exactly match the direct consumer.
+    // ==========================================
+    static void readExpectedStampCube(const std::string& filename, int nx, int ny,
+                                      int count, std::vector<float>& stamps,
+                                      const std::string& operation) {
+        FitsIO::StampCubeShape shape;
+        if (FitsIO::readStampCube(filename, shape, stamps)
+            && shape.matches(nx, ny, count)) {
+            return;
+        }
+
+        std::ostringstream detail;
+        detail << filename << " expected=" << nx << "x" << ny << "x" << count
+               << " actual=" << shape.nx << "x" << shape.ny << "x"
+               << shape.count;
+        MPIFailure::abortWorld(operation, detail.str());
+    }
+
+    // ==========================================
     // Function: Load and broadcast all PCA PSF components
     // Method: Let rank zero read the component/coefficient files, abort the
     //         MPI world on fatal input loss, and broadcast aligned arrays.
@@ -352,7 +373,6 @@ namespace PSFModel {
     // ==========================================
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
-        int len_s = LensingConfig::len_s;
         int nstar_max = LensingConfig::nstar_max;
 
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
@@ -418,15 +438,12 @@ namespace PSFModel {
             infile.close();
 
             if (state.nstar[k] > 0) {
-                int nn1 = ns * len_s;
-                int nn2 = ns * ((state.nstar[k] / len_s) + 1);
                 std::string stampPath = OutputLayout::chipPath(
                     dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
-                std::vector<float> star(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
-                if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, stampPath)) {
-                    MPIFailure::abortWorld("read PSF star-candidate power",
-                                           stampPath);
-                }
+                std::vector<float> star;
+                readExpectedStampCube(
+                    stampPath, ns, ns, state.nstar[k], star,
+                    "read PSF star-candidate power cube");
 
                 for (int i = 0; i < state.nstar[k]; ++i) {
                     state.getStarPara(k, i, 4) = 1.0;
@@ -649,52 +666,39 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Assemble exposure-wide selected-star Fourier power
-    // Method: Read each chip's stamp collection, retain selected stars, and
-    //         publish the existing exposure FITS product.
+    // Method: Append each actual-size chip cube, retain the original selection
+    //         order, and publish a dense exposure-level cube without padding.
     // ==========================================
     void plotStarExpo(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
-        int len_s = LensingConfig::len_s;
-        int nstar_max = LensingConfig::nstar_max;
         int nmax_stamp = 5000;
 
-        size_t total_stars_limit = static_cast<size_t>(LensingConfig::NMAX_CHIP) * nstar_max;
-        std::vector<int> opt(total_stars_limit, 0);
-
-        // star_test size: 62 * 2000 * 64 * 64 floats (Heap allocated)
-        std::vector<float> star_test(total_stars_limit * ns * ns, 0.0f);
-        std::vector<float> star(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
+        std::vector<int> opt;
+        std::vector<float> star_test;
 
         int ntot = 0;
-        int w = 0;
         int start = 0;
 
         for (int ichip = 0; ichip < nchip; ++ichip) {
             if (state.nstar[ichip] == 0) continue;
-            int nn1 = ns * len_s;
-            int nn2 = ns * ((state.nstar[ichip] / len_s) + 1);
 
             std::string prefix = UniversalUtils::getPrefix(imageFiles[ichip]);
             std::string filepath = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
 
-            if (!FitsIO::readStamps(nstar_max, 1, state.nstar[ichip], ns, ns, star, nn1, nn2, filepath)) {
-                MPIFailure::abortWorld("read exposure PSF star power", filepath);
-            }
+            std::vector<float> star;
+            readExpectedStampCube(
+                filepath, ns, ns, state.nstar[ichip], star,
+                "read exposure PSF star-power cube");
+
+            star_test.insert(star_test.end(), star.begin(), star.end());
+            opt.resize(static_cast<std::size_t>(start + state.nstar[ichip]), 0);
 
             for (int i = 0; i < state.nstar[ichip]; ++i) {
-                for (int u = 0; u < ns; ++u) {
-                    for (int v = 0; v < ns; ++v) {
-                        size_t srcIdx = static_cast<size_t>(i) * ns * ns + v * ns + u;
-                        size_t destIdx = static_cast<size_t>(start + i) * ns * ns + v * ns + u;
-                        star_test[destIdx] = star[srcIdx];
-                    }
-                }
-                w = start + i;
                 if (state.getStarPara(ichip, i, 4) <= 0.0) continue;
                 ntot++;
                 if (ntot < nmax_stamp) {
-                    opt[w] = 1;
+                    opt[start + i] = 1;
                 }
             }
             start += state.nstar[ichip];
@@ -704,10 +708,8 @@ namespace PSFModel {
         std::string out_filename = dirOutput + "/stamps/fits_StarP/" + prefix_e + "_star_power_expo.fits";
 
         if (ntot > 0) {
-            int len_sam = LensingConfig::len_sam;
-            int nn1 = ns * len_sam;
-            int nn2 = ns * ((std::min(ntot, nmax_stamp) / len_sam) + 1);
-            FitsIO::writeStamps2(total_stars_limit, w + 1, ns, ns, star_test, opt, 1, nn1, nn2, out_filename);
+            FitsIO::writeSelectedStampCube(
+                out_filename, ns, ns, star_test, start, opt, 1);
         }
     }
 
@@ -821,8 +823,6 @@ namespace PSFModel {
     // ==========================================
     void makePSFLocalFit(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
-        int len_s = LensingConfig::len_s;
-        int nstar_max = LensingConfig::nstar_max;
         int npl = LensingConfig::npl;
 
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
@@ -847,16 +847,13 @@ namespace PSFModel {
             int nums = 0;
             std::string prefix = UniversalUtils::getPrefix(imageFiles[k]);
 
-            std::vector<float> star(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
+            std::vector<float> star;
             if (state.nstar[k] > 0) {
-                int nn1 = ns * len_s;
-                int nn2 = ns * ((state.nstar[k] / len_s) + 1);
                 std::string filepath = OutputLayout::chipPath(
                     dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
-                if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, filepath)) {
-                    MPIFailure::abortWorld("read local-fit PSF star power",
-                                           filepath);
-                }
+                readExpectedStampCube(
+                    filepath, ns, ns, state.nstar[k], star,
+                    "read local-fit PSF star-power cube");
             }
 
             std::string coe_filename = OutputLayout::chipPath(
@@ -923,7 +920,8 @@ namespace PSFModel {
                     file20 << nums << " 1\n";
                 }
 
-                std::vector<float> psf_residual(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
+                std::vector<float> psf_residual(
+                    static_cast<std::size_t>(nums) * ns * ns, 0.0f);
                 for (int i = 0; i < nums; ++i) {
                     double xx = 2.0 * (posi[i][0] / static_cast<double>(LensingConfig::chipnx)) - 1.0;
                     double yy = 2.0 * (posi[i][1] / static_cast<double>(LensingConfig::chipny)) - 1.0;
@@ -976,12 +974,11 @@ namespace PSFModel {
                 }
 
                 if (LensingConfig::PSF_Ms == 1) {
-                    int nn1 = ns * len_s;
-                    int nn2 = ns * ((nums / len_s) + 1);
                     std::string resi_fits = OutputLayout::chipPath(
                         dirOutput, "stamps/fits_PsfResi", prefix_e + "_" + ccd_id,
                         "_psf_p_resi.fits");
-                    FitsIO::writeStamps(nstar_max, 1, nums, ns, ns, psf_residual, nn1, nn2, resi_fits);
+                    FitsIO::writeStampCube(
+                        resi_fits, ns, ns, nums, psf_residual);
                 }
             } else {
                 if (nums < LensingConfig::nstar_min_local) {
@@ -1020,8 +1017,6 @@ namespace PSFModel {
     // ==========================================
     void makePSFHybrid(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
-        int len_s = LensingConfig::len_s;
-        int nstar_max = LensingConfig::nstar_max;
         int npl = LensingConfig::npl;
         int npx = LensingConfig::npx;
         int npy = LensingConfig::npy;
@@ -1036,14 +1031,14 @@ namespace PSFModel {
             int nums = 0;
             std::string prefix = UniversalUtils::getPrefix(imageFiles[k]);
 
-            std::vector<float> star(static_cast<size_t>(nstar_max) * ns * ns, 0.0f);
-            int nn1 = ns * len_s;
-            int nn2 = ns * ((state.nstar[k] / len_s) + 1);
-            std::string filepath = OutputLayout::chipPath(
-                dirOutput, "stamps/fits_StarCanP", prefix, "_star_can_power.fits");
-            if (!FitsIO::readStamps(nstar_max, 1, state.nstar[k], ns, ns, star, nn1, nn2, filepath)) {
-                MPIFailure::abortWorld("read hybrid-fit PSF star power",
-                                       filepath);
+            std::vector<float> star;
+            if (state.nstar[k] > 0) {
+                std::string filepath = OutputLayout::chipPath(
+                    dirOutput, "stamps/fits_StarCanP", prefix,
+                    "_star_can_power.fits");
+                readExpectedStampCube(
+                    filepath, ns, ns, state.nstar[k], star,
+                    "read hybrid-fit PSF star-power cube");
             }
 
             std::string coe_filename = OutputLayout::chipPath(

@@ -11,6 +11,27 @@ struct WCSParams {
 };
 
 namespace FitsIO {
+    // ==========================================
+    // Structure: Describe one contiguous FITS stamp cube
+    // Method: Map FITS axes (x, y, stamp) to the in-memory
+    //         [stamp][row][col] collection contract.
+    // ==========================================
+    struct StampCubeShape {
+        int nx = 0;
+        int ny = 0;
+        int count = 0;
+
+        // ==========================================
+        // Function: Compare a decoded cube shape with one pipeline contract
+        // Method: Require exact x, y, and plane-count equality.
+        // ==========================================
+        bool matches(int expectedNx, int expectedNy,
+                     int expectedCount) const noexcept {
+            return nx == expectedNx && ny == expectedNy
+                && count == expectedCount;
+        }
+    };
+
     // Utility to print cfitsio errors
     void printError(int status);
 
@@ -35,14 +56,32 @@ namespace FitsIO {
     // Write a standard 2D float image
     bool writeImage(const std::string& filename, int nx, int ny, const std::vector<float>& data);
 
-    // Read multiple stamp sub-images from a large 2D FITS image
-    bool readStamps(int np, int nstart, int n, int nsx, int nsy, std::vector<float>& stamps, int n1, int n2, const std::string& filename);
+    // ==========================================
+    // Function: Read one contiguous three-dimensional stamp cube
+    // Method: Decode (x, y, stamp) axes from the FITS header and return pixels
+    //         in [stamp][row][col] order without caller-supplied mosaic geometry.
+    // ==========================================
+    bool readStampCube(const std::string& filename, StampCubeShape& shape,
+                       std::vector<float>& stamps);
 
-    // Write multiple stamp sub-images to a large 2D FITS image
-    bool writeStamps(int np, int nstart, int n, int nsx, int nsy, const std::vector<float>& stamps, int n1, int n2, const std::string& filename);
+    // ==========================================
+    // Function: Write one contiguous three-dimensional stamp cube
+    // Method: Require exactly count * ny * nx pixels and store axes
+    //         (x, y, stamp) with self-describing Fourier_Quad keywords.
+    // ==========================================
+    bool writeStampCube(const std::string& filename, int nx, int ny, int count,
+                        const std::vector<float>& stamps);
 
-    // Write stamps with options
-    bool writeStamps2(int np, int n, int nsx, int nsy, const std::vector<float>& stamps, const std::vector<int>& opt, int val, int n1, int n2, const std::string& filename);
+    // ==========================================
+    // Function: Compact and write selected planes from one stamp collection
+    // Method: Preserve input order, retain planes matching selectedValue, and
+    //         publish an exact-size three-dimensional cube.
+    // ==========================================
+    bool writeSelectedStampCube(const std::string& filename, int nx, int ny,
+                                const std::vector<float>& stamps,
+                                int inputCount,
+                                const std::vector<int>& selection,
+                                int selectedValue);
 
     // Stateful class for writing serial stamps to a FITS file
     class FitsSerialWriter {

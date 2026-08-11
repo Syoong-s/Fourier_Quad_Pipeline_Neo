@@ -54,11 +54,15 @@ OBJS = $(SRCS:.cpp=.o)
 DEPS = $(OBJS:.o=.d)
 TARGET = Fourier_Quad_Pipe
 POINT_SOURCE_TEST = tests/test_point_source_statistics
+STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
 
 all: $(TARGET)
 
 test-point-source-statistics: $(POINT_SOURCE_TEST)
 	./$(POINT_SOURCE_TEST)
+
+test-stamp-cube-io: $(STAMP_CUBE_IO_TEST)
+	./$(STAMP_CUBE_IO_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -67,6 +71,13 @@ $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
 	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
 		tests/PointSourceStatisticsTest.cpp src/process_main/PointSourceStatistics.cpp -o $@
 
+$(STAMP_CUBE_IO_TEST): tests/StampCubeIOTest.cpp \
+                      src/process_main/FitsIO.cpp \
+                      include/process_main/FitsIO.hpp \
+                      include/process_main/OutputFile.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/StampCubeIOTest.cpp src/process_main/FitsIO.cpp -o $@ -lcfitsio
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -74,8 +85,9 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST)
+	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
+	      $(STAMP_CUBE_IO_TEST)
 
 -include $(DEPS)
 
-.PHONY: all clean test-point-source-statistics
+.PHONY: all clean test-point-source-statistics test-stamp-cube-io

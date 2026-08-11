@@ -234,6 +234,18 @@ negative noise-subtracted power, invalid inputs, and the 28/29-column catalog
 contract. Production runs use the normal `mpirun` commands below; no separate
 runtime dependency is introduced by the statistic module.
 
+Run the non-square FITS stamp-cube regression in either C++ variant with:
+
+```bash
+make test-stamp-cube-io
+```
+
+For the Standard-only PCA row-major regression, run:
+
+```bash
+make test-psf-recons-orientation
+```
+
 
 ## Defaults and option syntax
 
@@ -459,6 +471,26 @@ Type-specific subdirectories replace the former flat `stamps/`, `rescale/`,
 `dat_Rescale/`, `dat_StarXY/`, `dat_Pcs/`, `fits_StarCan/`, `fits_StarCanN/`,
 `fits_StarCanP/`, `fits_StarP/`, `fits_Src/`, `fits_Noise/`, `fits_SrcP/`,
 `fits_PsfLocal/`, `fits_PsfSrc/`, `fits_PsfResi/`.
+
+### Stamp-cube data contract
+
+Stage 3--7 stamp collections are stored as contiguous three-dimensional FITS
+primary images. Their axes are `NAXIS1=nx`, `NAXIS2=ny`, and
+`NAXIS3=count`; memory uses `[stamp][row][col]`, or flat index
+`((stamp * ny) + row) * nx + col`. Each writer also records
+`FQFMT='STAMP_CUBE'` and `FQORDER='X,Y,STAMP'`.
+
+Readers recover the dimensions from the FITS header, then direct consumers
+require exact agreement with the configured stamp size and catalog plane count.
+A mismatch is a fatal inter-stage contract error and terminates the MPI world.
+The former two-dimensional mosaic format, caller-supplied packing geometry, and
+maximum-capacity stamp image buffers are no longer supported.
+
+This is an intentional intermediate-format break. Regenerate Stage 3 and later
+stamp products after upgrading. Standard users of `PSF_Ms=1` must also regenerate
+PCA residual/component products because PCA pixels now retain the same row-major
+feature order as the image instead of using the legacy internal transpose. Lite
+remains `PSF_Ms=0` and does not contain the PCA reconstruction path.
 
 Every chip-scoped product is sharded one level further by exposure:
 `<TYPE>/<EXPOSURE>/<CHIP><SUFFIX>`. For example, a normalized chip is written

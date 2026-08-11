@@ -1,4 +1,5 @@
 #include "FourierTransformSt2.hpp"
+#include "MPIFailure.hpp"
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
@@ -70,30 +71,34 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
         return;
     }
 
-    int len_g = LensingConfig::len_g;
-    int ngal_max = LensingConfig::ngal_max;
-    int nn1 = ns * len_g;
-    int nn2 = ns * (nsource / len_g + 1);
-
     std::vector<float> source_coll;
     std::string source_fits = OutputLayout::chipPath(
         dirOutput, "stamps/fits_Src", raw_prefix, "_source.fits");
-    if (!FitsIO::readStamps(ngal_max, 1, nsource, ns, ns, source_coll, nn1, nn2, source_fits)) {
-        std::cerr << "Error reading source stamps: " << source_fits << std::endl;
-        return;
+    FitsIO::StampCubeShape sourceShape;
+    if (!FitsIO::readStampCube(source_fits, sourceShape, source_coll)
+        || !sourceShape.matches(ns, ns, nsource)) {
+        MPIFailure::abortWorld(
+            "read source cube with expected shape " + std::to_string(ns) + "x"
+                + std::to_string(ns) + "x" + std::to_string(nsource),
+            source_fits);
     }
 
     std::vector<float> noise_coll;
     std::string noise_fits = OutputLayout::chipPath(
         dirOutput, "stamps/fits_Noise", raw_prefix, "_noise.fits");
-    if (!FitsIO::readStamps(ngal_max, 1, nsource, ns, ns, noise_coll, nn1, nn2, noise_fits)) {
-        std::cerr << "Error reading noise stamps: " << noise_fits << std::endl;
-        return;
+    FitsIO::StampCubeShape noiseShape;
+    if (!FitsIO::readStampCube(noise_fits, noiseShape, noise_coll)
+        || !noiseShape.matches(ns, ns, nsource)) {
+        MPIFailure::abortWorld(
+            "read noise cube with expected shape " + std::to_string(ns) + "x"
+                + std::to_string(ns) + "x" + std::to_string(nsource),
+            noise_fits);
     }
 
-    std::vector<float> power_coll(static_cast<size_t>(ngal_max) * ns * ns, 0.0f);
     const std::size_t stamp_size =
         static_cast<std::size_t>(ns) * static_cast<std::size_t>(ns);
+    std::vector<float> power_coll(
+        static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
     std::vector<float> source(stamp_size);
     std::vector<float> noise(stamp_size);
     std::vector<float> source_p(stamp_size);
@@ -134,9 +139,9 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
 
     std::string power_fits = OutputLayout::chipPath(
         dirOutput, "stamps/fits_SrcP", raw_prefix, "_source_p.fits");
-    if (!FitsIO::writeStamps(ngal_max, 1, nsource, ns, ns, power_coll, nn1, nn2, power_fits)) {
+    if (!FitsIO::writeStampCube(power_fits, ns, ns, nsource, power_coll)) {
         MainIO::failOutput("write FFT2 source power FITS", power_fits,
-                           "FitsIO::writeStamps returned false");
+                           "FitsIO::writeStampCube returned false");
     }
 }
 

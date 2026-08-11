@@ -579,8 +579,8 @@ namespace SourceExtractor {
                           std::vector<int>& weight, int& ngal, int& procError) {
         ngal = 0;
 
-        std::vector<float> source_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<float> noise_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
+        std::vector<float> source_collect;
+        std::vector<float> noise_collect;
         std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
 
         if (procError != 1) {
@@ -613,9 +613,8 @@ namespace SourceExtractor {
 
                 ngal++;
                 
-                int offset = (ngal - 1) * LensingConfig::ns * LensingConfig::ns;
-                std::copy(source.begin(), source.end(), source_collect.begin() + offset);
-                std::copy(noise.begin(), noise.end(), noise_collect.begin() + offset);
+                source_collect.insert(source_collect.end(), source.begin(), source.end());
+                noise_collect.insert(noise_collect.end(), noise.begin(), noise.end());
 
                 source_para[ngal - 1][0] = ig;
                 source_para[ngal - 1][1] = xp;
@@ -633,16 +632,17 @@ namespace SourceExtractor {
             fin.close();
         }
 
-        int nn1 = LensingConfig::ns * LensingConfig::len_g;
-        int nn2 = LensingConfig::ns * (ngal / LensingConfig::len_g + 1);
-        
-        std::string filename_src = OutputLayout::chipPath(
-            dirOutput, "stamps/fits_Src", prefix, "_source.fits");
-        FitsIO::writeStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, source_collect, nn1, nn2, filename_src);
+        if (ngal > 0) {
+            std::string filename_src = OutputLayout::chipPath(
+                dirOutput, "stamps/fits_Src", prefix, "_source.fits");
+            FitsIO::writeStampCube(filename_src, LensingConfig::ns,
+                                   LensingConfig::ns, ngal, source_collect);
 
-        std::string filename_noise = OutputLayout::chipPath(
-            dirOutput, "stamps/fits_Noise", prefix, "_noise.fits");
-        FitsIO::writeStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, noise_collect, nn1, nn2, filename_noise);
+            std::string filename_noise = OutputLayout::chipPath(
+                dirOutput, "stamps/fits_Noise", prefix, "_noise.fits");
+            FitsIO::writeStampCube(filename_noise, LensingConfig::ns,
+                                   LensingConfig::ns, ngal, noise_collect);
+        }
 
         std::string filename_info = OutputLayout::chipPath(
             dirOutput, "stamps/dat_SrcInfo", prefix, "_source_info.dat");
@@ -673,8 +673,8 @@ namespace SourceExtractor {
         double dra = 0.0;
         double astrometry_shift_ratio = 0.2;
 
-        std::vector<float> source_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<float> noise_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
+        std::vector<float> source_collect;
+        std::vector<float> noise_collect;
         std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
         std::vector<int> sid(LensingConfig::ngal_max, 0);
         std::vector<std::string> accepted_orig_lines;
@@ -750,9 +750,8 @@ namespace SourceExtractor {
 
                 ngal++;
 
-                int offset = (ngal - 1) * LensingConfig::ns * LensingConfig::ns;
-                std::copy(source.begin(), source.end(), source_collect.begin() + offset);
-                std::copy(noise.begin(), noise.end(), noise_collect.begin() + offset);
+                source_collect.insert(source_collect.end(), source.begin(), source.end());
+                noise_collect.insert(noise_collect.end(), noise.begin(), noise.end());
 
                 source_para[ngal - 1][0] = ig;
                 source_para[ngal - 1][1] = xp;
@@ -778,16 +777,15 @@ namespace SourceExtractor {
         }
 
         if (ngal > 0) {
-            int nn1 = LensingConfig::ns * LensingConfig::len_g;
-            int nn2 = LensingConfig::ns * (ngal / LensingConfig::len_g + 1);
-            
             std::string filename_src = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_Src", prefix, "_source.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, source_collect, nn1, nn2, filename_src);
+            FitsIO::writeStampCube(filename_src, LensingConfig::ns,
+                                   LensingConfig::ns, ngal, source_collect);
 
             std::string filename_noise = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_Noise", prefix, "_noise.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, noise_collect, nn1, nn2, filename_noise);
+            FitsIO::writeStampCube(filename_noise, LensingConfig::ns,
+                                   LensingConfig::ns, ngal, noise_collect);
         }
 
         std::string filename_info = OutputLayout::chipPath(
@@ -1067,22 +1065,29 @@ namespace SourceExtractor {
         std::vector<float> source_collect;
         std::vector<float> noise_collect;
         if (ngal > 0) {
-            int nn1 = LensingConfig::ns * LensingConfig::len_g;
-            int nn2 = LensingConfig::ns * (ngal / LensingConfig::len_g + 1);
-            source_collect.resize(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-            noise_collect.resize(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-
             std::string filename_noise = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_Noise", prefix, "_noise.fits");
-            FitsIO::readStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, noise_collect, nn1, nn2, filename_noise);
+            FitsIO::StampCubeShape noiseShape;
+            if (!FitsIO::readStampCube(filename_noise, noiseShape, noise_collect)
+                || !noiseShape.matches(LensingConfig::ns, LensingConfig::ns, ngal)) {
+                MPIFailure::abortWorld(
+                    "read Stage 3 source-noise cube with expected shape",
+                    filename_noise);
+            }
 
             std::string filename_source = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_Src", prefix, "_source.fits");
-            FitsIO::readStamps(LensingConfig::ngal_max, 1, ngal, LensingConfig::ns, LensingConfig::ns, source_collect, nn1, nn2, filename_source);
+            FitsIO::StampCubeShape sourceShape;
+            if (!FitsIO::readStampCube(filename_source, sourceShape, source_collect)
+                || !sourceShape.matches(LensingConfig::ns, LensingConfig::ns, ngal)) {
+                MPIFailure::abortWorld(
+                    "read Stage 3 source cube with expected shape",
+                    filename_source);
+            }
         }
 
-        std::vector<float> star_source_collect(LensingConfig::nstar_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<float> star_noise_collect(LensingConfig::nstar_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
+        std::vector<float> star_source_collect;
+        std::vector<float> star_noise_collect;
         std::vector<std::vector<float>> star_para;
 
         for (int i = 0; i < ngal; ++i) {
@@ -1090,9 +1095,13 @@ namespace SourceExtractor {
 
             nstar++;
             int offset_src = i * LensingConfig::ns * LensingConfig::ns;
-            int offset_dest = (nstar - 1) * LensingConfig::ns * LensingConfig::ns;
-            std::copy(source_collect.begin() + offset_src, source_collect.begin() + offset_src + LensingConfig::ns * LensingConfig::ns, star_source_collect.begin() + offset_dest);
-            std::copy(noise_collect.begin() + offset_src, noise_collect.begin() + offset_src + LensingConfig::ns * LensingConfig::ns, star_noise_collect.begin() + offset_dest);
+            const int stampSize = LensingConfig::ns * LensingConfig::ns;
+            star_source_collect.insert(
+                star_source_collect.end(), source_collect.begin() + offset_src,
+                source_collect.begin() + offset_src + stampSize);
+            star_noise_collect.insert(
+                star_noise_collect.end(), noise_collect.begin() + offset_src,
+                noise_collect.begin() + offset_src + stampSize);
 
             std::vector<float> row(4, 0.0f);
             row[0] = source_para[i][0];
@@ -1114,16 +1123,17 @@ namespace SourceExtractor {
         fout.close();
 
         if (nstar > 0) {
-            int nn1_s = LensingConfig::ns * LensingConfig::len_s;
-            int nn2_s = LensingConfig::ns * (nstar / LensingConfig::len_s + 1);
-
             std::string filename_star_src = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCan", prefix, "_star_can.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, nstar, LensingConfig::ns, LensingConfig::ns, star_source_collect, nn1_s, nn2_s, filename_star_src);
+            FitsIO::writeStampCube(filename_star_src, LensingConfig::ns,
+                                   LensingConfig::ns, nstar,
+                                   star_source_collect);
 
             std::string filename_star_noise = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanN", prefix, "_star_can_noise.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, nstar, LensingConfig::ns, LensingConfig::ns, star_noise_collect, nn1_s, nn2_s, filename_star_noise);
+            FitsIO::writeStampCube(filename_star_noise, LensingConfig::ns,
+                                   LensingConfig::ns, nstar,
+                                   star_noise_collect);
         }
     }
 
@@ -1136,8 +1146,8 @@ namespace SourceExtractor {
                                 const std::vector<int>& weight, int& nstar, int& procError) {
         nstar = 0;
 
-        std::vector<float> star_source_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
-        std::vector<float> star_noise_collect(LensingConfig::ngal_max * LensingConfig::ns * LensingConfig::ns, 0.0f);
+        std::vector<float> star_source_collect;
+        std::vector<float> star_noise_collect;
         std::vector<std::vector<float>> star_para;
 
         if (procError != 1) {
@@ -1177,9 +1187,10 @@ namespace SourceExtractor {
                 if (snr < LensingConfig::SNR_PSF) continue;
 
                 nstar++;
-                int offset_dest = (nstar - 1) * LensingConfig::ns * LensingConfig::ns;
-                std::copy(source.begin(), source.end(), star_source_collect.begin() + offset_dest);
-                std::copy(noise.begin(), noise.end(), star_noise_collect.begin() + offset_dest);
+                star_source_collect.insert(
+                    star_source_collect.end(), source.begin(), source.end());
+                star_noise_collect.insert(
+                    star_noise_collect.end(), noise.begin(), noise.end());
 
                 std::vector<float> row(4, 0.0f);
                 row[0] = nstar;
@@ -1203,16 +1214,17 @@ namespace SourceExtractor {
         fout.close();
 
         if (nstar > 0) {
-            int nn1_s = LensingConfig::ns * LensingConfig::len_s;
-            int nn2_s = LensingConfig::ns * (nstar / LensingConfig::len_s + 1);
-
             std::string filename_star_src = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCan", prefix, "_star_can.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, nstar, LensingConfig::ns, LensingConfig::ns, star_source_collect, nn1_s, nn2_s, filename_star_src);
+            FitsIO::writeStampCube(filename_star_src, LensingConfig::ns,
+                                   LensingConfig::ns, nstar,
+                                   star_source_collect);
 
             std::string filename_star_noise = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_StarCanN", prefix, "_star_can_noise.fits");
-            FitsIO::writeStamps(LensingConfig::ngal_max, 1, nstar, LensingConfig::ns, LensingConfig::ns, star_noise_collect, nn1_s, nn2_s, filename_star_noise);
+            FitsIO::writeStampCube(filename_star_noise, LensingConfig::ns,
+                                   LensingConfig::ns, nstar,
+                                   star_noise_collect);
         }
     }
 
