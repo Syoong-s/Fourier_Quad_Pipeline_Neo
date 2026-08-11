@@ -430,7 +430,7 @@ namespace SourceExtractor {
     // ==========================================
     // Function: Extract source stamps from external catalog positions
     // Method: Read configured RA, Dec, and ZP fields while skipping missing tiles and malformed
-    //         rows, preserving valid-row extraction and each accepted original catalog row.
+    //         rows, then always publish the captured external header with any accepted rows.
     // ==========================================
     void genSourceExtCatalog(const std::string& dirOutput, const std::vector<std::string>& sortFile, int sortNum, const std::string& prefix,
                              int nx, int ny, const std::vector<float>& array, std::vector<int>& weight,
@@ -572,14 +572,16 @@ namespace SourceExtractor {
 
         std::string filename_orig = OutputLayout::chipPath(
             dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
+        if (!header_captured) {
+            const std::string header_source =
+                sortNum > 0 ? sortFile.front() : prefix;
+            MPIFailure::abortWorld(
+                "read external catalog header", header_source);
+        }
         MainIO::OutputFile fout_orig(filename_orig);
-        if (procError == 1 || ngal == 0) {
-            fout_orig << "No sources!!\n";
-        } else {
-            fout_orig << orig_header << "\n";
-            for (const auto& line : accepted_orig_lines) {
-                fout_orig << line << "\n";
-            }
+        fout_orig << orig_header << "\n";
+        for (const auto& line : accepted_orig_lines) {
+            fout_orig << line << "\n";
         }
         fout_orig.close();
     }

@@ -1,6 +1,7 @@
 #include "process_rearr/process_rearr.hpp"
 
 #include "process_rearr/CatalogRearranger.hpp"
+#include "process_main/MPIScheduler.hpp"
 #include "ProcessRearrConfig.hpp"
 
 #include <mpi.h>
@@ -27,8 +28,8 @@ namespace fs = std::filesystem;
 
 // ==========================================
 // Structure: Hold root-prepared input and output paths
-// Method: Resolve every exposure catalog once, retain one shared header, and
-//         broadcast only normalized strings needed by distributed readers.
+// Method: Resolve every exposure catalog once and retain the rank-zero-selected
+//         shared header that is broadcast before dynamic catalog reads begin.
 // ==========================================
 struct PreparedInputs {
     std::vector<std::string> catalog_paths;
@@ -201,8 +202,8 @@ bool resolveCatalogPathFromImage(const std::string& exposure_list_path,
 
 // ==========================================
 // Function: Prepare every catalog path, output path, and shared header on rank zero
-// Method: Resolve a single dataset root, select the first readable catalog
-//         header, and preserve missing-catalog skip behavior for distributed reads.
+// Method: Resolve paths and select the first readable catalog header in exposure-list
+//         order before broadcasting the schema and starting dynamic reads.
 // ==========================================
 bool prepareInputs(const std::string& exposure_list,
                    const ProcessConfig::RuntimeOptions& options,
@@ -376,67 +377,68 @@ bool collectiveSuccess(bool local_success,
 }
 
 // ==========================================
-// Function: Read this rank's static exposure subset
-// Method: Use exposure-index striding, require the shared header and exact row
-//         width, and skip only policies explicitly enabled in the phase config.
+// Function: Read one dynamically assigned exposure catalog
+// Method: Validate and discard its header against the pre-broadcast shared schema,
+//         preserve the original exposure index, and accumulate only numeric rows.
 // ==========================================
-bool readLocalCatalogs(const PreparedInputs& prepared,
-                       const ProcessRearr::CatalogLayout& layout,
-                       int rank,
-                       int world_size,
-                       LocalRows& rows,
-                       std::string& error) {
-    for (std::size_t exposure = static_cast<std::size_t>(rank);
-         exposure < prepared.catalog_paths.size();
-         exposure += static_cast<std::size_t>(world_size)) {
-        const std::string& catalog_path = prepared.catalog_paths[exposure];
-        std::ifstream input(catalog_path);
-        if (!input.is_open()) {
-            ++rows.missing_catalogs;
-            if (ProcessRearrConfig::SKIP_MISSING_CATALOGS) {
+bool readCatalogJob(const PreparedInputs& prepared,
+                    const ProcessRearr::CatalogLayout& layout,
+                    std::size_t exposure,
+                    LocalRows& rows,
+                    std::string& error) {
+    if (exposure >= prepared.catalog_paths.size()) {
+        error = "dynamic catalog job has an invalid exposure index";
+        return false;
+    }
+
+    const std::string& catalog_path = prepared.catalog_paths[exposure];
+    std::ifstream input(catalog_path);
+    if (!input.is_open()) {
+        ++rows.missing_catalogs;
+        if (ProcessRearrConfig::SKIP_MISSING_CATALOGS) {
+            error.clear();
+            return true;
+        }
+        error = "cannot open catalog " + catalog_path;
+        return false;
+    }
+
+    std::string header;
+    if (!std::getline(input, header)) {
+        error = "catalog has no header: " + catalog_path;
+        return false;
+    }
+    if (trimWhitespace(header) != prepared.header) {
+        error = "catalog header differs from the shared schema: " + catalog_path;
+        return false;
+    }
+
+    std::string line;
+    std::uint64_t line_number = 1;
+    while (std::getline(input, line)) {
+        ++line_number;
+        if (trimWhitespace(line).empty()) {
+            continue;
+        }
+        std::vector<double> parsed;
+        std::string row_error;
+        if (!ProcessRearr::parseCatalogRow(line, layout.all_columns,
+                                           parsed, row_error)) {
+            ++rows.malformed_rows;
+            if (ProcessRearrConfig::SKIP_MALFORMED_ROWS) {
                 continue;
             }
-            error = "cannot open catalog " + catalog_path;
+            error = catalog_path + ":" + std::to_string(line_number)
+                    + ": " + row_error;
             return false;
         }
-
-        std::string header;
-        if (!std::getline(input, header)) {
-            error = "catalog has no header: " + catalog_path;
-            return false;
-        }
-        if (trimWhitespace(header) != prepared.header) {
-            error = "catalog header differs from the shared schema: " + catalog_path;
-            return false;
-        }
-
-        std::string line;
-        std::uint64_t line_number = 1;
-        while (std::getline(input, line)) {
-            ++line_number;
-            if (trimWhitespace(line).empty()) {
-                continue;
-            }
-            std::vector<double> parsed;
-            std::string row_error;
-            if (!ProcessRearr::parseCatalogRow(line, layout.all_columns,
-                                               parsed, row_error)) {
-                ++rows.malformed_rows;
-                if (ProcessRearrConfig::SKIP_MALFORMED_ROWS) {
-                    continue;
-                }
-                error = catalog_path + ":" + std::to_string(line_number)
-                        + ": " + row_error;
-                return false;
-            }
-            rows.values.insert(rows.values.end(), parsed.begin(), parsed.end());
-            rows.source_exposures.push_back(static_cast<std::uint64_t>(exposure));
-            rows.source_rows.push_back(line_number);
-        }
-        if (input.bad()) {
-            error = "I/O error while reading catalog: " + catalog_path;
-            return false;
-        }
+        rows.values.insert(rows.values.end(), parsed.begin(), parsed.end());
+        rows.source_exposures.push_back(static_cast<std::uint64_t>(exposure));
+        rows.source_rows.push_back(line_number);
+    }
+    if (input.bad()) {
+        error = "I/O error while reading catalog: " + catalog_path;
+        return false;
     }
     error.clear();
     return true;
@@ -970,8 +972,8 @@ bool generateRearrangedExpoList(const std::string& output_directory,
 
 // ==========================================
 // Function: Rearrange exposure _all.cat files into spatial subcatalogs
-// Method: Read catalogs across MPI ranks, build a global weighted k-d sky
-//         partition, redistribute complete rows, and write sorted outputs.
+// Method: Broadcast the rank-zero-selected schema, dynamically schedule catalog
+//         reads, then build, redistribute, and write the weighted k-d partitions.
 // ==========================================
 int process_rearr(const std::string& exposure_list,
                   const ProcessConfig::RuntimeOptions& options,
@@ -1034,12 +1036,56 @@ int process_rearr(const std::string& exposure_list,
         return 1;
     }
 
+    local_success = prepared.catalog_paths.size()
+                    <= static_cast<std::size_t>(std::numeric_limits<int>::max());
+    local_error = local_success
+        ? std::string{}
+        : "catalog job count exceeds MPIScheduler int range";
+    if (!collectiveSuccess(local_success, local_error, "schedule", rank,
+                           world_size, communicator)) {
+        return 1;
+    }
+
     LocalRows local_rows;
-    local_success = readLocalCatalogs(prepared, layout, rank, world_size,
-                                      local_rows, local_error);
+    bool local_read_success = true;
+    std::string local_read_error;
+    MPIScheduler::distribute(
+        static_cast<int>(prepared.catalog_paths.size()),
+        [&](int iexpo) {
+            const std::size_t exposure =
+                static_cast<std::size_t>(iexpo - 1);
+            std::string job_error;
+            const bool job_success = readCatalogJob(
+                prepared, layout, exposure, local_rows, job_error);
+            if (!job_success && local_read_success) {
+                local_read_error = job_error;
+            }
+            local_read_success = local_read_success && job_success;
+        },
+        "process_rearr catalog read");
+    local_success = local_read_success;
+    local_error = local_read_error;
     if (!collectiveSuccess(local_success, local_error, "read", rank,
                            world_size, communicator)) {
         return 1;
+    }
+
+    const std::uint64_t local_read_rows =
+        static_cast<std::uint64_t>(local_rows.source_rows.size());
+    std::uint64_t global_read_rows = 0;
+    local_success = MPI_Allreduce(
+        &local_read_rows, &global_read_rows, 1, MPI_UINT64_T, MPI_SUM,
+        communicator) == MPI_SUCCESS;
+    local_error = local_success
+        ? std::string{}
+        : "MPI_Allreduce failed for process_rearr catalog row count";
+    if (!collectiveSuccess(local_success, local_error, "read-count", rank,
+                           world_size, communicator)) {
+        return 1;
+    }
+    if (rank == 0) {
+        std::cout << "process_rearr: catalog read completed, rows="
+                  << global_read_rows << std::endl;
     }
 
     std::vector<std::uint64_t> local_tile_counts;
@@ -1067,6 +1113,11 @@ int process_rearr(const std::string& exposure_list,
 
     std::uint64_t total_rows = 0;
     local_success = sumTileCounts(global_tile_counts, total_rows, local_error);
+    if (local_success && total_rows != global_read_rows) {
+        local_success = false;
+        local_error =
+            "process_rearr row count changed between catalog read and binning";
+    }
     const std::size_t partition_count =
         local_success ? ProcessRearr::partitionCount(total_rows) : 0;
     std::vector<int> tile_partitions;
@@ -1111,6 +1162,9 @@ int process_rearr(const std::string& exposure_list,
         return 1;
     }
 
+    if (rank == 0) {
+        std::cout << "process_rearr: redistributing rows" << std::endl;
+    }
     ReceivedRows received;
     local_success = exchangeRows(local_rows, row_partitions, layout,
                                  transfer_plan, world_size, communicator,
@@ -1142,6 +1196,9 @@ int process_rearr(const std::string& exposure_list,
     }
     MPI_Barrier(communicator);
 
+    if (rank == 0) {
+        std::cout << "process_rearr: writing partitions" << std::endl;
+    }
     std::vector<std::uint64_t> local_summary_counts;
     std::vector<double> local_dec_min;
     std::vector<double> local_dec_max;
@@ -1208,11 +1265,11 @@ int process_rearr(const std::string& exposure_list,
     }
 
     if (rank == 0) {
-        std::cout << "process_rearr completed: rows=" << total_rows
-                  << " partitions=" << partition_count
-                  << " missing_catalogs=" << global_missing
-                  << " malformed_rows=" << global_malformed
-                  << " output=" << prepared.output_directory
+        std::cout << "process_rearr completed: rows=" << total_rows << "\n"
+                  << " partitions=" << partition_count << "\n"
+                  << " missing_catalogs=" << global_missing << "\n"
+                  << " malformed_rows=" << global_malformed << "\n"
+                  << " output=" << prepared.output_directory << "\n"
                   << " expo_list=" << rearranged_list_path << std::endl;
     }
     return 0;

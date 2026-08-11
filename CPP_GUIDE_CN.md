@@ -119,6 +119,13 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 RA/Dec 原始列号，开启后会按投影列表自动换算位置。输出默认位于每个数据集的
 `rearranged_catalog/` 目录。
 
+两个 C++ 变体采用同一套零源输出契约。norm valid 的阶段 3 chip 始终发布包含真实
+外部星表表头以及零行或多行数据的 `_orig.cat`；norm valid 且无输出源时，阶段 7
+发布仅含表头的 `_shear.dat`。norm invalid chip 会在创建任何 shear 输出前直接
+跳过；阶段 7 不检查也不删除已有的 `_shear.dat`。阶段 9 先检查 norm，再解释
+shear；header-only shear 表示成功的零源 chip，不会打开 `_orig.cat`。只有至少一个
+norm-valid chip 的 shear 含数据行时才创建 `<EXPOSURE>_all.cat`。
+
 对于 C++ 外部星表，请在所选流水线的 `ProcessConfig.hpp` 中设置一基原始列号
 `EXTCAT_RA_COLUMN_ONE_BASED`、`EXTCAT_DEC_COLUMN_ONE_BASED` 和
 `EXTCAT_ZP_COLUMN_ONE_BASED`。默认值分别为 `5`、`6`、`17`，对应 DES Y6 GOLD
@@ -152,7 +159,7 @@ C++ 投影模式、并行行为及下载脚本限流说明详见
 
 ## 编译器与依赖库
 
-本地验证使用 GCC/G++ 15.2.0、Open MPI 5.0.10、CFITSIO 4.6.3、FFTW 3.3.10、
+本地验证使用 GCC/G++ 15.2.0、Open MPI 5.0.10、CFITSIO 4.6.4、FFTW 3.3.11、
 Eigen 3.4.0、OpenBLAS/LAPACK 0.3.33（WSL2 下的 Linux）。
 
 可移植 HPC 目标为 GCC/G++ 12.3.0、Open MPI 4.1.8、CFITSIO 4.6.4、FFTW 3.3.11、
@@ -180,17 +187,9 @@ make CXX="${MPI_PREFIX}/bin/mpicxx"   STACK_PREFIX="${STACK_PREFIX}"   EIGEN_INC
 
 无需 Windows 原生编译器或 wrapper。集群构建在加载站点的编译器、MPI 与科学库 module 后使用同一 Makefile。
 
-运行外部星表列读取器测试：
-
-```bash
-make test-extcat-reader
-```
-
-运行自包含的重排单元与 MPI 集成测试：
-
-```bash
-make test-rearr
-```
+当前 Makefile 不提供专用的 `test-extcat-reader` 或 `test-rearr` target。验证
+rearr 变更时，应使用代表性的 rearr-only MPI 调用，并核对行数、schema 失败路径
+与输出星表。
 
 在任一 C++ 变体中运行阶段 7 点源统计合成回归测试：
 
@@ -262,6 +261,13 @@ mpirun -np 4 ./Fourier_Quad_Pipe   --run-init false --run-main true   --expo-lis
 ```bash
 mpirun -np 4 ./Fourier_Quad_Pipe   --run-init false --run-main false --run-rearr true   --expo-list /data/work/expo_g2019.list
 ```
+
+dynamic read 开始前，rank 0 按 exposure-list 顺序扫描 `_all.cat` 路径，将第一个
+可读表头选为 shared schema，并与已解析路径一起广播。随后
+`MPIScheduler::distribute` 分发一基 exposure job。worker 每次读取一个 catalog
+表头，立即与 shared schema 严格比较并丢弃，再解析数据行；worker 不缓存各 catalog
+header。确定性来源键仍使用原始零基 exposure-list index。rank 0 依次输出 catalog
+read 完成、row redistribution 与 partition writing 阶段标记。
 
 仅初始化本地执行：
 

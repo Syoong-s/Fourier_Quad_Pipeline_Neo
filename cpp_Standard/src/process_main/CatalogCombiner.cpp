@@ -13,6 +13,8 @@
 #include <sstream>
 #include <iomanip>
 #include <cmath>
+#include <filesystem>
+#include <system_error>
 
 extern std::vector<std::string> EXPO_FILE;
 
@@ -29,6 +31,53 @@ std::string trimRight(std::string str) {
         str.pop_back();
     }
     return str;
+}
+
+enum class ShearCatalogStatus {
+    HasSources,
+    Empty,
+    Missing,
+    ReadError
+};
+
+struct ShearCatalogProbe {
+    ShearCatalogStatus status = ShearCatalogStatus::ReadError;
+    std::string header;
+};
+
+// ==========================================
+// Function: Classify one Stage-7 shear catalog without opening its paired original catalog
+// Method: Require a nonempty header and scan only until the first nonblank data row,
+//         distinguishing a valid zero-source file from missing or unreadable input.
+// ==========================================
+ShearCatalogProbe probeShearCatalog(const std::string& filename) {
+    ShearCatalogProbe result;
+    std::ifstream input(filename);
+    if (!input.is_open()) {
+        result.status = ShearCatalogStatus::Missing;
+        return result;
+    }
+    if (!std::getline(input, result.header)) {
+        result.status = ShearCatalogStatus::ReadError;
+        return result;
+    }
+    result.header = trimRight(result.header);
+    if (result.header.empty()) {
+        result.status = ShearCatalogStatus::ReadError;
+        return result;
+    }
+
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!trimRight(line).empty()) {
+            result.status = ShearCatalogStatus::HasSources;
+            return result;
+        }
+    }
+    result.status = input.bad()
+        ? ShearCatalogStatus::ReadError
+        : ShearCatalogStatus::Empty;
+    return result;
 }
 
 // ==========================================
@@ -88,41 +137,31 @@ void applyCombinedCatalogCalibration(std::vector<float>& cat,
 
 // ==========================================
 // Function: Combine one exposure's chip catalogs into the final result catalog
-// Method: Leave header discovery file-driven, gate each data chip before Stage-7/original-catalog
-//         reads, and share parsing, cuts, calibration, counters, and output alignment.
+// Method: Remove stale output, gate every chip by norm and shear data presence, then lazily
+//         create the exposure catalog from the first contributing chip's live headers.
 // ==========================================
 void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                         const std::string& dirOutput, float chi2) {
     constexpr bool use_external_catalog = LensingConfig::ext_cat == 1;
-    std::string prefix_expo = UniversalUtils::getPrefixExpo(imageFiles[0]);
-    std::string out_filename = dirOutput + "/result/" + prefix_expo + "_all.cat";
+    const std::string prefix_expo =
+        UniversalUtils::getPrefixExpo(imageFiles[0]);
+    const std::string out_filename =
+        dirOutput + "/result/" + prefix_expo + "_all.cat";
 
-    MainIO::OutputFile fout20(out_filename);
-    fout20 << std::setprecision(10);
-
-    std::string original_header;
-    if constexpr (use_external_catalog) {
-        for (int ichip = 0; ichip < nchip; ++ichip) {
-            std::string prefix = UniversalUtils::getPrefix(imageFiles[ichip]);
-            std::string filename = OutputLayout::chipPath(
-                dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
-            std::ifstream fin15(filename);
-            if (fin15.is_open()) {
-                if (std::getline(fin15, original_header)) {
-                    std::string cat_content;
-                    if (std::getline(fin15, cat_content)) {
-                        original_header = trimRight(original_header);
-                        break;
-                    }
-                }
-            }
-        }
+    std::error_code filesystem_error;
+    std::filesystem::remove(out_filename, filesystem_error);
+    if (filesystem_error) {
+        MPIFailure::abortWorld(
+            "remove stale combined catalog",
+            out_filename + ": " + filesystem_error.message());
     }
+
+    MainIO::OutputFile fout20;
 
     int n = 0;
     int m = 0;
     int num_cols = LensingConfig::shear_cat_ncols;
-    bool output_header_written = false;
+    bool output_opened = false;
 
     std::string last_prefix;
 
@@ -144,16 +183,30 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
 
         const std::string filename_shear = OutputLayout::chipPath(
             dirOutput, "stamps/dat_Shear", prefix, "_shear.dat");
+        const ShearCatalogProbe shear_probe =
+            probeShearCatalog(filename_shear);
+        if (shear_probe.status == ShearCatalogStatus::Empty) {
+            continue;
+        }
+        if (shear_probe.status == ShearCatalogStatus::Missing) {
+            MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
+        }
+        if (shear_probe.status == ShearCatalogStatus::ReadError) {
+            MPIFailure::abortWorld("parse Stage 7 shear catalog", filename_shear);
+        }
+        if (chi2 > LensingConfig::chi2_thresh) {
+            std::cout << prefix << " contains no valid sources!" << std::endl;
+            return;
+        }
+
         std::ifstream fin10(filename_shear);
-        if (!fin10.is_open()) {
+        std::string ignored_shear_header;
+        if (!fin10.is_open() || !std::getline(fin10, ignored_shear_header)) {
             MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
         }
 
-        std::string cat_list1;
-        std::getline(fin10, cat_list1);
-        cat_list1 = trimRight(cat_list1);
-
         std::ifstream fin15;
+        std::string original_header;
         if constexpr (use_external_catalog) {
             const std::string filename_orig = OutputLayout::chipPath(
                 dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
@@ -162,26 +215,27 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                 MPIFailure::abortWorld("read external source catalog", filename_orig);
             }
 
-            std::string dummy_orig_header;
-            std::getline(fin15, dummy_orig_header);
+            if (!std::getline(fin15, original_header)) {
+                MPIFailure::abortWorld(
+                    "read external source catalog header", filename_orig);
+            }
+            original_header = trimRight(original_header);
+            if (original_header.empty()) {
+                MPIFailure::abortWorld(
+                    "parse external source catalog header", filename_orig);
+            }
         }
 
-        if (!output_header_written) {
+        if (!output_opened) {
+            fout20.open(out_filename);
+            fout20 << std::setprecision(10);
             if constexpr (use_external_catalog) {
-                fout20 << original_header << " ccD_NUM " << cat_list1 << " Chi2\n";
+                fout20 << original_header << " ccD_NUM "
+                       << shear_probe.header << " Chi2\n";
             } else {
-                fout20 << " ccD_NUM " << cat_list1 << "\n";
+                fout20 << " ccD_NUM " << shear_probe.header << "\n";
             }
-            if (chi2 > LensingConfig::chi2_thresh) {
-                fin10.close();
-                if constexpr (use_external_catalog) {
-                    fin15.close();
-                }
-                fout20.close();
-                std::cout << prefix << " contains no valid sources!" << std::endl;
-                return;
-            }
-            output_header_written = true;
+            output_opened = true;
         }
 
         std::vector<float> cat(num_cols);
@@ -226,8 +280,11 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
         fin10.close();
     }
 
-    std::cout << last_prefix << " " << n << " " << m << std::endl;
-    fout20.close();
+    std::cout << (last_prefix.empty() ? prefix_expo : last_prefix)
+              << " " << n << " " << m << std::endl;
+    if (output_opened) {
+        fout20.close();
+    }
 }
 
 // ==========================================

@@ -138,6 +138,15 @@ raw one-based positions when explicit projection is disabled and are converted
 automatically to projection positions when it is enabled. Outputs default to
 each dataset's `rearranged_catalog/` directory.
 
+Both C++ variants use the same zero-source output contract. A norm-valid Stage 3
+chip always publishes `_orig.cat` with the real external-catalog header and zero
+or more rows. Stage 7 publishes header-only `_shear.dat` for a norm-valid chip
+with no output sources. A norm-invalid chip is skipped before any shear output is
+created; Stage 7 neither inspects nor deletes a pre-existing `_shear.dat`.
+Stage 9 checks norm before shear, treats header-only shear as a successful
+zero-source chip without opening `_orig.cat`, and creates `<EXPOSURE>_all.cat`
+only when at least one norm-valid chip has a shear data row.
+
 For C++ external catalogs, set the one-based raw positions
 `EXTCAT_RA_COLUMN_ONE_BASED`, `EXTCAT_DEC_COLUMN_ONE_BASED`, and
 `EXTCAT_ZP_COLUMN_ONE_BASED` in the selected `ProcessConfig.hpp`. Their defaults
@@ -174,8 +183,8 @@ projection modes, and catalog-generation behavior.
 
 ## Compiler and libraries
 
-Local verification used GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.3, FFTW
-3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33 on Linux in WSL2.
+Local verification used GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.4, FFTW
+3.3.11, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33 on Linux in WSL2.
 
 The existing portable HPC target is GCC/G++ 12.3.0, Open MPI 4.1.8, CFITSIO
 4.6.4, FFTW 3.3.11, Eigen 3.4.0, and LAPACK 3.11.0. A cluster may use equivalent
@@ -211,17 +220,10 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 No Windows-native compiler or wrapper is required. Cluster builds use the same
 Makefile after loading the site's compiler, MPI, and scientific-library modules.
 
-Run the focused external-catalog column reader test with:
-
-```bash
-make test-extcat-reader
-```
-
-Run the self-contained rearrangement unit and MPI integration tests with:
-
-```bash
-make test-rearr
-```
+The current Makefiles do not expose dedicated `test-extcat-reader` or
+`test-rearr` targets. Validate rearr changes with a representative
+rearrangement-only MPI invocation and compare its row counts, schema failures,
+and emitted catalogs.
 
 Run the Stage 7 synthetic point-source regression in either C++ variant with:
 
@@ -377,6 +379,15 @@ weighted k-d partition. Outputs are written below each dataset root in
 `catalog_summary.txt`. Every data row must have the exact numeric width and
 finite values; configured missing catalogs and malformed rows are skipped and
 reported.
+
+Before dynamic reads, rank 0 scans `_all.cat` paths in exposure-list order,
+selects the first readable header as the shared schema, and broadcasts it with
+the resolved paths. `MPIScheduler::distribute` then assigns 1-based exposure
+jobs. Each worker reads one catalog header, immediately validates it against the
+shared schema, discards it, and parses rows; workers do not cache per-catalog
+headers. The original zero-based exposure-list index remains the deterministic
+row provenance key. Rank 0 reports catalog-read completion, redistribution, and
+partition-writing markers in that order.
 
 Initializer-only local execution:
 
