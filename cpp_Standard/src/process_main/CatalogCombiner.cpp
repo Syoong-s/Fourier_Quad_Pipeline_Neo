@@ -241,7 +241,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                 fout20 << original_header << " ccD_NUM "
                        << shear_probe.header << " Chi2\n";
             } else {
-                fout20 << " ccD_NUM " << shear_probe.header << "\n";
+                fout20 << " ccD_NUM " << shear_probe.header << " Chi2\n";
             }
             output_opened = true;
         }
@@ -269,17 +269,15 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             applyCombinedCatalogCalibration(cat, use_external_catalog);
 
             if constexpr (use_external_catalog) {
-                fout20 << cat_content << " " << chip_index;
-            } else {
-                fout20 << chip_index;
+                fout20 << cat_content << " ";
             }
+
+            fout20 << chip_index;
+
             for (int u = 0; u < num_cols; ++u) {
                 fout20 << " " << cat[u];
             }
-            if constexpr (use_external_catalog) {
-                fout20 << " " << chi2;
-            }
-            fout20 << "\n";
+            fout20 << " " << chi2 << "\n";
         }
 
         if constexpr (use_external_catalog) {
