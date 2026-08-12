@@ -382,7 +382,7 @@ bool collectiveSuccess(bool local_success,
 //         preserve the original exposure index, and accumulate only numeric rows.
 // ==========================================
 bool readCatalogJob(const PreparedInputs& prepared,
-                    const ProcessRearr::CatalogLayout& layout,
+                    const PipelineCatalog::CatalogLayout& layout,
                     std::size_t exposure,
                     LocalRows& rows,
                     std::string& error) {
@@ -450,7 +450,7 @@ bool readCatalogJob(const PreparedInputs& prepared,
 //         later partition lookup without recomputing coordinate boundaries.
 // ==========================================
 bool binLocalRows(const LocalRows& rows,
-                  const ProcessRearr::CatalogLayout& layout,
+                  const PipelineCatalog::CatalogLayout& layout,
                   std::vector<std::uint64_t>& tile_counts,
                   std::vector<std::size_t>& row_tiles,
                   std::string& error) {
@@ -463,8 +463,10 @@ bool binLocalRows(const LocalRows& rows,
     }
 
     for (std::size_t row = 0; row < row_count; ++row) {
-        const double ra = rows.values[row * layout.all_columns + layout.ra_column];
-        const double dec = rows.values[row * layout.all_columns + layout.dec_column];
+        const double ra =
+            rows.values[row * layout.all_columns + layout.external.ra];
+        const double dec =
+            rows.values[row * layout.all_columns + layout.external.dec];
         std::size_t tile = 0;
         if (!ProcessRearr::skyTileIndex(ra, dec, tile, error)) {
             error = "local row " + std::to_string(row) + ": " + error;
@@ -639,7 +641,7 @@ bool completeTransferPlan(std::size_t column_count,
 // ==========================================
 bool exchangeRows(const LocalRows& local_rows,
                   const std::vector<int>& row_partitions,
-                  const ProcessRearr::CatalogLayout& layout,
+                  const PipelineCatalog::CatalogLayout& layout,
                   const TransferPlan& plan,
                   int world_size,
                   MPI_Comm communicator,
@@ -734,7 +736,7 @@ std::string subcatalogFilename(std::size_t partition) {
 //         header and complete rows, and fill global-summary reduction arrays.
 // ==========================================
 bool writeLocalPartitions(const ReceivedRows& received,
-                          const ProcessRearr::CatalogLayout& layout,
+                          const PipelineCatalog::CatalogLayout& layout,
                           const PreparedInputs& prepared,
                           std::size_t partition_count,
                           int rank,
@@ -779,7 +781,7 @@ bool writeLocalPartitions(const ReceivedRows& received,
             continue;
         }
         ProcessRearr::sortRowIndices(received.values, layout.all_columns,
-                                     layout.ra_column, layout.dec_column,
+                                     layout.external.ra, layout.external.dec,
                                      received.source_exposures,
                                      received.source_rows, indices);
 
@@ -805,9 +807,9 @@ bool writeLocalPartitions(const ReceivedRows& received,
             output << '\n';
 
             const double dec =
-                received.values[row * layout.all_columns + layout.dec_column];
+                received.values[row * layout.all_columns + layout.external.dec];
             const double ra =
-                received.values[row * layout.all_columns + layout.ra_column];
+                received.values[row * layout.all_columns + layout.external.ra];
             dec_min[summary_index] = std::min(dec_min[summary_index], dec);
             dec_max[summary_index] = std::max(dec_max[summary_index], dec);
             ra_min[summary_index] = std::min(ra_min[summary_index], ra);
@@ -977,20 +979,15 @@ bool generateRearrangedExpoList(const std::string& output_directory,
 // ==========================================
 int process_rearr(const std::string& exposure_list,
                   const ProcessConfig::RuntimeOptions& options,
+                  const PipelineCatalog::CatalogLayout& layout,
                   MPI_Comm communicator) {
     int rank = 0;
     int world_size = 1;
     MPI_Comm_rank(communicator, &rank);
     MPI_Comm_size(communicator, &world_size);
 
-    ProcessRearr::CatalogLayout layout;
     std::string local_error;
-    bool local_success =
-        ProcessRearr::resolveCatalogLayout(options, layout, local_error);
-    if (!collectiveSuccess(local_success, local_error, "layout", rank,
-                           world_size, communicator)) {
-        return 1;
-    }
+    bool local_success = true;
 
     PreparedInputs prepared;
     int preparation_ok = 1;

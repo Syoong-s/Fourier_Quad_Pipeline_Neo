@@ -1,7 +1,7 @@
 #ifndef PROCESS_EXTCAT_PROCESS_EXTCAT_HPP
 #define PROCESS_EXTCAT_PROCESS_EXTCAT_HPP
 
-#include "ProcessConfig.hpp"
+#include "CatalogLayout.hpp"
 
 #include <mpi.h>
 
@@ -58,6 +58,7 @@ struct Config {
     std::vector<std::size_t> input_columns = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
     };
+    std::size_t expected_output_columns = 0;
     bool use_explicit_coordinate_columns = false;
     std::size_t ra_column = 4;
     std::size_t dec_column = 5;
@@ -87,10 +88,11 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator = MPI_COM
 
 // ==========================================
 // Function: Run external-catalog tiling from unified pipeline options
-// Method: Translate ProcessConfig values into the reusable tiler configuration and
-//         participate collectively on the pipeline-owned MPI communicator.
+// Method: Translate ProcessConfig values, verify projection width against the startup
+//         layout, and participate collectively on the pipeline-owned MPI communicator.
 // ==========================================
 int process_extcat(const ProcessConfig::RuntimeOptions& options,
+                   const PipelineCatalog::CatalogLayout& layout,
                    MPI_Comm communicator = MPI_COMM_WORLD);
 
 #endif  // PROCESS_EXTCAT_PROCESS_EXTCAT_HPP

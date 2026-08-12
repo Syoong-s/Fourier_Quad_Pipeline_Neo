@@ -17,10 +17,12 @@ CPPFLAGS += -I$(EIGEN_INCLUDE)
 endif
 
 SRCS = main.cpp \
+       src/CatalogLayout.cpp \
        src/process_extcat/process_extcat.cpp \
        src/process_rearr/process_rearr.cpp \
        src/process_rearr/CatalogRearranger.cpp \
        src/process_fd/process_fd.cpp \
+       src/process_fd/FDMagnitudeSelector.cpp \
        src/process_fd/ShearCatalogReader.cpp \
        src/process_fd/StarCutCalculator.cpp \
        src/process_fd/KMeansClusterer.cpp \
@@ -59,6 +61,7 @@ POINT_SOURCE_TEST = tests/test_point_source_statistics
 STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
 PSF_RECONS_ORIENTATION_TEST = tests/test_psf_recons_orientation
 UNIVERSALBLOCK_TEST = tests/test_universalblock
+CATALOG_LAYOUT_TEST = tests/test_catalog_layout
 
 all: $(TARGET)
 
@@ -73,6 +76,9 @@ test-psf-recons-orientation: $(PSF_RECONS_ORIENTATION_TEST)
 
 test-universalblock: $(UNIVERSALBLOCK_TEST)
 	./$(UNIVERSALBLOCK_TEST)
+
+test-catalog-layout: $(CATALOG_LAYOUT_TEST)
+	./$(CATALOG_LAYOUT_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -109,6 +115,22 @@ $(UNIVERSALBLOCK_TEST): tests/UniversalblockTest.cpp \
 		src/process_main/LinearSolve.cpp \
 		$(LDFLAGS) -o $@ $(LDLIBS)
 
+$(CATALOG_LAYOUT_TEST): tests/CatalogLayoutTest.cpp \
+                       src/CatalogLayout.cpp \
+                       src/process_main/ExternalCatalogReader.cpp \
+                       src/process_fd/FDMagnitudeSelector.cpp \
+                       src/process_fd/ShearCatalogReader.cpp \
+                       include/CatalogLayout.hpp \
+                       include/process_main/ExternalCatalogReader.hpp \
+                       include/process_fd/FDMagnitudeSelector.hpp \
+                       include/process_fd/ShearCatalogReader.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/CatalogLayoutTest.cpp \
+		src/CatalogLayout.cpp \
+		src/process_main/ExternalCatalogReader.cpp \
+		src/process_fd/FDMagnitudeSelector.cpp \
+		src/process_fd/ShearCatalogReader.cpp -o $@
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -118,9 +140,10 @@ $(TARGET): $(OBJS)
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
 	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
-	      $(UNIVERSALBLOCK_TEST)
+	      $(UNIVERSALBLOCK_TEST) $(CATALOG_LAYOUT_TEST) \
+	      tests/catalog_layout_selected_magnitude.tmp
 
 -include $(DEPS)
 
 .PHONY: all clean test-point-source-statistics test-stamp-cube-io \
-        test-psf-recons-orientation test-universalblock
+        test-psf-recons-orientation test-universalblock test-catalog-layout

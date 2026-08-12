@@ -1,6 +1,6 @@
 #include "process_main/MPIScheduler.hpp"
 #include "process_main/NumericalRecipes.hpp"
-#include "process_main/ExternalCatalogReader.hpp"
+#include "CatalogLayout.hpp"
 #include "LensingConfig.hpp"
 #include "ProcessConfig.hpp"
 #include "ExtCatConfig.hpp"
@@ -8,11 +8,8 @@
 #include "process_extcat/process_extcat.hpp"
 #include "process_init/process_init.hpp"
 #include "process_main/process_main.hpp"
-#include "process_rearr/CatalogRearranger.hpp"
 #include "process_rearr/process_rearr.hpp"
 #include "process_fd/process_fd.hpp"
-#include "FDConfig.hpp"
-#include "ProcessRearrConfig.hpp"
 
 #include <mpi.h>
 
@@ -455,19 +452,6 @@ bool validateOptions(const ProcessConfig::RuntimeOptions& options, std::string& 
             return false;
         }
     }
-    if (options.run_process_main) {
-        ExternalCatalogReader::ColumnSelection selection;
-        if (!ExternalCatalogReader::resolveColumnSelection(options, selection, error)) {
-            return false;
-        }
-    }
-    if (options.run_process_rearr) {
-        ProcessRearr::CatalogLayout layout;
-        if (!ProcessRearr::resolveCatalogLayout(options, layout, error)) {
-            return false;
-        }
-    }
-
     if ((options.run_process_main || options.run_process_rearr)
         && !options.run_process_init
         && options.datasets.size() > 1 && !options.expo_list.empty()) {
@@ -637,7 +621,7 @@ void printUsage(const char* program_name) {
         << "  --extcat-columns LIST Ordered one-based input indices; output width follows LIST\n"
         << "  --extcat-ra-column N  Raw one-based RA column; overrides header discovery\n"
         << "  --extcat-dec-column N Raw one-based Dec column; overrides header discovery\n"
-        << "  --extcat-zp-column N  Raw one-based ZP column consumed by process_main\n"
+        << "  --extcat-zp-column N  Raw one-based ZP column used by the shared layout\n"
         << "  --extcat-chunk-mib N  MPI byte-range task size in MiB (default: "
         << ExtCatConfig::EXTCAT_CHUNK_MIB << ")\n"
         << "  --extcat-malformed P  fail or skip malformed rows\n"
@@ -658,7 +642,8 @@ void printUsage(const char* program_name) {
         << "  --expo-list PATH      Single exposure list for main/rearr-only mode\n"
         << "  --rearr-output-dir D  process_rearr output sub-directory (default: baked)\n"
         << "  --rearr-output-base P process_rearr output base path (default: dataset root)\n"
-        << "  --rearr-list-name F   Rearranged expo-list filename (default: expo_rearranged.list)\n"
+        << "  --rearr-list-name F   Rearranged expo-list filename (default: "
+        << ProcessConfig::REARRANGED_EXPO_LIST_FILENAME << ")\n"
         << "  --rearr-list-dir P    Rearranged expo-list directory (default: expo-list parent)\n"
         << "  --fd-expo-list PATH   process_fd exposure list (default: rearranged list)\n"
         << "  --fd-output-dir D    process_fd output sub-directory (default: fdout)\n"
@@ -671,9 +656,10 @@ void printUsage(const char* program_name) {
            "expo_<target>.list per dataset when --expo-list is omitted.\n"
         << "Without --extcat-columns, all raw catalog fields keep their original order; "
            "otherwise output width and order follow LIST exactly.\n"
-        << "When process_main runs, LIST must contain the configured RA, Dec, and ZP "
-           "raw columns. A rearr-only run requires RA and Dec but not ZP; output "
-           "positions follow LIST order.\n"
+        << "LIST must retain configured RA, Dec, and ZP raw columns. A magnitude "
+           "is available only when its configured raw column is positive and retained.\n"
+        << "FD selects one available magnitude in i -> z -> r -> g -> y order and "
+           "fails before catalog I/O when none is available.\n"
         << "process_extcat runs once before the dataset loop. When later phases run, each "
            "process_init-generated absolute exposure-list "
            "path overrides external input for its dataset.\n";
@@ -742,9 +728,9 @@ std::string deriveDatasetRootFromExpoList(const std::string& exposure_list) {
 }  // namespace
 
 // ==========================================
-// Function: Dispatch all four external-catalog, initializer, Fourier_Quad, and rearrangement phases
-// Method: Own MPI exactly once, run process_extcat before the dataset loop, process datasets
-//         sequentially, and invoke process_rearr only after any enabled process_main call.
+// Function: Dispatch the five external-catalog, initializer, main, rearrangement, and FD phases
+// Method: Resolve one catalog layout, own MPI exactly once, and pass the immutable schema
+//         through every enabled dataset phase in fixed pipeline order.
 // ==========================================
 int main(int argc, char* argv[]) {
     MPIScheduler::init(argc, argv);
@@ -760,6 +746,18 @@ int main(int argc, char* argv[]) {
     int global_parse_ok = 0;
     MPI_Allreduce(&local_parse_ok, &global_parse_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
 
+    PipelineCatalog::CatalogLayout layout;
+    std::string layout_error;
+    int global_layout_ok = 1;
+    if (global_parse_ok != 0 && !options.help_requested) {
+        const int local_layout_ok =
+            PipelineCatalog::resolveCatalogLayout(options, layout, layout_error)
+                ? 1
+                : 0;
+        MPI_Allreduce(&local_layout_ok, &global_layout_ok, 1, MPI_INT, MPI_MIN,
+                      MPI_COMM_WORLD);
+    }
+
     if (global_parse_ok == 0) {
         if (rank == 0) {
             std::cerr << "Argument error: "
@@ -772,13 +770,26 @@ int main(int argc, char* argv[]) {
         if (rank == 0) {
             printUsage(argv[0]);
         }
+    } else if (global_layout_ok == 0) {
+        if (rank == 0) {
+            std::cerr << "Catalog layout error: "
+                      << (layout_error.empty()
+                              ? "resolution failed on another MPI rank"
+                              : layout_error)
+                      << std::endl;
+        }
+        return_code = 2;
     } else {
+        if (rank == 0) {
+            std::cout << PipelineCatalog::describeCatalogLayout(layout)
+                      << std::endl;
+        }
         LensingConfig::SOURCE_CAT = options.extcat_output_directory;
         if (options.run_process_extcat) {
             if (rank == 0) {
                 std::cout << "Running process_extcat before all dataset phases" << std::endl;
             }
-            return_code = process_extcat(options, MPI_COMM_WORLD);
+            return_code = process_extcat(options, layout, MPI_COMM_WORLD);
             if (return_code == 0) {
                 MPIScheduler::barrier();
             }
@@ -851,7 +862,8 @@ int main(int argc, char* argv[]) {
                     rng_initialized = true;
                 }
                 if (return_code == 0) {
-                    return_code = process_main(selected_exposure_list, options);
+                    return_code = process_main(selected_exposure_list, options,
+                                               layout);
                 }
             }
 
@@ -863,7 +875,7 @@ int main(int argc, char* argv[]) {
                               << std::endl;
                 }
                 return_code = process_rearr(selected_exposure_list, options,
-                                            MPI_COMM_WORLD);
+                                            layout, MPI_COMM_WORLD);
             }
 
             if (return_code == 0 && options.run_process_fd) {
@@ -899,7 +911,7 @@ int main(int argc, char* argv[]) {
                               << "  dataset_root: " << fd_dataset_root << std::endl;
                 }
                 return_code = process_fd(fd_expo_list, options,
-                                         fd_dataset_root);
+                                         fd_dataset_root, layout);
             }
 
             if (return_code == 0 && index + 1 < options.datasets.size()) {

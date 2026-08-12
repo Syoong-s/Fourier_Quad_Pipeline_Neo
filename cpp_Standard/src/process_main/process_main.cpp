@@ -108,15 +108,45 @@ int process_main(const std::string& exposure_list) {
 
 // ==========================================
 // Function: Run the numerical Fourier_Quad pipeline with unified runtime options
-// Method: Resolve external-catalog projection and RA/Dec/ZP columns, then load and broadcast
-//         the exposure list before executing configured MPI stages without owning MPI lifecycle.
+// Method: Resolve one compatibility layout, then forward to the startup-layout implementation.
 // ==========================================
 int process_main(const std::string& exposure_list,
                  const ProcessConfig::RuntimeOptions& options) {
+    PipelineCatalog::CatalogLayout layout;
+    std::string layout_error;
+    const int local_layout_ok =
+        PipelineCatalog::resolveCatalogLayout(options, layout, layout_error)
+            ? 1
+            : 0;
+    int global_layout_ok = 0;
+    MPI_Allreduce(&local_layout_ok, &global_layout_ok, 1, MPI_INT, MPI_MIN,
+                  MPI_COMM_WORLD);
+    if (global_layout_ok == 0) {
+        if (MPIScheduler::my_id == 0) {
+            std::cerr << "Catalog layout error: "
+                      << (layout_error.empty()
+                              ? "resolution failed on another MPI rank"
+                              : layout_error)
+                      << std::endl;
+        }
+        return 1;
+    }
+    return process_main(exposure_list, options, layout);
+}
+
+// ==========================================
+// Function: Run the numerical Fourier_Quad pipeline with one shared catalog layout
+// Method: Configure readers from the startup schema, then execute MPI stages without re-resolution.
+// ==========================================
+int process_main(const std::string& exposure_list,
+                 const ProcessConfig::RuntimeOptions& options,
+                 const PipelineCatalog::CatalogLayout& layout) {
+    (void)options;
     const int rank = MPIScheduler::my_id;
 
     std::string column_error;
-    const int local_columns_ok = ExternalCatalogReader::configure(options, column_error) ? 1 : 0;
+    const int local_columns_ok =
+        ExternalCatalogReader::configure(layout, column_error) ? 1 : 0;
     int global_columns_ok = 0;
     MPI_Allreduce(&local_columns_ok, &global_columns_ok, 1, MPI_INT, MPI_MIN,
                   MPI_COMM_WORLD);

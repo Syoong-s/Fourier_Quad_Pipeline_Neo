@@ -1,5 +1,6 @@
 #include "process_fd/StarCutCalculator.hpp"
 #include "FDConfig.hpp"
+#include "LensingConfig.hpp"
 
 #include <mpi.h>
 
@@ -10,9 +11,11 @@
 
 namespace fc = FDConfig;
 
-// ------------------------------------------------------------------
-// Single global star cut (all exposures share one bar)
-// ------------------------------------------------------------------
+// ==========================================
+// Function: Calculate one global star cut
+// Method: Build the size-selected-magnitude histogram across all ranks and
+//         derive a shared stellar-locus size threshold.
+// ==========================================
 void StarCutCalculator::calculateGlobalStarCut(const FDData& data, int rank,
                                                int num_procs,
                                                float& S_mean, float& S_std,
@@ -34,7 +37,7 @@ void StarCutCalculator::calculateGlobalStarCut(const FDData& data, int rank,
     std::vector<int> mag_count(nm, 0), global_mag_count(nm, 0);
 
     for (int idx = 0; idx < data.ng; ++idx) {
-        int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+        int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
         int i = int((data.sizerel[idx] - fc::size_min) / size_bin_w);
         if (j >= 0 && j < nm) {
             mag_count[j]++;
@@ -90,7 +93,7 @@ void StarCutCalculator::calculateGlobalStarCut(const FDData& data, int rank,
     float local_sum = 0.0;
     int local_count = 0;
     for (int idx = 0; idx < data.ng; ++idx) {
-        int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+        int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
         if (j >= 0 && j < nm && active_mag_bins[j] &&
             std::fabs(data.sizerel[idx] - S_init) < 0.1) {
             local_sum += data.sizerel[idx];
@@ -106,7 +109,7 @@ void StarCutCalculator::calculateGlobalStarCut(const FDData& data, int rank,
         S_mean = global_sum / float(global_count);
         float local_sq_diff = 0.0;
         for (int idx = 0; idx < data.ng; ++idx) {
-            int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+            int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
             if (j >= 0 && j < nm && active_mag_bins[j] &&
                 std::fabs(data.sizerel[idx] - S_init) < 0.1)
                 local_sq_diff += (data.sizerel[idx] - S_mean) * (data.sizerel[idx] - S_mean);
@@ -127,9 +130,11 @@ void StarCutCalculator::calculateGlobalStarCut(const FDData& data, int rank,
                   << " S_std=" << S_std << " S_cut=" << S_cut << std::endl;
 }
 
-// ------------------------------------------------------------------
-// Per-exposure star cut (one bar per exposure)
-// ------------------------------------------------------------------
+// ==========================================
+// Function: Calculate per-exposure global star cuts
+// Method: Build size-selected-magnitude histograms per exposure, combine them
+//         across ranks, and iteratively estimate each stellar-locus threshold.
+// ==========================================
 void StarCutCalculator::calculateGlobalStarCutAuto(
     const FDData& data, int rank, int num_procs,
     std::vector<float>& S_mean_arr,
@@ -171,7 +176,7 @@ void StarCutCalculator::calculateGlobalStarCutAuto(
         if (data.src_snr[idx] <= fc::stage1_snr) continue;
         int iex = data.iexpo[idx];
         if (iex < 1 || iex > global_max_iex) continue;
-        int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+        int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
         int i = int((data.sizerel[idx] - fc::size_min) / size_bin_w);
         if (j >= 0 && j < nm) {
             mag_count3d[(iex - 1) * nm + j]++;
@@ -240,7 +245,7 @@ void StarCutCalculator::calculateGlobalStarCutAuto(
         if (data.src_snr[idx] <= fc::stage1_snr) continue;
         int iex = data.iexpo[idx];
         if (iex < 1 || iex > global_max_iex) continue;
-        int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+        int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
         if (j >= 0 && j < nm && active_mag_bins3d[(iex - 1) * nm + j] &&
             std::fabs(data.sizerel[idx] - S_init_arr[iex]) < fc::init_win_active) {
             local_sum_arr[iex] += data.sizerel[idx];
@@ -262,7 +267,7 @@ void StarCutCalculator::calculateGlobalStarCutAuto(
         if (data.src_snr[idx] <= fc::stage1_snr) continue;
         int iex = data.iexpo[idx];
         if (iex < 1 || iex > global_max_iex || !use_fallback[iex]) continue;
-        int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+        int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
         if (j >= 0 && j < nm &&
             std::fabs(data.sizerel[idx] - S_init_arr[iex]) < fc::init_win_fallback) {
             local_sum_arr[iex] += data.sizerel[idx];
@@ -319,7 +324,7 @@ void StarCutCalculator::calculateGlobalStarCutAuto(
             if (data.src_snr[idx] <= fc::stage1_snr) continue;
             int iex = data.iexpo[idx];
             if (iex < 1 || iex > global_max_iex || skip_iter[iex]) continue;
-            int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+            int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
             if (j >= 0 && j < nm &&
                 (use_fallback[iex] || active_mag_bins3d[(iex - 1) * nm + j]) &&
                 std::fabs(data.sizerel[idx] - S_mean_t[iex]) < clip_limit[iex]) {
@@ -345,7 +350,7 @@ void StarCutCalculator::calculateGlobalStarCutAuto(
             if (data.src_snr[idx] <= fc::stage2_snr) continue;
             int iex = data.iexpo[idx];
             if (iex < 1 || iex > global_max_iex || skip_iter[iex]) continue;
-            int j = int((data.magi[idx] - fc::mag_min_val) / mag_bin_w);
+            int j = int((data.star_mag[idx] - fc::mag_min_val) / mag_bin_w);
             if (j >= 0 && j < nm &&
                 (use_fallback[iex] || active_mag_bins3d[(iex - 1) * nm + j]) &&
                 std::fabs(data.sizerel[idx] - S_mean_t[iex]) < clip_limit[iex]) {

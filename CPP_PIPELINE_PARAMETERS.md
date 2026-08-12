@@ -1,9 +1,9 @@
 # C++ Pipeline Parameters Reference
 
 This file is the authoritative reference for **all adjustable parameters** in the
-`cpp_Standard` and `cpp_Lite` executables. Parameters are organized into four
-tables, one per pipeline function: `process_extcat`, `process_init`,
-`process_main`, and `process_rearr`.
+`cpp_Standard` and `cpp_Lite` executables. Parameters are organized by pipeline
+function; both variants resolve one shared runtime `CatalogLayout` for extcat,
+main, rearrangement, and FD catalog consumers.
 
 **Column meanings**
 
@@ -22,16 +22,18 @@ tables, one per pipeline function: `process_extcat`, `process_init`,
    rebuilding the selected C++ variant.
 3. **`ProcessRearrConfig.hpp`** — parameters used only by `process_rearr`.
    Changes require rebuilding.
+4. **`CatalogLayout` (both C++ variants)** — derived runtime catalog schema. It is not a
+   precedence layer: `main` resolves it once from normalized runtime options
+   and existing `LensingConfig` source-field indices.
 
 CLI options accept both `--name value` and `--name=value`. Boolean values accept
 `true`, `false`, `1`, `0`, `on`, and `off`. Duplicate scalar options use the last
 value. The first explicit `--dataset`, `--contains`, or `--extcat-contains`
 clears its configured list; later occurrences append.
 
-The root driver calls the four functions in order: `process_extcat` (once),
-then `process_init` → `process_main` → `process_rearr` (per dataset). At least
-one phase must be enabled. Within a dataset, an enabled `process_rearr` always
-follows an enabled `process_main`.
+The root driver calls five functions in order: `process_extcat` (once), then
+`process_init` → `process_main` → `process_rearr` → `process_fd` (per dataset).
+At least one phase must be enabled.
 
 ---
 
@@ -52,15 +54,24 @@ are from `ProcessConfig.hpp` unless noted.
 | `EXTCAT_MALFORMED_POLICY` | `--extcat-malformed` | `fail*`, `skip` | `fail` stops collectively on the first malformed data row; `skip` skips malformed rows and reports the count. |
 | `EXTCAT_EXISTING_POLICY` | `--extcat-existing` | `fail*`, `overwrite` | `fail` rejects existing generated tiles; `overwrite` transactionally replaces the complete generated tile set. |
 | `EXTCAT_CHUNK_MIB` | `--extcat-chunk-mib` | Positive integer (default `64*`) | Approximate newline-aligned MPI byte-range task size in MiB. Controls task granularity, not the final tile size. |
-| `EXTCAT_TOTAL_COLUMNS` | — | `18*` | Canonical column count for the DES Y6 GOLD reference schema. Compile-time constant; sets the pass-through output width when explicit projection is disabled. |
+| `EXTCAT_TOTAL_COLUMNS` | — | `18*` | Pass-through external-catalog width. Each C++ variant uses it only while constructing `CatalogLayout` when explicit projection is disabled and verifies integrated extcat output matches it. |
 | `EXTCAT_USE_EXPLICIT_COLUMNS` | `--extcat-columns` | `false*`, `true` | `false` preserves all raw fields in place (pass-through); `true` enables explicit column projection. Setting `--extcat-columns` enables this. |
-| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated 1-based indices (default `1–18*`) | Ordered output column projection when `use_explicit_columns=true`. Output column 1 uses the first listed raw field, and so on. Repeated indices are allowed; list length sets output width. |
+| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated 1-based indices (default `1–18*`) | Ordered output column projection when `use_explicit_columns=true`. Both variants reject zero/duplicate entries and require configured RA/Dec/ZP. A configured positive magnitude omitted from the list is absent. The unique list length is the output width. |
 | `EXTCAT_USE_EXPLICIT_COORDINATE_COLUMNS` | `--extcat-ra-column`, `--extcat-dec-column` | `false*`, `true` | `false` uses named `ra`/`dec` header columns or compiled defaults for sky tiling; `true` enables explicit coordinate column indexing. Setting either `--extcat-ra-column` or `--extcat-dec-column` enables this. |
 | `EXTCAT_RA_COLUMN_ONE_BASED` | `--extcat-ra-column` | Positive integer (default `5*`) | One-based raw RA column index used for sky tiling. Must be distinct from Dec and ZP. Also selects the RA consumed by `process_main`. |
 | `EXTCAT_DEC_COLUMN_ONE_BASED` | `--extcat-dec-column` | Positive integer (default `6*`) | One-based raw Dec column index used for sky tiling. Must be distinct from RA and ZP. Also selects the Dec consumed by `process_main`. |
+| `EXTCAT_MAG_G_COLUMN_ONE_BASED` | — | `0` or positive integer (default `7*`) | Optional one-based raw g-band magnitude identity; `0` means absent. FD uses it after i/z/r fallback. |
+| `EXTCAT_MAG_R_COLUMN_ONE_BASED` | — | `0` or positive integer (default `9*`) | Optional one-based raw r-band magnitude identity; `0` means absent. FD uses it after i/z fallback. |
+| `EXTCAT_MAG_I_COLUMN_ONE_BASED` | — | `0` or positive integer (default `11*`) | Optional one-based raw i-band magnitude identity; `0` means absent. FD prefers i when available. |
+| `EXTCAT_MAG_Z_COLUMN_ONE_BASED` | — | `0` or positive integer (default `13*`) | Optional one-based raw z-band magnitude identity; `0` means absent. FD uses it when i is absent. |
+| `EXTCAT_MAG_Y_COLUMN_ONE_BASED` | — | `0` or positive integer (default `15*`) | Optional one-based raw y-band magnitude identity; `0` means absent. FD uses it as the final fallback. |
+| `EXTCAT_ZP_COLUMN_ONE_BASED` | `--extcat-zp-column` | Positive integer (default `17*`) | One-based raw photometric-redshift identity consumed by main/FD. |
 
-> **Note:** `EXTCAT_ZP_COLUMN_ONE_BASED` is configured alongside these CLI options
-> but consumed only by `process_main`; it appears in Table 3.
+These three required fields and five optional magnitudes are the only named
+external fields in each variant's `CatalogLayout`. Other physical columns contribute
+to `external_columns` but have no layout member. FD requires at least one
+magnitude and selects i -> z -> r -> g -> y; the selected band drives both the
+magnitude-range cut and size-magnitude star-bar calculation.
 
 ---
 
@@ -71,14 +82,14 @@ exposure lists. All parameters below are from `ProcessConfig.hpp`.
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `RUN_PROCESS_INIT` | `--run-init` | `true`, `false*` | Phase switch. `true` runs archive discovery/extraction and publishes exposure lists; `false` skips it. |
+| `RUN_PROCESS_INIT` | `--run-init` | `true*`, `false` | Phase switch. `true` runs archive discovery/extraction and publishes exposure lists; `false` skips it. |
 | `SCIENCE_ROOT` | `--science-root` | Path string (default `"/lustre/home/acct-phyzj/share/DES/g"*`) | Read-only multi-HDU Science FITS/FZ archive repository. Archives are selected by dataset prefix and filename tokens. |
 | `DQ_ROOT` | `--dq-root` | Path string (default `"/lustre/home/acct-phyzj/share/DES/mask_v1/g_mask"*`) | Read-only multi-HDU DQ FITS/FZ archive repository paired with Science archives. |
 | `OUTPUT_ROOT` | `--output-root` | Path string (default `"/lustre/home/acct-phyzj/share/DES/g_band_v1"*`) | Parent of dataset directories and `expo_<target>.list`. Contains extracted chip images and generated intermediate products. |
-| `DATASETS` | `--dataset` | List of `TARGET:PREFIX` pairs (Std default `{"gband","c4d_"}*`; Lite default `{"g2019","c4d_19"}*`) | One or more target/prefix pairs. Repeatable; the first `--dataset` clears the compiled list. Legacy `--target`/`--prefix` set a single pair and cannot mix with `--dataset`. |
+| `DATASETS` | `--dataset` | List of `TARGET:PREFIX` pairs (both variants default `{"gband","c4d_"}*`) | One or more target/prefix pairs. Repeatable; the first `--dataset` clears the compiled list. Legacy `--target`/`--prefix` set a single pair and cannot mix with `--dataset`. |
 | `CONTAINS` | `--contains` | List of strings (default `{"v1"}*`; repeatable) | Case-sensitive basename substring filters for archive file discovery. A file matches if any token matches. The first CLI use clears the compiled list. |
 | `EXISTING` | `--existing` | `fail*`, `resume`, `overwrite` | `fail` rejects existing output; `resume` keeps existing files and continues; `overwrite` replaces all existing output. |
-| `F77_MAX_PATH` | `--f77-max-path` | Non-negative integer (Std `150*`; Lite `149*`) | Maximum path length for generated exposure and chip-list files. `0` disables the limit. |
+| `F77_MAX_PATH` | `--f77-max-path` | Non-negative integer (both variants `150*`) | Maximum path length for generated exposure and chip-list files. `0` disables the limit. |
 | `EXPO_LIST` | `--expo-list` (or positional `LEGACY_EXPO_LIST`) | Path string (default `""*`) | Single exposure list for main/rearr-only mode. When `--run-init=true`, the initializer output takes precedence. Cannot serve multiple datasets in downstream-only mode. |
 
 ---
@@ -95,11 +106,11 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 |:---|:---|:---|:---|
 | `RUN_PROCESS_MAIN` | `--run-main` | `true*`, `false` | Phase switch. `true` runs the numerical Stage 1–9 pipeline; `false` skips it. |
 | `SOURCE_CAT` / `EXTCAT_OUTPUT_DIRECTORY` | `--extcat-output` | Path string (default `"/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat"*`) | External-catalog tile directory read by `process_main`. `--extcat-output` updates the effective `SOURCE_CAT` before processing. |
-| `EXTCAT_USE_EXPLICIT_COLUMNS` | `--extcat-columns` | `false*`, `true` | Controls external-catalog column resolution. `false` uses pass-through positions; `true` resolves RA/Dec/ZP through the explicit projection. |
-| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated 1-based indices (default `1–18*`) | Projection order used to resolve RA/Dec/ZP tile positions when `use_explicit_columns=true`. |
+| `EXTCAT_USE_EXPLICIT_COLUMNS` | `--extcat-columns` | `false*`, `true` | Controls external-catalog column resolution. In both variants, `false` uses pass-through positions and `true` resolves all mandatory external fields through the shared layout. |
+| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated unique 1-based indices (default `1–18*`) | Projection order used by each variant's `CatalogLayout`; it must retain configured RA/Dec/ZP. Retained positive magnitude identities become available to FD. |
 | `EXTCAT_RA_COLUMN_ONE_BASED` | `--extcat-ra-column` | Positive integer (default `5*`) | Raw RA field consumed by `process_main` for source-catalog matching. Resolved through projection when enabled. |
 | `EXTCAT_DEC_COLUMN_ONE_BASED` | `--extcat-dec-column` | Positive integer (default `6*`) | Raw Dec field consumed by `process_main`. Resolved through projection when enabled. |
-| `EXTCAT_ZP_COLUMN_ONE_BASED` | `--extcat-zp-column` | Positive integer (default `17*`) | Raw photometric-redshift (`dnf_z`) field consumed by `process_main`. Not needed for sky tiling. Resolved through projection when enabled. |
+| `EXTCAT_ZP_COLUMN_ONE_BASED` | `--extcat-zp-column` | Positive integer (default `17*`) | Raw photometric-redshift (`dnf_z`) field consumed by `process_main` and required by the shared layout in both variants. Resolved through projection when enabled. |
 | `EXPO_LIST` | `--expo-list` (or positional, or init output) | Path string (default `""*`) | Exposure-list file. Each non-empty line identifies a per-exposure chip-list file. An initializer-generated list takes precedence in chained execution. |
 
 ### 3b. Stage control (compile-time)
@@ -301,33 +312,38 @@ internal/output layout and requires coordinated reader/writer changes.
 ## Table 4 — process_rearr: Catalog Rearrangement
 
 Redistributes per-exposure `_all.cat` rows into spatially sorted subcatalogs.
-Compile-time parameters are from `ProcessRearrConfig.hpp`; CLI-overridable
-parameters are from `ProcessConfig.hpp`. Operational rearrangement behavior is
-identical in Standard and Lite, including runtime width derivation.
+Compile-time algorithm parameters are from `ProcessRearrConfig.hpp`;
+CLI-overridable parameters are from `ProcessConfig.hpp`. Both variants consume
+the startup `CatalogLayout` and do not derive width or coordinates locally.
 
 ### 4a. Runtime (CLI-overridable) parameters
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `RUN_PROCESS_REARR` | `--run-rearr` | `true`, `false*` | Phase switch. `true` rearranges generated `_all.cat` rows by sky region; runs after `process_main` when both are enabled, or independently on existing results. `false` skips it. |
-| `EXTCAT_USE_EXPLICIT_COLUMNS` | `--extcat-columns` | `false*`, `true` | Controls the effective external-field width via `externalCatalogColumns()`. `false` uses `EXTCAT_TOTAL_COLUMNS`; `true` uses the explicit projection length. |
-| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated 1-based indices (default `1–18*`) | Projection list whose length sets the runtime-effective external width when `use_explicit_columns=true`. |
-| `EXTCAT_RA_COLUMN_ONE_BASED` | `--extcat-ra-column` | Positive integer (default `5*`) | Raw RA field position used by rearr to derive the effective RA column in the `_all.cat` row. |
-| `EXTCAT_DEC_COLUMN_ONE_BASED` | `--extcat-dec-column` | Positive integer (default `6*`) | Raw Dec field position used by rearr to derive the effective Dec column in the `_all.cat` row. |
+| `RUN_PROCESS_REARR` | `--run-rearr` | Standard: `true*`, `false`; Lite: `true`, `false*` | Phase switch. `true` rearranges generated `_all.cat` rows by sky region; runs after `process_main` when both are enabled, or independently on existing results. `false` skips it. |
+| `EXTCAT_USE_EXPLICIT_COLUMNS` | `--extcat-columns` | `false*`, `true` | The shared `CatalogLayout` uses `EXTCAT_TOTAL_COLUMNS` for pass-through or the unique projection length for explicit mode. Rearrangement does not derive width itself. |
+| `EXTCAT_INPUT_COLUMNS_ONE_BASED` | `--extcat-columns` | Comma-separated unique 1-based indices (default `1–18*`) | Projection list resolved once at startup in either variant; rearrangement consumes its effective width and coordinates. |
+| `EXTCAT_RA_COLUMN_ONE_BASED` | `--extcat-ra-column` | Positive integer (default `5*`) | Raw RA identity mapped once into `layout.external.ra`. |
+| `EXTCAT_DEC_COLUMN_ONE_BASED` | `--extcat-dec-column` | Positive integer (default `6*`) | Raw Dec identity mapped once into `layout.external.dec`. |
 | `EXPO_LIST` | `--expo-list` (or positional, or init output) | Path string (default `""*`) | Exposure-list file. Each per-exposure chip list is used to derive `result/<PREFIX>_all.cat` paths. |
 
-### 4b. Derived column layout (compile-time components and runtime width)
+### 4b. Shared runtime column layout
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `ichi2` | — | `LensingConfig::expo_cat_ncols = 29*` | Derived count of the 28 shear fields plus exposure Chi2 appended after CCD_NUM. It is a count, not the zero-based last index. |
-| `CCD_COLUMN_COUNT` | — | `1*` | Derived fixed CCD_NUM field count. |
-| `externalCatalogColumns(options)` | — | `18*` (pass-through) or projection length | Runtime-effective external width. Explicit projection output contains exactly its selected fields. |
-| `allCatalogColumns(options)` | — | Effective external width `+ 1 + ichi2*` | Runtime-effective exact row width used by the parser and MPI transfers. |
+| `layout.external_columns` | — | `18*` (pass-through) or unique projection length | Effective external prefix emitted/read by catalog phases. |
+| `layout.external.ra/dec/zp` | — | Required effective zero-based indices | Mandatory external positions used by main/rearr/FD. |
+| `layout.external.mag_g/mag_r/mag_i/mag_z/mag_y` | — | Optional effective zero-based index or `none` | Optional magnitude positions. Raw config `0` or projection omission produces `none`; FD selects i -> z -> r -> g -> y. |
+| `layout.ccd` | — | `layout.external_columns` | Absolute zero-based CCD_NUM position. |
+| `layout.source_base` | — | `layout.ccd + 1` | Absolute base of the process-main suffix. |
+| `layout.source_columns` | — | `LensingConfig::expo_cat_ncols = 29*` | Count of 28 shear fields plus exposure Chi2. |
+| `layout.all_columns` | — | `layout.source_base + layout.source_columns` | Exact runtime row width used by rearrangement and FD readers. |
 
-There is no fixed total-width constant. The shipped pass-through layout has
-`18 + 1 + 29 = 48` columns, while an explicit projection with `N` external
-fields has `N + 30` columns.
+There is no fixed total-width constant. The shipped pass-through layout in either variant
+layout has `18 + 1 + 29 = 48` columns. A valid explicit projection with `N`
+unique external fields has `N + 30` columns; missing mandatory fields fail at
+startup. Extcat/main/rearr may run with no magnitude; FD fails collectively
+before catalog I/O unless at least one magnitude position is available.
 
 ### 4c. Spatial partitioning and output (compile-time)
 
@@ -360,13 +376,13 @@ directory. Existing same-name files are truncated like the legacy pipeline.
 The runtime command line is intentionally identical in both variants. Their
 current configuration differences are:
 
-- Standard default dataset: `gband:c4d_`; Lite: `g2019:c4d_19`.
-- Standard `F77_MAX_PATH=150`; Lite `149`.
 - Standard `gal_smooth=0`; Lite `gal_smooth=2`.
 - Lite freezes Gaia astrometry, no flat, DQ-mask mode, external source catalogs,
   frame-derived PSF stars, deblending, local-polynomial PSF, and no PCA. The
   unselected Standard branches and their exclusive constants are absent.
 - Standard retains the optional external PSF, very-local PSF, and PCA branches.
+- Both variants resolve one pipeline-level runtime `CatalogLayout`; Lite still
+  defaults `process_rearr` and `process_fd` off while Standard defaults them on.
 
 When moving a parameter file between variants, preserve these intentional
 differences instead of copying one `LensingConfig.hpp` over the other.

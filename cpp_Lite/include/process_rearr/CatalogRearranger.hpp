@@ -1,35 +1,12 @@
 #ifndef PROCESS_REARR_CATALOG_REARRANGER_HPP
 #define PROCESS_REARR_CATALOG_REARRANGER_HPP
 
-#include "ProcessConfig.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace ProcessRearr {
-
-// ==========================================
-// Structure: Describe the effective numeric _all.cat layout
-// Method: Store the external and complete widths plus zero-based coordinate
-//         positions after applying process_main's explicit projection rules.
-// ==========================================
-struct CatalogLayout {
-    std::size_t external_columns = 0;
-    std::size_t all_columns = 0;
-    std::size_t ra_column = 0;
-    std::size_t dec_column = 0;
-};
-
-// ==========================================
-// Function: Resolve and validate the _all.cat layout
-// Method: Reuse process_main's raw-to-projected coordinate mapping, then
-//         validate both coordinates against the effective external width.
-// ==========================================
-bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
-                          CatalogLayout& layout,
-                          std::string& error);
 
 // ==========================================
 // Function: Parse one complete numeric _all.cat row

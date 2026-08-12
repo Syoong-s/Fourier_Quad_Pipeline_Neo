@@ -38,6 +38,9 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 make CXX="${MPI_PREFIX}/bin/mpicxx" \
   STACK_PREFIX="${STACK_PREFIX}" \
   EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-universalblock
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-layout
 ./Fourier_Quad_Pipe --help
 ```
 
@@ -46,6 +49,24 @@ and metadata, and dense selected-plane ordering. The current local WSL2 stack is
 GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.3, FFTW 3.3.10, Eigen 3.4.0, and
 OpenBLAS/LAPACK 0.3.33; portable cluster versions are recorded in
 [`../CPP_GUIDE.md`](../CPP_GUIDE.md#compiler-and-libraries).
+
+## Runtime catalog layout
+
+Lite now uses the same startup-resolved `CatalogLayout` contract as Standard.
+`main` passes one immutable layout to `process_extcat`, `process_main`,
+`process_rearr`, and `process_fd`. Pass-through mode takes the external
+prefix width from `EXTCAT_TOTAL_COLUMNS`; explicit projection uses the
+projection length. CCD, source-suffix, and complete-row offsets are derived
+from that effective width, while the process-main suffix remains 29 fields.
+
+RA, Dec, and ZP are mandatory. Each g/r/i/z/y magnitude is optional: raw
+configured column `0`, or omission of a positive configured identity from an
+explicit projection, marks the band absent. Non-required physical extcat
+columns contribute only to row width and have no layout member. At FD startup,
+Lite selects i -> z -> r -> g -> y; the selected band drives the magnitude cut
+and size-magnitude star bar, and FD fails before catalog I/O when no band is
+available. `test-catalog-layout` covers layout mapping, fallback selection,
+selected-band ingestion, and exact runtime row widths.
 
 ## Invalid norm chip gate
 

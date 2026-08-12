@@ -42,6 +42,9 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 make CXX="${MPI_PREFIX}/bin/mpicxx" \
   STACK_PREFIX="${STACK_PREFIX}" \
   EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-universalblock
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-layout
 ./Fourier_Quad_Pipe --help
 ```
 
@@ -54,6 +57,27 @@ The current local WSL2 verification stack is GCC/G++ 15.2.0, Open MPI 5.0.10,
 CFITSIO 4.6.3, FFTW 3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33. The portable
 cluster target and module-compatible versions are recorded in
 [`../CPP_GUIDE.md`](../CPP_GUIDE.md#compiler-and-libraries).
+
+## Runtime catalog layout
+
+`CatalogLayout` is resolved once in `main` from `RuntimeOptions` and passed to
+`process_extcat`, `process_main`, `process_rearr`, and `process_fd`. In
+pass-through mode, `EXTCAT_TOTAL_COLUMNS` supplies the external prefix width.
+With explicit projection, the external width is the projection length and all
+downstream CCD, source-suffix, and complete-row offsets follow that runtime
+width. The fixed process-main suffix remains 29 fields.
+
+Explicit projections must preserve RA, Dec, and ZP. Each g/r/i/z/y magnitude
+is optional: raw configured column `0`, or omission of a positive configured
+identity from a projection, marks that band absent. Other physical extcat
+columns may remain in a row and contribute to its width, but have no
+`CatalogLayout` member and are not consumed by downstream algorithms. FD
+selects one available magnitude in i -> z -> r -> g -> y order before catalog
+I/O and fails if none exists; the selected band drives both the magnitude-range
+cut and the size-magnitude star bar. The focused `test-catalog-layout` target
+covers the legacy 48-column schema, a minimal 3 + 1 + 29 = 33-column schema,
+optional/reordered projections, all FD fallbacks, selected-band ingestion,
+extra unmodeled fields, invalid projections, and exact FD row-width validation.
 
 ## Invalid norm chip gate
 

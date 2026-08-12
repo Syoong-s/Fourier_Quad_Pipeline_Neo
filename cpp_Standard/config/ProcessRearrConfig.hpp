@@ -1,24 +1,12 @@
 #ifndef PROCESS_REARR_CONFIG_HPP
 #define PROCESS_REARR_CONFIG_HPP
 
-#include "ProcessConfig.hpp"
-#include "ExtCatConfig.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string_view>
 
 namespace ProcessRearrConfig {
-
-// ==========================================
-// Configuration: Derived _all.cat layout components
-// Method: Keep fixed downstream field counts here and compute the complete row
-//         width at runtime from the effective external-catalog projection.
-// ==========================================
-inline constexpr std::size_t ichi2 =
-    static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
-inline constexpr std::size_t CCD_COLUMN_COUNT = 1;
 
 // ==========================================
 // Configuration: Spatial partitioning and output defaults
@@ -41,31 +29,6 @@ inline constexpr int SUMMARY_PRECISION = 4;
 inline constexpr bool SKIP_MISSING_CATALOGS = true;
 inline constexpr bool SKIP_MALFORMED_ROWS = true;
 
-// ==========================================
-// Function: Determine the external-field width emitted by process_extcat
-// Method: Use the configured pass-through width, or the explicit projection
-//         length because projected output contains exactly those fields.
-// ==========================================
-inline std::size_t externalCatalogColumns(
-    const ProcessConfig::RuntimeOptions& options) {
-    return options.extcat_use_explicit_columns
-               ? options.extcat_input_columns_one_based.size()
-               : ExtCatConfig::EXTCAT_TOTAL_COLUMNS;
-}
-
-// ==========================================
-// Function: Compute the runtime _all.cat row width
-// Method: Use the effective process_extcat output width so explicit column
-//         projection is handled without a fixed 48-column assumption.
-// ==========================================
-inline std::size_t allCatalogColumns(
-    const ProcessConfig::RuntimeOptions& options) {
-    return externalCatalogColumns(options) + CCD_COLUMN_COUNT + ichi2;
-}
-
-static_assert(ichi2 == 29, "process_main must append 29 fields through exposure Chi2");
-static_assert(ExtCatConfig::EXTCAT_TOTAL_COLUMNS > 0,
-              "the external catalog column count must be positive");
 static_assert(SKY_TILE_COUNT
                   <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
               "the full-sky MPI reduction count must fit int");

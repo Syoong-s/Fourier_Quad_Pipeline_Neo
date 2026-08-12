@@ -8,9 +8,6 @@
 //         star-bar fitting mode at compile time.
 // ==========================================
 
-#include "LensingConfig.hpp"
-#include "ExtCatConfig.hpp"
-
 namespace FDConfig {
 
 // ==================== Feature Switches ====================
@@ -68,12 +65,6 @@ inline constexpr float r_half_thresh = 0.0;
 inline constexpr float star_bar_mltp = 3.0;
 inline constexpr float psf_chi2_mltp = 3.0;
 
-// ==================== External-catalog cuts ====================
-inline constexpr float ft_cut = -1.0;      // <0 means skip
-inline constexpr float fg_cut = -10.0;
-inline constexpr float gold_cut = -10.0;
-inline constexpr float ext_cut = -4.0;
-
 // ==================== Star-cut histogram parameters ====================
 inline constexpr int n_size_bins = 100;
 inline constexpr int n_mag_bins = 20;
@@ -97,68 +88,6 @@ inline constexpr float clip_nsigma = 3.0;
 inline constexpr float min_clip_limit = 0.015;
 inline constexpr float default_s_std = 0.05;
 inline constexpr float fallback_scut_default = 0.6;
-
-// ==================== Catalog column indices (0-based, DES format) ====================
-// External-catalog columns (1-based in Fortran → 0-based here)
-inline constexpr int col_flags_ft = 0;
-inline constexpr int col_flags_fg = 1;
-inline constexpr int col_flags_gold = 2;
-inline constexpr int col_ext_mash = 3;
-inline constexpr int col_cra = 4;
-inline constexpr int col_cdec = 5;
-inline constexpr int col_mag_g = 6;
-inline constexpr int col_mag_r = 8;
-inline constexpr int col_mag_i = 10;
-inline constexpr int col_mag_z = 12;
-inline constexpr int col_mag_y = 14;
-inline constexpr int col_zp = 16;
-inline constexpr int col_ccd = ExtCatConfig::EXTCAT_TOTAL_COLUMNS;
-
-// Number of pre-source columns (external catalog columns + CCD_NUM)
-inline constexpr int ccd_num_cols = ExtCatConfig::EXTCAT_TOTAL_COLUMNS + 1;
-
-// Per-source columns (0-based absolute, derived from LensingConfig indices)
-inline constexpr int col_polychi2 = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iid;
-inline constexpr int col_pixx    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipixx;
-inline constexpr int col_pixy    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipixy;
-inline constexpr int col_sig     = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::isig;
-inline constexpr int col_star    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::istar;
-inline constexpr int col_peak    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipeak;
-inline constexpr int col_imax    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::i_imax;
-inline constexpr int col_jmax    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::i_jmax;
-inline constexpr int col_h_flux  = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ih_flux;
-inline constexpr int col_h_area  = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ih_area;
-inline constexpr int col_flag    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iflag;
-inline constexpr int col_PSF     = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iPSF;
-inline constexpr int col_SNR_F   = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iSNR_F;
-inline constexpr int col_ra      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ira;
-inline constexpr int col_dec     = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::idec;
-inline constexpr int col_gf1     = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::igf1;
-inline constexpr int col_gf2     = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::igf2;
-inline constexpr int col_g1      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ig1;
-inline constexpr int col_g2      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ig2;
-inline constexpr int col_de      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ide;
-inline constexpr int col_h1      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ih1;
-inline constexpr int col_h2      = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ih2;
-inline constexpr int col_cos2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::icos2;
-inline constexpr int col_sin2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::isin2;
-inline constexpr int col_parity  = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iparity;
-inline constexpr int col_galsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::igalsizeT;
-inline constexpr int col_psfsizeT = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ipsfsizeT;
-inline constexpr int col_delta_chi2 = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::idelta_chi2;
-inline constexpr int col_orth_ext = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::iorth_ext;
-inline constexpr int col_chi2    = ccd_num_cols * LensingConfig::ext_cat + LensingConfig::ichi2;
-
-// Total number of columns in the catalog
-inline constexpr int ICHI2 = ccd_num_cols * LensingConfig::ext_cat
-                           + LensingConfig::expo_cat_ncols;
-
-static_assert(ICHI2 == col_chi2 + 1,
-              "FD rows must end immediately after the appended chi2 column");
-static_assert(col_delta_chi2 == col_psfsizeT + 1,
-              "delta_chi2 must follow psf_size_T in FD rows");
-static_assert(col_orth_ext + 1 == col_chi2,
-              "orth_ext must be the final shear column in FD rows");
 
 // ==================== Bad CCD list (DES) ====================
 inline constexpr int bad_ccds[] = {2, 31, 53, 61};

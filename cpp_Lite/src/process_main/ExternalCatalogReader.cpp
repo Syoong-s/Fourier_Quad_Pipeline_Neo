@@ -6,10 +6,19 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
-#include <vector>
 
 namespace ExternalCatalogReader {
 namespace {
+
+// ==========================================
+// Structure: Locate the numerical fields consumed from generated catalog rows
+// Method: Store one-based positions derived only from the shared runtime layout.
+// ==========================================
+struct ColumnSelection {
+    std::size_t ra_column_one_based = 0;
+    std::size_t dec_column_one_based = 0;
+    std::size_t zp_column_one_based = 0;
+};
 
 ColumnSelection active_columns;
 
@@ -29,77 +38,31 @@ bool parseFiniteDouble(const std::string& token, double& value) {
     return true;
 }
 
-// ==========================================
-// Function: Map one raw input column to its generated-tile position
-// Method: Keep its index for pass-through output or use the first matching projection entry.
-// ==========================================
-bool resolveProjectedColumn(std::size_t raw_column_one_based,
-                            const std::string& field_name,
-                            const ProcessConfig::RuntimeOptions& options,
-                            std::size_t& output_column_one_based,
-                            std::string& error) {
-    if (raw_column_one_based == 0) {
-        error = "external-catalog " + field_name + " column must be a positive one-based index";
-        return false;
-    }
-    if (!options.extcat_use_explicit_columns) {
-        output_column_one_based = raw_column_one_based;
-        return true;
-    }
-
-    const std::vector<std::size_t>& projection =
-        options.extcat_input_columns_one_based;
-    const auto match = std::find(projection.begin(), projection.end(), raw_column_one_based);
-    if (match == projection.end()) {
-        error = "external-catalog explicit projection omits the configured "
-                + field_name + " raw column " + std::to_string(raw_column_one_based);
-        return false;
-    }
-    output_column_one_based =
-        static_cast<std::size_t>(std::distance(projection.begin(), match)) + 1;
-    return true;
-}
-
 }  // namespace
 
 // ==========================================
-// Function: Resolve raw configured columns to generated-tile columns
-// Method: Preserve positions in pass-through mode or locate each raw index in the ordered
-//         explicit projection, rejecting missing, zero, or overlapping field selections.
-// ==========================================
-bool resolveColumnSelection(const ProcessConfig::RuntimeOptions& options,
-                            ColumnSelection& selection,
-                            std::string& error) {
-    ColumnSelection resolved;
-    if (!resolveProjectedColumn(options.extcat_ra_column_one_based, "RA", options,
-                                resolved.ra_column_one_based, error)
-        || !resolveProjectedColumn(options.extcat_dec_column_one_based, "Dec", options,
-                                   resolved.dec_column_one_based, error)
-        || !resolveProjectedColumn(options.extcat_zp_column_one_based, "ZP", options,
-                                   resolved.zp_column_one_based, error)) {
-        return false;
-    }
-    if (resolved.ra_column_one_based == resolved.dec_column_one_based
-        || resolved.ra_column_one_based == resolved.zp_column_one_based
-        || resolved.dec_column_one_based == resolved.zp_column_one_based) {
-        error = "external-catalog RA, Dec, and ZP columns must be distinct";
-        return false;
-    }
-    selection = resolved;
-    error.clear();
-    return true;
-}
-
-// ==========================================
 // Function: Configure the numerical external-catalog reader
-// Method: Resolve and store the effective generated-tile positions before MPI stage scheduling.
+// Method: Consume and store effective RA, Dec, and ZP positions from the shared layout.
 // ==========================================
-bool configure(const ProcessConfig::RuntimeOptions& options, std::string& error) {
-    ColumnSelection resolved;
-    if (!resolveColumnSelection(options, resolved, error)) {
+bool configure(const PipelineCatalog::CatalogLayout& layout,
+               std::string& error) {
+    if (layout.external_columns == 0
+        || layout.external.ra >= layout.external_columns
+        || layout.external.dec >= layout.external_columns
+        || layout.external.zp >= layout.external_columns) {
+        error = "external-catalog reader positions lie outside the shared layout";
         return false;
     }
-    active_columns = resolved;
+    if (layout.external.ra == layout.external.dec
+        || layout.external.ra == layout.external.zp
+        || layout.external.dec == layout.external.zp) {
+        error = "external-catalog reader RA, Dec, and ZP positions must be distinct";
+        return false;
+    }
+    active_columns.ra_column_one_based = layout.external.ra + 1;
+    active_columns.dec_column_one_based = layout.external.dec + 1;
+    active_columns.zp_column_one_based = layout.external.zp + 1;
+    error.clear();
     return true;
 }
 

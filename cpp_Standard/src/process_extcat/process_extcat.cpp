@@ -366,6 +366,13 @@ void configureMetadataSchema(const std::vector<std::string>& tokens,
             metadata.columns.push_back(index);
         }
     }
+    if (config.expected_output_columns != 0
+        && metadata.columns.size() != config.expected_output_columns) {
+        throw std::runtime_error(
+            "catalog emits " + std::to_string(metadata.columns.size())
+            + " fields but CatalogLayout requires "
+            + std::to_string(config.expected_output_columns));
+    }
 
     metadata.output_header.clear();
     metadata.output_header.reserve(metadata.columns.size());
@@ -1516,15 +1523,27 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
 
 // ==========================================
 // Function: Run external-catalog tiling from unified pipeline options
-// Method: Translate configuration collectively, then call the reusable implementation
-//         without taking ownership of MPI initialization or finalization.
+// Method: Translate and check configuration against the startup layout collectively, then
+//         call the reusable implementation without owning MPI initialization or finalization.
 // ==========================================
-int process_extcat(const ProcessConfig::RuntimeOptions& options, MPI_Comm communicator) {
+int process_extcat(const ProcessConfig::RuntimeOptions& options,
+                   const PipelineCatalog::CatalogLayout& layout,
+                   MPI_Comm communicator) {
     ProcessExtcat::Config config;
     int local_adapter_ok = 1;
     std::string local_error;
     try {
         config = buildIntegratedConfig(options);
+        if (layout.external_columns == 0) {
+            throw std::runtime_error(
+                "integrated extcat layout width must be positive");
+        }
+        config.expected_output_columns = layout.external_columns;
+        if (config.use_explicit_columns
+            && config.input_columns.size() != layout.external_columns) {
+            throw std::runtime_error(
+                "integrated extcat projection width differs from CatalogLayout");
+        }
     } catch (const std::exception& exception) {
         local_adapter_ok = 0;
         local_error = exception.what();

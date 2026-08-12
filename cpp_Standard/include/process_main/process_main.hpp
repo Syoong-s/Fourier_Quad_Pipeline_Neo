@@ -1,7 +1,7 @@
 #ifndef PROCESS_MAIN_PROCESS_MAIN_HPP
 #define PROCESS_MAIN_PROCESS_MAIN_HPP
 
-#include "ProcessConfig.hpp"
+#include "CatalogLayout.hpp"
 
 #include <string>
 
@@ -19,5 +19,13 @@ int process_main(const std::string& exposure_list);
 // ==========================================
 int process_main(const std::string& exposure_list,
                  const ProcessConfig::RuntimeOptions& options);
+
+// ==========================================
+// Function: Run the numerical Fourier_Quad pipeline with one shared catalog layout
+// Method: Consume the startup-resolved schema while executing stages on unified runtime options.
+// ==========================================
+int process_main(const std::string& exposure_list,
+                 const ProcessConfig::RuntimeOptions& options,
+                 const PipelineCatalog::CatalogLayout& layout);
 
 #endif  // PROCESS_MAIN_PROCESS_MAIN_HPP

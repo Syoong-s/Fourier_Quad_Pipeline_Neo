@@ -7,6 +7,7 @@ Fourier_Quad_Pipe
 test_point_source_statistics
 test_stamp_cube_io
 test_psf_recons_orientation
+test_catalog_layout
 
 # Superplan planning workspace
 .planning/

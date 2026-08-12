@@ -28,43 +28,6 @@ struct ActiveTile {
 };
 
 // ==========================================
-// Function: Map one configured raw coordinate to its external-output position
-// Method: Preserve the one-based raw index in pass-through mode or locate it
-//         in the ordered explicit projection exactly as process_main does.
-// ==========================================
-bool resolveProjectedCoordinate(
-    std::size_t raw_column_one_based,
-    const std::string& field_name,
-    const ProcessConfig::RuntimeOptions& options,
-    std::size_t& output_column_one_based,
-    std::string& error) {
-    if (raw_column_one_based == 0) {
-        error = "process_rearr " + field_name
-                + " column must be a positive one-based index";
-        return false;
-    }
-    if (!options.extcat_use_explicit_columns) {
-        output_column_one_based = raw_column_one_based;
-        return true;
-    }
-
-    const auto match = std::find(options.extcat_input_columns_one_based.begin(),
-                                 options.extcat_input_columns_one_based.end(),
-                                 raw_column_one_based);
-    if (match == options.extcat_input_columns_one_based.end()) {
-        error = "process_rearr explicit projection omits the configured "
-                + field_name + " raw column "
-                + std::to_string(raw_column_one_based);
-        return false;
-    }
-    output_column_one_based =
-        static_cast<std::size_t>(std::distance(
-            options.extcat_input_columns_one_based.begin(), match))
-        + 1;
-    return true;
-}
-
-// ==========================================
 // Function: Convert one catalog token to a finite double
 // Method: Use strtod with full-token and range checks so NaN, infinity,
 //         overflow, suffixes, and empty values are rejected uniformly.
@@ -175,56 +138,6 @@ void partitionRecursive(const std::vector<ActiveTile>& active_tiles,
 }
 
 }  // namespace
-
-// ==========================================
-// Function: Resolve and validate the _all.cat layout
-// Method: Reuse process_main's raw-to-projected coordinate mapping, then
-//         validate both coordinates against the effective external width.
-// ==========================================
-bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
-                          CatalogLayout& layout,
-                          std::string& error) {
-    std::size_t ra_column_one_based = 0;
-    std::size_t dec_column_one_based = 0;
-    if (!resolveProjectedCoordinate(options.extcat_ra_column_one_based, "RA",
-                                    options, ra_column_one_based, error)
-        || !resolveProjectedCoordinate(options.extcat_dec_column_one_based, "Dec",
-                                       options, dec_column_one_based, error)) {
-        return false;
-    }
-    if (ra_column_one_based == dec_column_one_based) {
-        error = "process_rearr RA and Dec columns must be distinct";
-        return false;
-    }
-
-    const std::size_t external_columns =
-        ProcessRearrConfig::externalCatalogColumns(options);
-    if (external_columns == 0) {
-        error = "process_rearr external catalog column count must be positive";
-        return false;
-    }
-    if (ra_column_one_based > external_columns
-        || dec_column_one_based > external_columns) {
-        error = "process_rearr RA/Dec columns must lie within the effective external "
-                "catalog width "
-                + std::to_string(external_columns);
-        return false;
-    }
-    if (external_columns
-        > std::numeric_limits<std::size_t>::max()
-              - ProcessRearrConfig::CCD_COLUMN_COUNT
-              - ProcessRearrConfig::ichi2) {
-        error = "process_rearr _all.cat column count overflows size_t";
-        return false;
-    }
-
-    layout.external_columns = external_columns;
-    layout.all_columns = ProcessRearrConfig::allCatalogColumns(options);
-    layout.ra_column = ra_column_one_based - 1;
-    layout.dec_column = dec_column_one_based - 1;
-    error.clear();
-    return true;
-}
 
 // ==========================================
 // Function: Parse one complete numeric _all.cat row

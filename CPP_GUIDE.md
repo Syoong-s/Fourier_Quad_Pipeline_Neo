@@ -23,12 +23,13 @@ frozen-branch simplified build with `PSFRecons` removed. See
 
 | File | Description |
 |---|---|
-| `main.cpp` | MPI entry point, workflow option parsing, and four-phase ordering. |
+| `main.cpp` | MPI entry point, workflow option parsing, five-phase ordering, and shared catalog-layout resolution. |
 | `include/ProcessConfig.hpp` | Shared workflow defaults and phase switches. |
+| `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp` | Runtime external/source schema resolved once and consumed by all catalog phases. |
 | `src/process_init/`, `include/process_init/` | Archive initializer implementation and headers. |
 | `src/process_main/process_main.cpp`, `include/process_main/process_main.hpp` | Exposure-list loading and Stage 1–9 orchestration. |
 | `src/process_rearr/`, `include/process_rearr/` | Self-contained `_all.cat` sky partitioning, MPI redistribution, sorted subcatalogs, and summary output. |
-| `include/process_rearr/ProcessRearrConfig.hpp` | Rearrangement-only parameters and derived `external columns + 1 + ichi2` row width. |
+| `config/ProcessRearrConfig.hpp` | Rearrangement-only spatial, partitioning, and output parameters. |
 | `include/process_main/LensingConfig.hpp` | Configuration constants (equivalent to `para.inc` + `cust_para.inc` + `sig_para.inc`). |
 | `src/process_main/PreProcess.cpp`, `include/process_main/PreProcess.hpp` | **Stage 1**: pre-processing. |
 | `src/process_main/Astrometry.cpp`, `include/process_main/Astrometry.hpp` | **Stage 2**: astrometric calibration. |
@@ -53,13 +54,17 @@ Uses the same integrated `process_extcat` / `process_init` / `process_main` /
 `process_rearr` directory layout and runtime option contract as
 `cpp_Standard/`, but its scientific modules retain
 the frozen Lite branches and `PSFRecons.cpp/.hpp` is absent. See
-`cpp_Lite/REFACTOR_NOTES.md` for the detailed change log.
+`cpp_Lite/REFACTOR_NOTES.md` for the detailed change log. Both variants now
+use the same pipeline-level `CatalogLayout` contract; Lite keeps only its
+intentional numerical-branch and default-setting differences.
 
 
 
 ## Source layout
 
 - `include/ProcessConfig.hpp`: workflow defaults and default phase switches.
+- `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp`: shared runtime catalog
+  schema and projection validation in both C++ variants.
 - `include/process_extcat/`, `src/process_extcat/`: external-catalog schema,
   parsing, MPI byte-range partitioning, and deterministic tile publication.
 - `include/process_init/`, `src/process_init/`: initializer wrapper plus the
@@ -130,13 +135,12 @@ projection is enabled; it is also integrated into `cpp_Standard` and `cpp_Lite`
 as `process_extcat`, the optional first phase before `process_init` and
 `process_main`.
 
-The generated exposure `_all.cat` files can then be repartitioned by celestial
-region with the self-contained fourth phase `process_rearr`. Its pass-through
-width uses `EXTCAT_TOTAL_COLUMNS` (default 18); its dedicated config derives the
-complete default width as `18 + 1 + ichi2(29) = 48`. RA/Dec remain configured
-raw one-based positions when explicit projection is disabled and are converted
-automatically to projection positions when it is enabled. Outputs default to
-each dataset's `rearranged_catalog/` directory.
+In both C++ variants, `main` resolves one immutable `CatalogLayout` before
+any phase runs. Pass-through mode uses `EXTCAT_TOTAL_COLUMNS` (default 18) for the
+external prefix; explicit mode uses the unique projection length. The layout
+then places CCD_NUM and the fixed 29-field process-main suffix, yielding 48
+legacy columns or `N + 30` columns for an `N`-field projection. The same
+effective RA/Dec positions and exact row width are consumed by `process_rearr`.
 
 Both C++ variants use the same zero-source output contract. A norm-valid Stage 3
 chip always publishes `_orig.cat` with the real external-catalog header and zero
@@ -147,17 +151,24 @@ Stage 9 checks norm before shear, treats header-only shear as a successful
 zero-source chip without opening `_orig.cat`, and creates `<EXPOSURE>_all.cat`
 only when at least one norm-valid chip has a shear data row.
 
-For C++ external catalogs, set the one-based raw positions
-`EXTCAT_RA_COLUMN_ONE_BASED`, `EXTCAT_DEC_COLUMN_ONE_BASED`, and
-`EXTCAT_ZP_COLUMN_ONE_BASED` in the selected `ProcessConfig.hpp`. Their defaults
-are `5`, `6`, and `17`, matching DES Y6 GOLD `ra`, `dec`, and `dnf_z`.
-`process_main` converts only these three fields; other external catalog columns may be
-arbitrary strings and no fixed 18-column layout is required. When explicit
-projection is enabled, all three raw fields must be selected and their output
-positions are derived automatically from the projection order. Runtime jobs may
-override the positions with `--extcat-ra-column`, `--extcat-dec-column`, and
-`--extcat-zp-column`. `process_rearr` uses the same RA/Dec mapping rule but
-requires every complete `_all.cat` field to be finite numeric data.
+For either C++ variant, set the one-based raw positions for RA, Dec,
+g/r/i/z/y magnitudes, and ZP in its `config/ExtCatConfig.hpp`. The
+shipped DES Y6 GOLD defaults are `5,6,7,9,11,13,15,17`. RA, Dec, and ZP are
+mandatory; each magnitude is optional and configured raw value `0` means the
+band is absent. These are the complete named external schema in
+`CatalogLayout`; no flag, extendedness, or anonymous-column members exist.
+Explicit projections must be unique and retain RA/Dec/ZP. A positive configured
+magnitude is available only when its raw identity is retained; otherwise its
+effective position is absent. Runtime jobs may override RA/Dec/ZP with
+`--extcat-ra-column`, `--extcat-dec-column`, and `--extcat-zp-column`; magnitude
+positions remain compiled defaults. Extra physical fields may pass through and
+affect the external width, but are otherwise unmodeled. `process_rearr` and FD
+still require every complete `_all.cat` token to be finite numeric data.
+
+At FD startup, either variant selects one available magnitude in i -> z -> r ->
+g -> y order. That one band supplies both the existing magnitude-range cut and all
+size-magnitude star-bar histograms. If no band is available, FD returns a
+collective nonzero error before opening its exposure list or catalogs.
 
 ```bash
 cd gen_src_cat
@@ -251,19 +262,19 @@ make test-psf-recons-orientation
 
 ## Defaults and option syntax
 
-Edit `include/ProcessConfig.hpp` to set the normal dataset and default execution
-mode. `RUN_PROCESS_EXTCAT`, `RUN_PROCESS_INIT`, and `RUN_PROCESS_REARR` default
-to `false`; `RUN_PROCESS_MAIN` defaults to `true`. Every command-line option is
-optional and overrides its configured default. Both `--name value` and
-`--name=value` are accepted in any order.
+Edit `config/ProcessConfig.hpp` to set the normal dataset and default execution
+mode. Both variants default extcat off and init/main on. Standard defaults
+rearr/FD on; Lite defaults rearr/FD off. Every command-line option is optional
+and overrides its configured default. Both `--name value` and `--name=value`
+are accepted in any order.
 
 The `EXTCAT_*` values configure raw-catalog discovery, the output directory,
-parsing policies, MPI task size, optional ordered column selection, and raw
-RA/Dec/ZP columns. With explicit selection disabled, every raw input field is
-preserved in place. `process_main` reads only these three configured fields;
-unselected catalog fields need not be numeric. `EXTCAT_TOTAL_COLUMNS` gives
-`process_rearr` the pass-through external width; explicit projection instead
-uses the projection-list length because that is the emitted external schema.
+parsing policies, MPI task size, optional ordered column selection, three
+required field positions, and five optional magnitude positions. With explicit selection disabled, every raw input field is
+preserved in place and the selected variant requires the emitted width to equal
+`EXTCAT_TOTAL_COLUMNS`. With explicit selection, each variant requires unique raw
+indices and uses the projection-list length as the effective width. The
+startup `CatalogLayout` supplies all downstream positions and row widths.
 Set the primary catalog path with `SOURCE_CAT` in
 `include/process_main/LensingConfig.hpp`. `EXTCAT_OUTPUT_DIRECTORY` is a
 read-only reference to that value, so `process_extcat` writes where
@@ -343,15 +354,13 @@ mpirun -np 4 ./Fourier_Quad_Pipe \
 
 `process_extcat` runs collectively once before the dataset loop. It writes the
 same one-degree filenames as `gen_src_cat/query_y6gold_sync_mp_v2.py`. Its
-default output preserves the complete raw schema; `--extcat-columns 5,3,4,1`,
-for example, writes raw columns 5, 3, 4, and 1 as output columns 1–4. If it
+default output preserves the complete raw schema; for example,
+`--extcat-columns 17,5,6,11` writes ZP/RA/Dec plus i magnitude, which is the
+minimal projection that can also run FD with the default priority. If it
 fails, no later phase starts. Output passed onward to `process_main` must
-include the raw columns configured by `EXTCAT_RA_COLUMN_ONE_BASED`,
-`EXTCAT_DEC_COLUMN_ONE_BASED`, and `EXTCAT_ZP_COLUMN_ONE_BASED`; a
-rearrangement-only run requires RA and Dec but does not require ZP. In
-pass-through mode the required fields are read at their configured positions.
-With explicit projection, the reader automatically maps each raw index to its
-position in the ordered projection list.
+include RA, Dec, and ZP. In pass-through mode they are read at
+their configured/canonical positions. With explicit projection, the shared
+resolver maps each raw identity to its unique ordered output position.
 
 Main-only local execution:
 
@@ -371,9 +380,10 @@ mpirun -np 4 ./Fourier_Quad_Pipe \
 ```
 
 All rearrangement-specific parameters are in
-`include/process_rearr/ProcessRearrConfig.hpp`. With the default 18-field
-external catalog, `ichi2=29` and the complete row width is calculated there as
-`18 + 1 + 29 = 48`. The default 0.1-degree grid targets about 500,000 rows per
+`config/ProcessRearrConfig.hpp`. In either variant, the startup layout supplies the
+row width (`18 + 1 + 29 = 48` by default) and effective RA/Dec positions; the
+rearrangement config contains only algorithm/output controls. The default
+0.1-degree grid targets about 500,000 rows per
 weighted k-d partition. Outputs are written below each dataset root in
 `rearranged_catalog/` as `subcat_NNNNNN.cat` plus
 `catalog_summary.txt`. Every data row must have the exact numeric width and

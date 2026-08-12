@@ -19,7 +19,7 @@ struct FDData {
     int ng = 0;
 
     // Additional variables (additional_data_pass)
-    std::vector<float> magg, magr, magi;  // magnitudes
+    std::vector<float> star_mag;           // selected FD star-bar magnitude
     std::vector<float> sizerel;            // relative size
     std::vector<float> src_snr;            // source SNR
     std::vector<float> delta_chi2;          // PSF-vs-extended residual difference
@@ -41,7 +41,7 @@ struct FDData {
         y1.resize(capacity); y2.resize(capacity);
         de1.resize(capacity); de2.resize(capacity);
         ww.resize(capacity);
-        magg.resize(capacity); magr.resize(capacity); magi.resize(capacity);
+        star_mag.resize(capacity);
         sizerel.resize(capacity); src_snr.resize(capacity);
         delta_chi2.resize(capacity); orth_ext.resize(capacity);
         rra.resize(capacity); ddec.resize(capacity);

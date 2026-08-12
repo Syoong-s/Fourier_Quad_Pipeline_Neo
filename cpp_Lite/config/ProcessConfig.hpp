@@ -52,6 +52,7 @@ struct RuntimeOptions {
     std::string extcat_malformed_policy = ExtCatConfig::EXTCAT_MALFORMED_POLICY;
     std::string extcat_existing_policy = ExtCatConfig::EXTCAT_EXISTING_POLICY;
     std::uint64_t extcat_chunk_mib = ExtCatConfig::EXTCAT_CHUNK_MIB;
+    std::size_t extcat_total_columns = ExtCatConfig::EXTCAT_TOTAL_COLUMNS;
     bool extcat_use_explicit_columns = ExtCatConfig::EXTCAT_USE_EXPLICIT_COLUMNS;
     std::vector<std::size_t> extcat_input_columns_one_based =
         ExtCatConfig::EXTCAT_INPUT_COLUMNS_ONE_BASED;
@@ -59,7 +60,18 @@ struct RuntimeOptions {
         ExtCatConfig::EXTCAT_USE_EXPLICIT_COORDINATE_COLUMNS;
     std::size_t extcat_ra_column_one_based = ExtCatConfig::EXTCAT_RA_COLUMN_ONE_BASED;
     std::size_t extcat_dec_column_one_based = ExtCatConfig::EXTCAT_DEC_COLUMN_ONE_BASED;
-    std::size_t extcat_zp_column_one_based = ExtCatConfig::EXTCAT_ZP_COLUMN_ONE_BASED;
+    std::size_t extcat_mag_g_column_one_based =
+        ExtCatConfig::EXTCAT_MAG_G_COLUMN_ONE_BASED;
+    std::size_t extcat_mag_r_column_one_based =
+        ExtCatConfig::EXTCAT_MAG_R_COLUMN_ONE_BASED;
+    std::size_t extcat_mag_i_column_one_based =
+        ExtCatConfig::EXTCAT_MAG_I_COLUMN_ONE_BASED;
+    std::size_t extcat_mag_z_column_one_based =
+        ExtCatConfig::EXTCAT_MAG_Z_COLUMN_ONE_BASED;
+    std::size_t extcat_mag_y_column_one_based =
+        ExtCatConfig::EXTCAT_MAG_Y_COLUMN_ONE_BASED;
+    std::size_t extcat_zp_column_one_based =
+        ExtCatConfig::EXTCAT_ZP_COLUMN_ONE_BASED;
     std::string science_root = InitConfig::SCIENCE_ROOT;
     std::string dq_root = InitConfig::DQ_ROOT;
     std::string output_root = InitConfig::OUTPUT_ROOT;

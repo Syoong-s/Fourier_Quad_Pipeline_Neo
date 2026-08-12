@@ -1,6 +1,8 @@
 #include "process_fd/process_fd.hpp"
 #include "FDConfig.hpp"
+#include "LensingConfig.hpp"
 #include "process_fd/FDData.hpp"
+#include "process_fd/FDMagnitudeSelector.hpp"
 #include "process_fd/ShearCatalogReader.hpp"
 #include "process_fd/StarCutCalculator.hpp"
 #include "process_fd/KMeansClusterer.hpp"
@@ -80,9 +82,42 @@ void broadcastExposureList(std::vector<std::string>& files, int rank) {
 // ==========================================
 int process_fd(const std::string& exposure_list,
                const ProcessConfig::RuntimeOptions& options,
-               const std::string& dataset_root) {
+               const std::string& dataset_root,
+               const PipelineCatalog::CatalogLayout& layout) {
     const int rank = MPIScheduler::my_id;
     const int num_procs = MPIScheduler::num_procs;
+
+    // ==========================================
+    // Logic: Select one catalog magnitude before any FD file I/O
+    // Method: Resolve the same immutable layout on every rank and reduce the
+    //         result collectively so no rank enters catalog I/O without a band.
+    // ==========================================
+    ProcessFD::MagnitudeSelection magnitude_selection;
+    std::string magnitude_error;
+    const int local_magnitude_ok =
+        ProcessFD::selectMagnitude(layout, magnitude_selection,
+                                   magnitude_error)
+            ? 1
+            : 0;
+    int global_magnitude_ok = 0;
+    MPI_Allreduce(&local_magnitude_ok, &global_magnitude_ok, 1, MPI_INT,
+                  MPI_MIN, MPI_COMM_WORLD);
+    if (global_magnitude_ok == 0) {
+        if (rank == 0) {
+            std::cerr << "FD magnitude selection error: "
+                      << (magnitude_error.empty()
+                              ? "selection failed on another MPI rank"
+                              : magnitude_error)
+                      << std::endl;
+        }
+        return 1;
+    }
+    if (rank == 0) {
+        std::cout << "FD magnitude selection: band="
+                  << magnitude_selection.band
+                  << " external_column=" << magnitude_selection.column
+                  << " (zero-based)" << std::endl;
+    }
 
     // 1. Load and broadcast exposure list
     std::vector<std::string> expo_files;
@@ -108,7 +143,9 @@ int process_fd(const std::string& exposure_list,
 
     MPIScheduler::distribute(n_expo,
         [&](int iexpo) {
-            ShearCatalogReader::readExposure(iexpo, data, expo_files, rank);
+            ShearCatalogReader::readExposure(iexpo, data, expo_files, layout,
+                                             magnitude_selection.column,
+                                             rank);
         },
         "reading FD cat");
 

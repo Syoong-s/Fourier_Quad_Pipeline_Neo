@@ -18,12 +18,13 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 
 | 文件 | 说明 |
 |---|---|
-| `main.cpp` | MPI 入口、工作流参数解析与四个函数的执行顺序。 |
+| `main.cpp` | MPI 入口、工作流参数解析、五个函数的执行顺序与共享星表布局解析。 |
 | `include/ProcessConfig.hpp` | 共享工作流默认值与函数开关。 |
+| `include/CatalogLayout.hpp`、`src/CatalogLayout.cpp` | 启动时一次解析、供各星表阶段共享的运行时 schema。 |
 | `src/process_init/`、`include/process_init/` | 归档初始化器源码与头文件。 |
 | `src/process_main/process_main.cpp`、`include/process_main/process_main.hpp` | 曝光列表读取与阶段 1–9 调度。 |
 | `src/process_rearr/`、`include/process_rearr/` | 自包含的 `_all.cat` 天区切分、MPI 重分配、排序子星表与汇总输出。 |
-| `include/process_rearr/ProcessRearrConfig.hpp` | 重排专属参数，以及 `外部列数 + 1 + ichi2` 派生行宽。 |
+| `config/ProcessRearrConfig.hpp` | 重排专属的天区切分、分区与输出参数。 |
 | `include/process_main/LensingConfig.hpp` | 配置常量（等价于 `para.inc` + `cust_para.inc` + `sig_para.inc`）。 |
 | `src/process_main/PreProcess.cpp`、`include/process_main/PreProcess.hpp` | **阶段 1**：预处理。 |
 | `src/process_main/Astrometry.cpp`、`include/process_main/Astrometry.hpp` | **阶段 2**：天体测量校准。 |
@@ -49,13 +50,16 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 采用与 `cpp_Standard/` 相同的 `process_extcat` / `process_init` /
 `process_main` / `process_rearr` 集成目录结构和运行参数接口，但科学模块仍保留
 冻结后的 Lite 分支，且不含
-`PSFRecons.cpp/.hpp`。详见 `cpp_Lite/REFACTOR_NOTES.md`。
+`PSFRecons.cpp/.hpp`。详见 `cpp_Lite/REFACTOR_NOTES.md`。两个变体现在采用相同的
+流水线级共享 `CatalogLayout` 契约；Lite 仅保留有意冻结的数值分支和默认值差异。
 
 
 
 ## 源码目录布局
 
 - `include/ProcessConfig.hpp`：工作流默认值与默认阶段开关。
+- `include/CatalogLayout.hpp`、`src/CatalogLayout.cpp`：两个 C++ 变体共享的
+  运行时 catalog schema 与 projection 验证。
 - `include/process_extcat/`、`src/process_extcat/`：外部星表 schema、解析、MPI 字节范围切分与确定性分片发布。
 - `include/process_init/`、`src/process_init/`：初始化封装及保留的 `Initializer` 与 `FitsExtractor` 模块。
 - `include/process_main/`、`src/process_main/`：`LensingConfig`、全部数值模块、曝光表加载与完整的 Stage 1–9 编排。
@@ -113,11 +117,12 @@ C++17（`cpp_Standard` / `cpp_Lite`）流水线完整指南：源码结构、流
 `cpp_Standard` 与 `cpp_Lite`，并作为 `process_init`、`process_main` 之前的
 可选第一阶段。
 
-流水线生成的曝光级 `_all.cat` 还可由自包含的第四个函数 `process_rearr` 按天区
-重新切分。直通模式的外部列宽来自 `EXTCAT_TOTAL_COLUMNS`（默认 18）；专属配置头
-按 `18 + 1 + ichi2(29) = 48` 派生默认总列数。关闭显式投影时直接使用配置的一基
-RA/Dec 原始列号，开启后会按投影列表自动换算位置。输出默认位于每个数据集的
-`rearranged_catalog/` 目录。
+流水线生成的曝光级 `_all.cat` 还可由 `process_rearr` 按天区重新切分。在两个
+C++ 变体中，`main.cpp` 启动后只解析一次共享 `CatalogLayout`：直通模式的外部列宽来自
+`EXTCAT_TOTAL_COLUMNS`（默认 18），显式投影模式则使用唯一投影列的数量；随后附加
+1 个 CCD 字段和固定的 29 个源字段，因此总行宽分别为 48 或 `投影列数 + 30`。
+`process_extcat`、`process_main`、`process_rearr` 和 `process_fd` 均消费同一个布局，
+不再各自推导列偏移。重排输出默认位于每个数据集的 `rearranged_catalog/` 目录。
 
 两个 C++ 变体采用同一套零源输出契约。norm valid 的阶段 3 chip 始终发布包含真实
 外部星表表头以及零行或多行数据的 `_orig.cat`；norm valid 且无输出源时，阶段 7
@@ -126,15 +131,21 @@ RA/Dec 原始列号，开启后会按投影列表自动换算位置。输出默�
 shear；header-only shear 表示成功的零源 chip，不会打开 `_orig.cat`。只有至少一个
 norm-valid chip 的 shear 含数据行时才创建 `<EXPOSURE>_all.cat`。
 
-对于 C++ 外部星表，请在所选流水线的 `ProcessConfig.hpp` 中设置一基原始列号
-`EXTCAT_RA_COLUMN_ONE_BASED`、`EXTCAT_DEC_COLUMN_ONE_BASED` 和
-`EXTCAT_ZP_COLUMN_ONE_BASED`。默认值分别为 `5`、`6`、`17`，对应 DES Y6 GOLD
-中的 `ra`、`dec`、`dnf_z`。`process_main` 只将这三列转换为数值，其他字段可为
-任意字符串，也不再要求固定 18 列格式。开启显式投影时必须选入这三列，读取器会
-根据投影列表顺序自动换算它们在输出星表中的位置。运行时也可分别使用
+对于任一 C++ 变体，请在该变体的 `config/ExtCatConfig.hpp` 中设置
+RA、Dec、g/r/i/z/y 星等和 ZP 的一基原始列号。DES Y6 GOLD 默认值依次为
+`5,6,7,9,11,13,15,17`。RA、Dec 和 ZP 必须存在；五个星等分别可选，将某波段
+原始列号设置为 `0` 即表示不存在。它们构成 `CatalogLayout` 的完整命名 external
+schema；其中不包含 flags、extendedness 或匿名列成员。显式投影必须为正数且不得
+重复，并保留 RA、Dec、ZP；正值配置的星等只有出现在投影中才视为可用，否则其
+有效位置为空。运行时也可分别使用
 `--extcat-ra-column`、`--extcat-dec-column`、`--extcat-zp-column` 覆盖。
-`process_rearr` 使用相同的 RA/Dec 规则，但要求完整 `_all.cat` 行的所有字段均为
-有限数值。
+其他物理列可以继续随星表传递并计入 external 宽度，但不会获得 layout 成员或被
+下游算法读取。`process_rearr` 与 `process_fd` 仍要求完整 `_all.cat` 行恰好具有
+布局声明的列数，且所有字段均为有限数值。
+
+FD 启动时按 i → z → r → g → y 选择第一个可用星等。该单一波段同时用于现有星等
+范围 cut 和全部 size–magnitude star-bar 直方图；若五个波段均不存在，FD 会在打开
+曝光列表或星表前由所有 MPI 进程统一返回非零错误。
 
 ```bash
 cd gen_src_cat
@@ -203,9 +214,9 @@ make test-point-source-statistics
 
 ## 默认值与选项语法
 
-编辑 `include/ProcessConfig.hpp` 设置常规数据集与默认执行模式。`RUN_PROCESS_EXTCAT`、`RUN_PROCESS_INIT`、`RUN_PROCESS_REARR` 默认为 `false`；`RUN_PROCESS_MAIN` 默认为 `true`。每个命令行选项都可省略，并覆盖其配置默认值。`--name value` 与 `--name=value` 均可接受，顺序任意。
+编辑 `config/ProcessConfig.hpp` 设置常规数据集与默认执行模式。两个变体均默认关闭 extcat、开启 init/main；Standard 默认开启 rearr/FD，Lite 默认关闭 rearr/FD。每个命令行选项都可省略，并覆盖其配置默认值。`--name value` 与 `--name=value` 均可接受，顺序任意。
 
-`EXTCAT_*` 值配置原始星表发现、输出目录、解析策略、MPI 任务大小、可选有序列选择与原始 RA/Dec/ZP 列。禁用显式选择时，每个原始输入字段原位保留。`process_main` 只读取这三个配置字段；未选中的星表列无需为数值。`EXTCAT_TOTAL_COLUMNS` 给 `process_rearr` 提供透传外部宽度；显式投影则使用投影列表长度（即发射的外部 schema）。主星表路径在 `include/process_main/LensingConfig.hpp` 中用 `SOURCE_CAT` 设置。`EXTCAT_OUTPUT_DIRECTORY` 是该值的只读引用，故 `process_extcat` 写入处即 `process_main` 读取处。`--extcat-output` 对单次调用覆盖两者。
+`EXTCAT_*` 值配置原始星表发现、输出目录、解析策略、MPI 任务大小、可选有序列选择、RA/Dec/ZP 三个必要字段和五个可选星等的原始位置。禁用显式选择时，每个原始输入字段原位保留，所选 C++ 变体仅在构造共享布局时使用 `EXTCAT_TOTAL_COLUMNS`；集成的 `process_extcat` 会验证实际输出宽度与之相符。启用显式选择时，布局宽度等于唯一投影列表长度。主星表路径在 `include/process_main/LensingConfig.hpp` 中用 `SOURCE_CAT` 设置。`EXTCAT_OUTPUT_DIRECTORY` 是该值的只读引用，故 `process_extcat` 写入处即 `process_main` 读取处。`--extcat-output` 对单次调用覆盖两者。
 
 `DATASETS` 存储成对的 target/prefix，`CONTAINS` 存储按 OR 语义匹配的归档 basename token。例如：
 
@@ -248,7 +259,7 @@ inline const std::vector<std::string> CONTAINS = {"v1", "v2"};
 mpirun -np 4 ./Fourier_Quad_Pipe   --run-extcat true --run-init false --run-main false   --extcat-input /data/raw_catalogs   --extcat-output /data/catalogs/des_y6_chunks   --extcat-contains .csv --extcat-contains y6_gold
 ```
 
-`process_extcat` 在数据集循环前集体运行一次。其默认输出保留完整原始 schema；例如 `--extcat-columns 5,3,4,1` 将原始 5、3、4、1 列写为输出 1–4 列。若失败，后续阶段不启动。传递给 `process_main` 的输出必须包含 `EXTCAT_RA_COLUMN_ONE_BASED`、`EXTCAT_DEC_COLUMN_ONE_BASED`、`EXTCAT_ZP_COLUMN_ONE_BASED` 配置的原始列；仅重排运行需要 RA 与 Dec，无需 ZP。
+`process_extcat` 在数据集循环前集体运行一次。其默认输出保留完整原始 schema；例如 `--extcat-columns 17,5,6,11` 会输出 ZP、RA、Dec 和 i 星等，是默认选带顺序下还能运行 FD 的最小投影。若布局或外部星表处理失败，后续阶段不会启动。两个 C++ 变体启动时都验证 RA/Dec/ZP；仅在实际进入 FD 时要求至少一个可用星等。
 
 仅 main 本地执行：
 
@@ -287,7 +298,7 @@ mpirun -np 4 ./Fourier_Quad_Pipe   --run-init true --run-main false   --science-
 mpirun -np 4 ./Fourier_Quad_Pipe   --run-init true --run-main true --run-rearr true   --science-root /data/archive/science   --dq-root /data/archive/dq   --output-root /data/work --dataset g2019:c4d_19   --existing resume
 ```
 
-启用全部四个开关可先构建外部星表，再初始化、处理并重排每个配置数据集。有效的 `--extcat-output` 路径也用于数值源提取器。
+启用全部五个阶段开关可先构建外部星表，再初始化、处理、重排并运行 FD。有效的 `--extcat-output` 路径也用于数值源提取器。
 
 数据集在同一 MPI 通信器上顺序执行，并在首个失败处停止。在 main/rearr-only 批量模式下省略 `--expo-list`；驱动为每个数据集派生一个 `output_root/expo_<target>.list` 路径。单条外部曝光表仅可用于单个下游-only 数据集。在链式批量模式下，每个初始化生成的绝对 list 覆盖该数据集的外部曝光表输入。
 

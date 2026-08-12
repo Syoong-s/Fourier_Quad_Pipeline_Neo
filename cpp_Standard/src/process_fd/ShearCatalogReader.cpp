@@ -1,16 +1,44 @@
 #include "process_fd/ShearCatalogReader.hpp"
 #include "FDConfig.hpp"
+#include "LensingConfig.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 namespace fc = FDConfig;
+
+// ==========================================
+// Function: Parse one exact-width numeric FD catalog row
+// Method: Require the runtime layout width, finite values, and no trailing columns.
+// ==========================================
+bool ShearCatalogReader::parseCatalogRow(const std::string& line,
+                                         std::size_t column_count,
+                                         std::vector<float>& values) {
+    if (column_count == 0) {
+        return false;
+    }
+
+    std::istringstream input(line);
+    std::vector<float> parsed(column_count);
+    for (std::size_t column = 0; column < column_count; ++column) {
+        if (!(input >> parsed[column]) || !std::isfinite(parsed[column])
+            || std::fabs(parsed[column]) > 1.0e30f) {
+            return false;
+        }
+    }
+    std::string extra;
+    if (input >> extra) {
+        return false;
+    }
+    values = std::move(parsed);
+    return true;
+}
 
 // ==========================================
 // Function: readExposure
@@ -20,10 +48,19 @@ namespace fc = FDConfig;
 // ==========================================
 void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                                       const std::vector<std::string>& expo_files,
+                                      const PipelineCatalog::CatalogLayout& layout,
+                                      std::size_t magnitude_column,
                                       int rank) {
     if (iexpo < 1 || iexpo > static_cast<int>(expo_files.size())) {
         if (rank == 0)
             std::cerr << "Invalid exposure index: " << iexpo << std::endl;
+        return;
+    }
+    if (magnitude_column >= layout.external_columns) {
+        if (rank == 0) {
+            std::cerr << "Invalid FD magnitude column: "
+                      << magnitude_column << std::endl;
+        }
         return;
     }
 
@@ -38,11 +75,10 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
     std::string header;
     std::getline(file, header);
 
-    using CatalogRow = std::array<float, fc::ICHI2>;
-    using DuplicateBuffer = std::array<CatalogRow, fc::MAX_DUP>;
-
-    DuplicateBuffer dup_buf{};
-    CatalogRow item{};
+    using CatalogRow = std::vector<float>;
+    std::vector<CatalogRow> dup_buf(
+        fc::MAX_DUP, CatalogRow(layout.all_columns));
+    CatalogRow item;
     int ndup = 0;
     float last_dec = -999.0, last_ra = -999.0;
     constexpr float multisam_thrsh = 1e-7f;
@@ -62,39 +98,38 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
             }
 
             const CatalogRow& row = dup_buf[i];
-            data.x1[idx] = row[fc::col_gf1];
-            data.y1[idx] = row[fc::col_g1];
-            data.de1[idx] = row[fc::col_de] - row[fc::col_h1];
-            data.x2[idx] = row[fc::col_gf2];
-            data.y2[idx] = row[fc::col_g2];
-            data.de2[idx] = row[fc::col_de] + row[fc::col_h1];
+            data.x1[idx] = row[layout.source.gf1];
+            data.y1[idx] = row[layout.source.g1];
+            data.de1[idx] = row[layout.source.de] - row[layout.source.h1];
+            data.x2[idx] = row[layout.source.gf2];
+            data.y2[idx] = row[layout.source.g2];
+            data.de2[idx] = row[layout.source.de] + row[layout.source.h1];
 
-            const float de_val = row[fc::col_de];
-            const float y1j = row[fc::col_g1] / de_val;
-            const float y2j = row[fc::col_g2] / de_val;
+            const float de_val = row[layout.source.de];
+            const float y1j = row[layout.source.g1] / de_val;
+            const float y2j = row[layout.source.g2] / de_val;
             const float gmag = std::sqrt(y1j * y1j + y2j * y2j);
             const float sign = de_val >= 0.0f ? 1.0f : -1.0f;
             data.ww[idx] = gmag > 0.0f ? sign / gmag : 0.0f;
 
-            data.magr[idx] = row[fc::col_mag_r];
-            data.magg[idx] = row[fc::col_mag_g];
-            data.magi[idx] = row[fc::col_mag_i];
+            data.star_mag[idx] = row[magnitude_column];
             data.sizerel[idx] =
-                ((std::sqrt(row[fc::col_h_area] / LensingConfig::pi)
+                ((std::sqrt(row[layout.source.h_area] / LensingConfig::pi)
                   * LensingConfig::pixel_size * 2.0)
-                 - row[fc::col_PSF])
-                / row[fc::col_PSF];
+                 - row[layout.source.psf])
+                / row[layout.source.psf];
             data.src_snr[idx] =
-                row[fc::col_h_flux] / std::sqrt(row[fc::col_h_area]);
-            data.delta_chi2[idx] = row[fc::col_delta_chi2];
-            data.orth_ext[idx] = row[fc::col_orth_ext];
-            data.rra[idx] = row[fc::col_ra];
-            data.ddec[idx] = row[fc::col_dec];
+                row[layout.source.h_flux]
+                / std::sqrt(row[layout.source.h_area]);
+            data.delta_chi2[idx] = row[layout.source.delta_chi2];
+            data.orth_ext[idx] = row[layout.source.orth_ext];
+            data.rra[idx] = row[layout.source.ra];
+            data.ddec[idx] = row[layout.source.dec];
 
             if (fc::FD_PER_EXPOSURE_STAR_BAR) {
                 data.iexpo[idx] =
-                    static_cast<int>(std::lround(row[fc::col_chi2]));
-                data.snrf[idx] = row[fc::col_SNR_F];
+                    static_cast<int>(std::lround(row[layout.source.chi2]));
+                data.snrf[idx] = row[layout.source.snr_f];
             }
             ++data.ng;
         }
@@ -104,32 +139,17 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
     };
 
     std::string line;
-    std::istringstream iss;
     while (std::getline(file, line)) {
         if (line.empty()) continue;
 
-        iss.clear();
-        iss.str(line);
-        bool parse_ok = true;
-        for (int u = 0; u < fc::ICHI2; ++u) {
-            if (!(iss >> item[u])) { parse_ok = false; break; }
-        }
-        if (!parse_ok) continue;
-
-        // NaN / Inf check
-        bool undefined = false;
-        for (int u = 0; u < fc::ICHI2; ++u) {
-            if (std::isnan(item[u])) { undefined = true; break; }
-            if (std::fabs(item[u]) > 1.0e30) { undefined = true; break; }
-        }
-        if (undefined) continue;
+        if (!parseCatalogRow(line, layout.all_columns, item)) continue;
 
         // Pixel coordinates for chip-edge masking
-        int ix = static_cast<int>(item[fc::col_pixx]);  // pixel x
-        int iy = static_cast<int>(item[fc::col_pixy]);  // pixel y
+        int ix = static_cast<int>(item[layout.source.pixx]);  // pixel x
+        int iy = static_cast<int>(item[layout.source.pixy]);  // pixel y
 
         // Bad CCD check
-        int ccd_val = static_cast<int>(std::lround(item[fc::col_ccd]));
+        int ccd_val = static_cast<int>(std::lround(item[layout.ccd]));
         bool bad_ccd = false;
         for (int i = 0; i < fc::n_bad_ccds; ++i) {
             if (ccd_val == fc::bad_ccds[i]) { bad_ccd = true; break; }
@@ -141,65 +161,60 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
             iy < fc::chip_ymin || iy > fc::chip_ymax)
             continue;
 
-        // External-catalog flag cuts
-        if (fc::ft_cut >= 0.0 && std::fabs(item[fc::col_flags_ft] - fc::ft_cut) > 1e-3) continue;
-        if (fc::fg_cut >= 0.0 && std::fabs(item[fc::col_flags_fg] - fc::fg_cut) > 1e-3) continue;
-        if (fc::gold_cut >= 0.0 && std::fabs(item[fc::col_flags_gold] - fc::gold_cut) > 1e-3) continue;
-        if (fc::ext_cut >= 0.0 && std::fabs(item[fc::col_ext_mash] - fc::ext_cut) > 1e-3) continue;
-
         // SNR_F cut
-        if (item[fc::col_SNR_F] < fc::snrfcut) continue;
+        if (item[layout.source.snr_f] < fc::snrfcut) continue;
 
         // SNR cut
-        float snr = item[fc::col_h_flux] / std::sqrt(item[fc::col_h_area]);
+        float snr = item[layout.source.h_flux]
+                    / std::sqrt(item[layout.source.h_area]);
         if (fc::snrlow > 0.0 && snr < fc::snrlow) continue;
         if (fc::snrhigh > 0.0 && snr > fc::snrhigh) continue;
 
         // Half-light radius cut
         if (fc::r_half_thresh > 0.0) {
-            float r_half = std::sqrt(item[fc::col_h_area] / LensingConfig::pi) * LensingConfig::pixel_size * 2.0;
-            if (r_half <= fc::r_half_thresh * item[fc::col_PSF]) continue;
+            float r_half = std::sqrt(item[layout.source.h_area] / LensingConfig::pi) * LensingConfig::pixel_size * 2.0;
+            if (r_half <= fc::r_half_thresh * item[layout.source.psf]) continue;
         }
 
         // Magnitude cut
-        if (item[fc::col_mag_i] < fc::mag_min_val ||
-            item[fc::col_mag_i] > fc::mag_max_val) {
+        if (item[magnitude_column] < fc::mag_min_val ||
+            item[magnitude_column] > fc::mag_max_val) {
             continue;
         }
 
         // PSF polychi2 cut
-        if (item[fc::col_polychi2] > fc::psf_chi2_mltp) continue;
+        if (item[layout.source.polychi2] > fc::psf_chi2_mltp) continue;
 
         // Star classification cut
-        if (item[fc::col_star] < fc::starcut) continue;
+        if (item[layout.source.star] < fc::starcut) continue;
 
-        // Chi2 cut (single mode only; per-exposure uses col_chi2 for exposure index)
+        // Chi2 cut (single mode only; per-exposure uses source.chi2 as exposure index)
         if (!fc::FD_PER_EXPOSURE_STAR_BAR) {
-            if (item[fc::col_chi2] > fc::chi2_thresh) continue;
+            if (item[layout.source.chi2] > fc::chi2_thresh) continue;
         }
 
         // Flag cut
-        if (item[fc::col_flag] <= fc::flagcut) continue;
+        if (item[layout.source.flag] <= fc::flagcut) continue;
 
         // Imax / Jmax cut
-        if (item[fc::col_imax] >= fc::imaxcut) continue;
-        if (item[fc::col_jmax] >= fc::jmaxcut) continue;
+        if (item[layout.source.imax] >= fc::imaxcut) continue;
+        if (item[layout.source.jmax] >= fc::jmaxcut) continue;
 
         // Zero-point cut
-        if (item[fc::col_zp] <= fc::zplow) continue;
-        if (item[fc::col_zp] >= fc::zphigh) continue;
+        if (item[layout.external.zp] <= fc::zplow) continue;
+        if (item[layout.external.zp] >= fc::zphigh) continue;
 
         // Field-distortion range cut
-        if (std::fabs(item[fc::col_gf1]) > fc::gf_lim) continue;
-        if (std::fabs(item[fc::col_gf2]) > fc::gf_lim) continue;
+        if (std::fabs(item[layout.source.gf1]) > fc::gf_lim) continue;
+        if (std::fabs(item[layout.source.gf2]) > fc::gf_lim) continue;
 
         // --- Duplicate detection ---
         bool new_galaxy = false;
-        if (std::fabs(item[fc::col_dec] - last_dec) > multisam_thrsh ||
-            std::fabs(item[fc::col_ra] - last_ra) > multisam_thrsh) {
+        if (std::fabs(item[layout.source.dec] - last_dec) > multisam_thrsh ||
+            std::fabs(item[layout.source.ra] - last_ra) > multisam_thrsh) {
             new_galaxy = true;
-            last_dec = item[fc::col_dec];
-            last_ra = item[fc::col_ra];
+            last_dec = item[layout.source.dec];
+            last_ra = item[layout.source.ra];
         }
 
         // Flush previous duplicates when a new galaxy is detected
