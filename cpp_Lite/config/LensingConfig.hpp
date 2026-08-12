@@ -64,7 +64,8 @@ namespace LensingConfig {
 
     constexpr double dz_thresh = 0.1;
 
-    // Catalog capacity limits
+    // Initial catalog reservation capacities. These values are not hard
+    // source or star limits; vectors may grow beyond them as needed.
     constexpr int ngal_max = 4000;
     constexpr int nstar_max = 2000;
     constexpr int src_npara = 12;

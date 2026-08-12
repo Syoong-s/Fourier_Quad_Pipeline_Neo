@@ -45,6 +45,12 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 make CXX="${MPI_PREFIX}/bin/mpicxx" \
   STACK_PREFIX="${STACK_PREFIX}" \
   EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-layout
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-row-count
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-psf-model-state
 ./Fourier_Quad_Pipe --help
 ```
 
@@ -52,11 +58,30 @@ The stamp-cube test verifies a non-square `5 x 3 x 4` round trip, raw FITS axes
 and metadata, and dense selected-plane ordering. The PSF test exercises the same
 row-major copy, centering, and reconstruction helpers used by `PSFRecons`, using
 asymmetric pixels and a numerical comparison with the legacy feature permutation.
+The catalog-row-count test covers equal 100-row catalogs, both mismatch
+directions, and paired header-only catalogs. The PSF-state test covers actual
+candidate counts of 0, 10, 300, and 2301, including full live-stride matrix
+access beyond the 2000-row reservation hint.
 
 The current local WSL2 verification stack is GCC/G++ 15.2.0, Open MPI 5.0.10,
 CFITSIO 4.6.3, FFTW 3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33. The portable
 cluster target and module-compatible versions are recorded in
 [`../CPP_GUIDE.md`](../CPP_GUIDE.md#compiler-and-libraries).
+
+## Dynamic catalog and PSF capacities
+
+`LensingConfig::ngal_max` (4000) and `LensingConfig::nstar_max` (2000) are
+initial metadata-vector reservation capacities, not hard catalog limits. Stage
+3 appends every accepted source and star candidate, while the large stamp
+buffers continue to grow on demand rather than reserving the full hint size.
+
+Stage 5 creates empty state for the exposure's live chips, loads each chip's
+complete candidate catalog, and then allocates a full
+`actual_nstar x actual_nstar` pairwise chi matrix. The pairwise calculation,
+star selection, and local/hybrid PSF fitting algorithms are unchanged. In the
+external-catalog Stage-9 branch, the physical data-row counts after the two
+headers must match before combination; a mismatch aborts the MPI world, while
+the existing row parsing, cuts, calibration, and pairing order remain unchanged.
 
 ## Runtime catalog layout
 

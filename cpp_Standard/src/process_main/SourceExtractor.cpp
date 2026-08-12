@@ -593,7 +593,8 @@ namespace SourceExtractor {
 
         std::vector<float> source_collect;
         std::vector<float> noise_collect;
-        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
+        std::vector<std::vector<float>> source_para;
+        source_para.reserve(LensingConfig::ngal_max);
 
         if (procError != 1) {
             std::string catname = OutputLayout::chipPath(
@@ -623,23 +624,22 @@ namespace SourceExtractor {
                 checkSource(flag, source, nx, ny, array, weight, xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
                 if (flag < 0) continue;
 
-                ngal++;
-                
                 source_collect.insert(source_collect.end(), source.begin(), source.end());
                 noise_collect.insert(noise_collect.end(), noise.begin(), noise.end());
 
-                source_para[ngal - 1][0] = ig;
-                source_para[ngal - 1][1] = xp;
-                source_para[ngal - 1][2] = yp;
-                source_para[ngal - 1][3] = sig;
-                source_para[ngal - 1][4] = peak;
-                source_para[ngal - 1][5] = imax;
-                source_para[ngal - 1][6] = jmax;
-                source_para[ngal - 1][7] = half_light_flux;
-                source_para[ngal - 1][8] = half_light_area;
-                source_para[ngal - 1][9] = flag;
-
-                if (ngal >= LensingConfig::ngal_max) break;
+                std::vector<float> row(LensingConfig::src_npara, 0.0f);
+                row[0] = ig;
+                row[1] = xp;
+                row[2] = yp;
+                row[3] = sig;
+                row[4] = peak;
+                row[5] = imax;
+                row[6] = jmax;
+                row[7] = half_light_flux;
+                row[8] = half_light_area;
+                row[9] = flag;
+                source_para.push_back(row);
+                ngal = static_cast<int>(source_para.size());
             }
             fin.close();
         }
@@ -687,9 +687,10 @@ namespace SourceExtractor {
 
         std::vector<float> source_collect;
         std::vector<float> noise_collect;
-        std::vector<std::vector<float>> source_para(LensingConfig::ngal_max, std::vector<float>(LensingConfig::src_npara, 0.0f));
-        std::vector<int> sid(LensingConfig::ngal_max, 0);
+        std::vector<std::vector<float>> source_para;
+        source_para.reserve(LensingConfig::ngal_max);
         std::vector<std::string> accepted_orig_lines;
+        accepted_orig_lines.reserve(LensingConfig::ngal_max);
         std::string orig_header = "";
 
         int ig = 0;
@@ -760,32 +761,25 @@ namespace SourceExtractor {
                 checkSource(flag, source, nx, ny, array, weight, xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
                 if (flag < 0) continue;
 
-                ngal++;
-
                 source_collect.insert(source_collect.end(), source.begin(), source.end());
                 noise_collect.insert(noise_collect.end(), noise.begin(), noise.end());
 
-                source_para[ngal - 1][0] = ig;
-                source_para[ngal - 1][1] = xp;
-                source_para[ngal - 1][2] = yp;
-                source_para[ngal - 1][3] = sig;
-                source_para[ngal - 1][4] = peak;
-                source_para[ngal - 1][5] = imax;
-                source_para[ngal - 1][6] = jmax;
-                source_para[ngal - 1][7] = half_light_flux;
-                source_para[ngal - 1][8] = half_light_area;
-                source_para[ngal - 1][9] = flag;
-
-                sid[ngal - 1] = ig;
+                std::vector<float> row(LensingConfig::src_npara, 0.0f);
+                row[0] = ig;
+                row[1] = xp;
+                row[2] = yp;
+                row[3] = sig;
+                row[4] = peak;
+                row[5] = imax;
+                row[6] = jmax;
+                row[7] = half_light_flux;
+                row[8] = half_light_area;
+                row[9] = flag;
+                source_para.push_back(row);
                 accepted_orig_lines.push_back(line);
-
-                if (ngal >= LensingConfig::ngal_max) {
-                    fin.close();
-                    break;
-                }
+                ngal = static_cast<int>(source_para.size());
             }
             fin.close();
-            if (ngal >= LensingConfig::ngal_max) break;
         }
 
         if (ngal > 0) {
@@ -1037,6 +1031,7 @@ namespace SourceExtractor {
         nstar = 0;
 
         std::vector<std::vector<float>> source_para;
+        source_para.reserve(LensingConfig::ngal_max);
         int ngal = 0;
 
         if (procError != 1) {
@@ -1063,15 +1058,14 @@ namespace SourceExtractor {
                 }
                 if (!read_ok) break;
 
-                ngal++;
-                std::vector<float> row(12, 0.0f);
+                std::vector<float> row(LensingConfig::src_npara, 0.0f);
                 for (int i = 0; i < source_info_fields; ++i) {
                     row[i] = aa[i];
                 }
                 double snr = row[LensingConfig::ih_flux] / std::sqrt(row[LensingConfig::ih_area]);
                 row[10] = snr;
                 source_para.push_back(row);
-                if (ngal >= LensingConfig::ngal_max) break;
+                ngal = static_cast<int>(source_para.size());
             }
             fin.close();
         }
@@ -1103,11 +1097,11 @@ namespace SourceExtractor {
         std::vector<float> star_source_collect;
         std::vector<float> star_noise_collect;
         std::vector<std::vector<float>> star_para;
+        star_para.reserve(LensingConfig::nstar_max);
 
         for (int i = 0; i < ngal; ++i) {
             if (source_para[i][10] < LensingConfig::SNR_PSF) continue;
 
-            nstar++;
             int offset_src = i * LensingConfig::ns * LensingConfig::ns;
             const int stampSize = LensingConfig::ns * LensingConfig::ns;
             star_source_collect.insert(
@@ -1123,8 +1117,7 @@ namespace SourceExtractor {
             row[2] = source_para[i][2];
             row[3] = source_para[i][10];
             star_para.push_back(row);
-
-            if (nstar >= LensingConfig::nstar_max) break;
+            nstar = static_cast<int>(star_para.size());
         }
 
         std::string filename_star_info = OutputLayout::chipPath(
@@ -1163,6 +1156,7 @@ namespace SourceExtractor {
         std::vector<float> star_source_collect;
         std::vector<float> star_noise_collect;
         std::vector<std::vector<float>> star_para;
+        star_para.reserve(LensingConfig::nstar_max);
 
         if (procError != 1) {
             std::string catname = OutputLayout::chipPath(
@@ -1200,20 +1194,18 @@ namespace SourceExtractor {
 
                 if (snr < LensingConfig::SNR_PSF) continue;
 
-                nstar++;
                 star_source_collect.insert(
                     star_source_collect.end(), source.begin(), source.end());
                 star_noise_collect.insert(
                     star_noise_collect.end(), noise.begin(), noise.end());
 
                 std::vector<float> row(4, 0.0f);
-                row[0] = nstar;
+                row[0] = static_cast<float>(star_para.size() + 1);
                 row[1] = xp;
                 row[2] = yp;
                 row[3] = snr;
                 star_para.push_back(row);
-
-                if (nstar >= LensingConfig::nstar_max) break;
+                nstar = static_cast<int>(star_para.size());
             }
             fin.close();
         }

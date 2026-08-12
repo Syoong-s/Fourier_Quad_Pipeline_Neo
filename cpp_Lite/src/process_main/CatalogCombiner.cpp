@@ -1,4 +1,5 @@
 #include "CatalogCombiner.hpp"
+#include "CatalogRowCount.hpp"
 #include "OutputFile.hpp"
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <system_error>
+#include <cstddef>
 
 extern std::vector<std::string> EXPO_FILE;
 
@@ -176,14 +178,19 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             dirOutput, "stamps/dat_Shear", prefix, "_shear.dat");
         const ShearCatalogProbe shear_probe =
             probeShearCatalog(filename_shear);
-        if (shear_probe.status == ShearCatalogStatus::Empty) {
-            continue;
-        }
         if (shear_probe.status == ShearCatalogStatus::Missing) {
             MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
         }
         if (shear_probe.status == ShearCatalogStatus::ReadError) {
             MPIFailure::abortWorld("parse Stage 7 shear catalog", filename_shear);
+        }
+
+        const std::string filename_orig = OutputLayout::chipPath(
+            dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
+        Internal::requireMatchingCatalogDataRows(
+            filename_shear, filename_orig);
+        if (shear_probe.status == ShearCatalogStatus::Empty) {
+            continue;
         }
         if (chi2 > LensingConfig::chi2_thresh) {
             std::cout << prefix << " contains no valid sources!" << std::endl;
@@ -197,8 +204,6 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
         }
 
-        const std::string filename_orig = OutputLayout::chipPath(
-            dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
         std::ifstream original_input(filename_orig);
         if (!original_input.is_open()) {
             MPIFailure::abortWorld("read external source catalog", filename_orig);

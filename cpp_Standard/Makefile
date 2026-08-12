@@ -62,6 +62,8 @@ STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
 PSF_RECONS_ORIENTATION_TEST = tests/test_psf_recons_orientation
 UNIVERSALBLOCK_TEST = tests/test_universalblock
 CATALOG_LAYOUT_TEST = tests/test_catalog_layout
+CATALOG_ROW_COUNT_TEST = tests/test_catalog_row_count
+PSF_MODEL_STATE_TEST = tests/test_psf_model_state
 
 all: $(TARGET)
 
@@ -79,6 +81,12 @@ test-universalblock: $(UNIVERSALBLOCK_TEST)
 
 test-catalog-layout: $(CATALOG_LAYOUT_TEST)
 	./$(CATALOG_LAYOUT_TEST)
+
+test-catalog-row-count: $(CATALOG_ROW_COUNT_TEST)
+	./$(CATALOG_ROW_COUNT_TEST)
+
+test-psf-model-state: $(PSF_MODEL_STATE_TEST)
+	./$(PSF_MODEL_STATE_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -131,6 +139,18 @@ $(CATALOG_LAYOUT_TEST): tests/CatalogLayoutTest.cpp \
 		src/process_fd/FDMagnitudeSelector.cpp \
 		src/process_fd/ShearCatalogReader.cpp -o $@
 
+$(CATALOG_ROW_COUNT_TEST): tests/CatalogRowCountTest.cpp \
+                          include/process_main/CatalogRowCount.hpp \
+                          include/process_main/MPIFailure.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/CatalogRowCountTest.cpp -o $@
+
+$(PSF_MODEL_STATE_TEST): tests/PSFModelStateTest.cpp \
+                        include/process_main/PSFModelState.hpp \
+                        config/LensingConfig.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/PSFModelStateTest.cpp -o $@
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -141,9 +161,11 @@ clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
 	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
 	      $(UNIVERSALBLOCK_TEST) $(CATALOG_LAYOUT_TEST) \
+	      $(CATALOG_ROW_COUNT_TEST) $(PSF_MODEL_STATE_TEST) \
 	      tests/catalog_layout_selected_magnitude.tmp
 
 -include $(DEPS)
 
 .PHONY: all clean test-point-source-statistics test-stamp-cube-io \
-        test-psf-recons-orientation test-universalblock test-catalog-layout
+        test-psf-recons-orientation test-universalblock test-catalog-layout \
+        test-catalog-row-count test-psf-model-state
