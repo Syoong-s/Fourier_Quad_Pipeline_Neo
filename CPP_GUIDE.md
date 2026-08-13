@@ -24,13 +24,14 @@ frozen-branch simplified build with `PSFRecons` removed. See
 | File | Description |
 |---|---|
 | `main.cpp` | MPI entry point, workflow option parsing, five-phase ordering, and shared catalog-layout resolution. |
-| `include/ProcessConfig.hpp` | Shared workflow defaults and phase switches. |
+| `config/ProcessConfig.hpp` | Compiled workflow defaults and phase switches. |
+| `include/RuntimeConfig.hpp`, `src/RuntimeConfig.cpp` | Unified runtime model, INI/CLI parsing, validation, and immutable store. |
 | `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp` | Runtime external/source schema resolved once and consumed by all catalog phases. |
 | `src/process_init/`, `include/process_init/` | Archive initializer implementation and headers. |
 | `src/process_main/process_main.cpp`, `include/process_main/process_main.hpp` | Exposure-list loading and Stage 1–9 orchestration. |
 | `src/process_rearr/`, `include/process_rearr/` | Self-contained `_all.cat` sky partitioning, MPI redistribution, sorted subcatalogs, and summary output. |
 | `config/ProcessRearrConfig.hpp` | Rearrangement-only spatial, partitioning, and output parameters. |
-| `include/process_main/LensingConfig.hpp` | Configuration constants (equivalent to `para.inc` + `cust_para.inc` + `sig_para.inc`). |
+| `config/LensingConfig.hpp` | Compiled fallbacks plus fixed dimensions, indices, and algorithm constants. |
 | `src/process_main/PreProcess.cpp`, `include/process_main/PreProcess.hpp` | **Stage 1**: pre-processing. |
 | `src/process_main/Astrometry.cpp`, `include/process_main/Astrometry.hpp` | **Stage 2**: astrometric calibration. |
 | `src/process_main/SourceExtractor.cpp`, `include/process_main/SourceExtractor.hpp` | **Stage 3**: source detection and extraction. |
@@ -62,7 +63,9 @@ intentional numerical-branch and default-setting differences.
 
 ## Source layout
 
-- `include/ProcessConfig.hpp`: workflow defaults and default phase switches.
+- `config/ProcessConfig.hpp`: workflow defaults and default phase switches.
+- `include/RuntimeConfig.hpp`, `src/RuntimeConfig.cpp`: typed runtime sections,
+  strict INI/CLI parsing, validation, and immutable access.
 - `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp`: shared runtime catalog
   schema and projection validation in both C++ variants.
 - `include/process_extcat/`, `src/process_extcat/`: external-catalog schema,
@@ -80,11 +83,11 @@ intentional numerical-branch and default-setting differences.
 
 ## Pipeline Stages
 
-The pipeline consists of 9 stages. Stage execution is controlled by the
-`PROCESS_stage` parameter (defined in `para.inc` / `LensingConfig.hpp`), which is
-the product of prime factors. A stage runs when `PROCESS_stage` is divisible by
-its prime. The default value `2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23` enables
-all stages.
+The pipeline consists of 9 stages. C++ stage execution is controlled by
+`[lensing] process_stage`; Fortran uses `PROCESS_stage` in `para.inc`. The value
+is a product of prime factors, and a stage runs when it is divisible by that
+stage's prime. The default `2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23` enables all
+stages.
 
 | Stage | Prime | Function | Description |
 |---|---|---|---|
@@ -98,8 +101,8 @@ all stages.
 | 8 | 19 | `proc_info` / `ExposureInfo` | Collect per-exposure statistics (PSF FWHM, star count, etc.). |
 | 9 | 23 | `proc_combine_shear_catalog` / `CatalogCombiner` | Combine shear catalogs across exposures and apply calibration corrections. |
 
-To disable a stage, divide `PROCESS_stage` by its prime factor. For example,
-setting `PROCESS_stage = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19` (omit 23) skips
+To disable a stage, divide `process_stage` by its prime factor. For example,
+setting `process_stage = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19` (omit 23) skips
 catalog combination.
 
 ---
@@ -108,16 +111,25 @@ catalog combination.
 
 ## Configuration
 
-### C++ (`LensingConfig.hpp`)
+### C++ runtime configuration
 
-`cpp_Standard` consolidates all parameters from the three Fortran include files
-into `include/process_main/LensingConfig.hpp`. `cpp_Lite` uses the same relative
-path but retains only its frozen parameter subset; see
-`cpp_Lite/REFACTOR_NOTES.md`. Catalog column indices are shifted to 0-based for
-C++. See the complete
+Both variants build a `RuntimeConfig` from compiled defaults, then an optional
+INI file, then CLI overrides. Use `--config PATH`; rank 0 reads the file once,
+broadcasts the exact bytes, and every rank parses and validates the same text
+before the write-once store is initialized. The supported sections are
+`[process]`, `[extcat]`, `[init]`, and `[lensing]`. Start from the variant's
+`pipeline.example.ini`.
+
+Standard exposes every live run-selectable lensing branch. Lite exposes only
+`process_stage`, `astrometry_cat`, `ccd_split`, `gal_smooth`, `star_smooth`,
+`pixel_size`, `nmax_chip`, `chipnx`, and `chipny`; its physically deleted
+branches are not accepted as configuration keys. Fixed array dimensions,
+catalog indices, and algorithm constants remain in `config/LensingConfig.hpp`
+and require a rebuild. Catalog column indices are 0-based in C++. See the
+complete
 [`C++ Pipeline External Inputs and Parameter Reference`](CPP_PIPELINE_PARAMETERS.md)
-for every runtime option, external input, `ProcessConfig.hpp` default,
-`LensingConfig.hpp` parameter, valid value, and Standard/Lite difference.
+for every INI/CLI option, fixed parameter, valid value, and Standard/Lite
+difference.
 
 ---
 
@@ -125,8 +137,10 @@ for every runtime option, external input, `ProcessConfig.hpp` default,
 
 ## External Source Catalog
 
-When `ext_cat = 1`, the C++ and Fortran pipelines read one-degree DES Y6 GOLD
-tiles from the directory configured as `SOURCE_CAT`. The
+The C++ external-catalog path is the authoritative runtime
+`extcat.output_directory` (`[lensing] source_cat` is an alias). Standard reads
+it when `ext_cat=1`; Lite is external-catalog-only. The Fortran pipeline still
+uses `SOURCE_CAT`. The
 [`gen_src_cat`](gen_src_cat/README.md) utilities download or repartition those
 tiles with the filename convention expected by the catalog readers. The Python
 downloader writes the DES Y6 GOLD 18-column schema. The C++ MPI repartitioner
@@ -179,9 +193,9 @@ python query_y6gold_sync_mp_v2.py
 ```
 
 Review the sky bounds, row limit, output directory, and query concurrency in the
-script before running it. For C++, set the primary `SOURCE_CAT` path in
-`LensingConfig.hpp`, or pass `--extcat-output`; `EXTCAT_OUTPUT_DIRECTORY`
-follows that value so generation and numerical processing use the same path.
+script before running it. For C++, set `output_directory` in the INI `[extcat]`
+section or pass `--extcat-output`; generation and numerical processing consume
+the same runtime field.
 Raw local catalogs can instead be tiled inside the pipeline with
 `--run-extcat true --extcat-input PATH`. Fortran still uses `SOURCE_CAT` in
 `para.inc`. See
@@ -262,11 +276,12 @@ make test-psf-recons-orientation
 
 ## Defaults and option syntax
 
-Edit `config/ProcessConfig.hpp` to set the normal dataset and default execution
-mode. Both variants default extcat off and init/main on. Standard defaults
-rearr/FD on; Lite defaults rearr/FD off. Every command-line option is optional
-and overrides its configured default. Both `--name value` and `--name=value`
-are accepted in any order.
+Copy `pipeline.example.ini` from the selected variant for normal runs. Compiled
+fallbacks remain in `config/ProcessConfig.hpp`, `config/ExtCatConfig.hpp`,
+`config/InitConfig.hpp`, and `config/LensingConfig.hpp`. Both variants default
+extcat off and init/main on; Standard defaults rearr/FD on while Lite defaults
+them off. Precedence is compiled defaults < INI < CLI. Both `--name value` and
+`--name=value` are accepted in any order.
 
 The `EXTCAT_*` values configure raw-catalog discovery, the output directory,
 parsing policies, MPI task size, optional ordered column selection, three
@@ -275,10 +290,10 @@ preserved in place and the selected variant requires the emitted width to equal
 `EXTCAT_TOTAL_COLUMNS`. With explicit selection, each variant requires unique raw
 indices and uses the projection-list length as the effective width. The
 startup `CatalogLayout` supplies all downstream positions and row widths.
-Set the primary catalog path with `SOURCE_CAT` in
-`include/process_main/LensingConfig.hpp`. `EXTCAT_OUTPUT_DIRECTORY` is a
-read-only reference to that value, so `process_extcat` writes where
-`process_main` reads. `--extcat-output` overrides both for one invocation.
+The authoritative catalog path is `extcat.output_directory`; the compiled
+fallback is `SOURCE_CAT`, and `[lensing] source_cat` is an alias. Thus
+`process_extcat` writes where `process_main` reads without mutating a header
+global.
 
 `DATASETS` stores paired target/prefix values, and `CONTAINS` stores the archive
 basename tokens accepted with OR semantics. For example:
@@ -294,10 +309,12 @@ inline const std::vector<std::string> CONTAINS = {"v1", "v2"};
 
 | Option | Purpose |
 |:---|:---|
+| `--config PATH` | Load an INI file before applying CLI overrides. |
 | `--run-extcat BOOL` | Enable or disable external-catalog repartitioning. |
 | `--run-init BOOL` | Enable or disable archive initialization at runtime. |
 | `--run-main BOOL` | Enable or disable the numerical pipeline at runtime. |
 | `--run-rearr BOOL` | Enable or disable `_all.cat` spatial rearrangement; it follows `process_main` when both run. |
+| `--run-fd BOOL` | Enable or disable the field-distortion test. |
 | `--extcat-input PATH` | Directory containing any number of raw text catalogs. |
 | `--extcat-output PATH` | Destination tile directory and effective C++ `SOURCE_CAT`. |
 | `--extcat-contains TEXT` | Repeatable case-sensitive basename token; repeats use OR. |
@@ -323,7 +340,7 @@ inline const std::vector<std::string> CONTAINS = {"v1", "v2"};
 | `--expo-list PATH` | Exposure list used in main/rearr-only mode. |
 | `--help` | Print the effective command contract. |
 
-Boolean values accept `true`/`false`, `1`/`0`, and `on`/`off`. One legacy
+Boolean values accept `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. One legacy
 positional exposure-list path is retained as a compatibility alias, but new jobs
 should use `--expo-list`. The first explicit `--dataset` replaces configured
 `DATASETS`, and subsequent occurrences append. `--contains` follows the same

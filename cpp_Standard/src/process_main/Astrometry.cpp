@@ -2,6 +2,7 @@
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "FitsIO.hpp"
 #include "LinearSolve.hpp"
@@ -441,7 +442,12 @@ namespace Astrometry {
             << wcs.cd[1][0] << " " << wcs.cd[1][1] << "\n";
     }
 
-    void getAstrometryCatalog(int nx, int ny, int npx, int npy, const std::vector<float>& image,
+    // ==========================================
+    // Function: Extract sources for astrometric matching
+    // Method: Segment the supplied image at its physical dimensions and retain
+    //         the strongest bounded connected components for matching.
+    // ==========================================
+    void getAstrometryCatalog(int nx, int ny, const std::vector<float>& image,
                               const std::vector<int>& weight, int n_user_max, int ns_max,
                               int& ns, std::vector<double>& xs, std::vector<double>& ys) {
         std::vector<int> mark(nx * ny, 0);
@@ -951,7 +957,8 @@ namespace Astrometry {
 
         int n_user = 0;
         std::vector<double> xs, ys;
-        getAstrometryCatalog(nx, ny, nx, ny, map, weight, n_user_max, nss_max, n_user, xs, ys);
+        getAstrometryCatalog(
+            nx, ny, map, weight, n_user_max, nss_max, n_user, xs, ys);
 
         int astrometry_shift_range = static_cast<int>(std::max(nx, ny) * astrometry_shift_ratio);
         std::vector<int> box(n_ref, 0);
@@ -1513,7 +1520,7 @@ namespace Astrometry {
     // Method: Preserve F77 check-file layout with 17-digit double serialization.
     // ==========================================
     void chipProcessAstrometry(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput) {
-        if (LensingConfig::ASTROMETRY_trivial == 1) {
+        if (RuntimeConfigStore::get().lensing.astrometry_trivial == 1) {
             getAstrometryTrivial(imageFiles, nchip, dirOutput);
             return;
         } else {

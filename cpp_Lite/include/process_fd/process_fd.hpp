@@ -11,7 +11,7 @@
 //         applying star removal, recovering shear, and writing FD_test_comb.dat.
 // ==========================================
 int process_fd(const std::string& exposure_list,
-               const ProcessConfig::RuntimeOptions& options,
+               const RuntimeConfig& runtime_config,
                const std::string& dataset_root,
                const PipelineCatalog::CatalogLayout& layout);
 

@@ -14,7 +14,7 @@
 // Method: Convert unified runtime options into the preserved initializer modules
 //         and return the generated absolute exposure-list path on success.
 // ==========================================
-int process_init(const ProcessConfig::RuntimeOptions& options,
+int process_init(const RuntimeConfig& runtime_config,
                  const InitConfig::DatasetSpec& dataset,
                  std::string& generated_expo_list) {
     int rank = 0;
@@ -22,20 +22,21 @@ int process_init(const ProcessConfig::RuntimeOptions& options,
     generated_expo_list.clear();
 
     fqinit::Config config;
-    config.science_root = options.science_root;
-    config.dq_root = options.dq_root;
-    config.output_root = options.output_root;
+    const InitRuntimeConfig& init = runtime_config.init;
+    config.science_root = init.science_root;
+    config.dq_root = init.dq_root;
+    config.output_root = init.output_root;
     config.target = dataset.target;
     config.filename_prefix = dataset.prefix;
-    config.filename_tokens = options.contains;
-    config.f77_max_path = options.f77_max_path;
-    config.max_chip = LensingConfig::NMAX_CHIP;
+    config.filename_tokens = init.contains;
+    config.f77_max_path = init.f77_max_path;
+    config.max_chip = runtime_config.lensing.nmax_chip;
 
-    if (options.existing == "fail") {
+    if (init.existing == "fail") {
         config.existing_policy = fqinit::ExistingPolicy::Fail;
-    } else if (options.existing == "resume") {
+    } else if (init.existing == "resume") {
         config.existing_policy = fqinit::ExistingPolicy::Resume;
-    } else if (options.existing == "overwrite") {
+    } else if (init.existing == "overwrite") {
         config.existing_policy = fqinit::ExistingPolicy::Overwrite;
     } else {
         if (rank == 0) {

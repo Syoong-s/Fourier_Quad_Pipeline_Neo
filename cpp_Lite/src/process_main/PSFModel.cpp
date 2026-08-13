@@ -4,6 +4,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
 #include "NumericalRecipes.hpp"
@@ -23,6 +24,8 @@
 #include <array>
 #include <cstddef>
 #include <complex>
+#include <initializer_list>
+#include <limits>
 #include <memory>
 
 // Extern variables defined elsewhere (e.g. main.cpp)
@@ -72,6 +75,26 @@ namespace PSFModel {
     }
 
     // ==========================================
+    // Function: Compute a checked runtime allocation size
+    // Method: Multiply dimensions in size_t and abort coherently before an
+    //         overflow could under-allocate a PSF buffer.
+    // ==========================================
+    static std::size_t checkedElementCount(
+        std::initializer_list<std::size_t> dimensions,
+        const std::string& operation) {
+        std::size_t count = 1;
+        for (const std::size_t dimension : dimensions) {
+            if (dimension != 0
+                && count > std::numeric_limits<std::size_t>::max() / dimension) {
+                MPIFailure::abortWorld(
+                    operation, "runtime dimensions overflow size_t");
+            }
+            count *= dimension;
+        }
+        return count;
+    }
+
+    // ==========================================
     // Function: Read one PSF stamp cube with its catalog-defined shape
     // Method: Decode the FITS axes first and abort the MPI world unless width,
     //         height, and plane count exactly match the direct consumer.
@@ -108,12 +131,23 @@ namespace PSFModel {
         UniversalUtils::getImageList(expo_file_path, imageFiles, dirOutput);
 
         int nchip = static_cast<int>(imageFiles.size());
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
+        if (nchip > lensing.nmax_chip) {
+            MPIFailure::abortWorld(
+                "run Lite Stage-5 PSF model",
+                "exposure chip count " + std::to_string(nchip)
+                    + " exceeds configured nmax_chip="
+                    + std::to_string(lensing.nmax_chip));
+        }
 
         auto state_ptr = std::make_unique<ExposurePSFState>(nchip);
         ExposurePSFState& state = *state_ptr;
 
         int nc = 0;
-        std::vector<std::array<double, 4>> p_chip(LensingConfig::NMAX_CHIP, {0.0, 0.0, 0.0, 0.0});
+        std::vector<std::array<double, 4>> p_chip(
+            static_cast<std::size_t>(lensing.nmax_chip),
+            {0.0, 0.0, 0.0, 0.0});
 
         readInCandidates(nchip, imageFiles, dirOutput, nc, p_chip, state);
 
@@ -133,6 +167,8 @@ namespace PSFModel {
     // ==========================================
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
 
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string headname = dirOutput + "/astrometry/Head/" + prefix_e + ".head";
@@ -174,8 +210,8 @@ namespace PSFModel {
             p_chip[nc - 1][0] = xx;
             p_chip[nc - 1][1] = yy;
 
-            x = 2046.0;
-            y = 4094.0;
+            x = static_cast<double>(lensing.chipnx);
+            y = static_cast<double>(lensing.chipny);
             Astrometry::xyToXxyy(x, y, xx, yy, cRPIX, cD);
             p_chip[nc - 1][2] = xx;
             p_chip[nc - 1][3] = yy;
@@ -502,9 +538,11 @@ namespace PSFModel {
 
         outfile << "# ichip nstar FWHM e1 e2 chi_d\n";
 
-        const std::size_t initial_star_capacity =
-            static_cast<std::size_t>(LensingConfig::NMAX_CHIP)
-            * LensingConfig::nstar_max;
+        const std::size_t initial_star_capacity = checkedElementCount(
+            {static_cast<std::size_t>(
+                 RuntimeConfigStore::get().lensing.nmax_chip),
+             static_cast<std::size_t>(LensingConfig::nstar_max)},
+            "reserve Lite exposure PSF diagnostics");
         std::vector<std::array<double, 5>> sk;
         sk.reserve(initial_star_capacity);
 
@@ -566,6 +604,8 @@ namespace PSFModel {
     void makePSFLocalFit(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
         int npl = LensingConfig::npl;
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
 
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string comp_filename = dirOutput + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
@@ -621,7 +661,7 @@ namespace PSFModel {
             if (nums >= LensingConfig::nstar_min_local) {
                 fit_status = itpNormPSF(
                     nums, star_local, posi, ns, npl,
-                    LensingConfig::chipnx, LensingConfig::chipny,
+                    lensing.chipnx, lensing.chipny,
                     PSF_coe_l, &fit_diagnostics);
             }
 
@@ -634,8 +674,10 @@ namespace PSFModel {
                 float poly_ave = 0.0f, poly_std = 0.0f;
 
                 for (int i = 0; i < nums; ++i) {
-                    double xx = 2.0 * (posi[i][0] / static_cast<double>(LensingConfig::chipnx)) - 1.0;
-                    double yy = 2.0 * (posi[i][1] / static_cast<double>(LensingConfig::chipny)) - 1.0;
+                    double xx = 2.0 * (posi[i][0]
+                        / static_cast<double>(lensing.chipnx)) - 1.0;
+                    double yy = 2.0 * (posi[i][1]
+                        / static_cast<double>(lensing.chipny)) - 1.0;
                     std::vector<float> model, model0;
                     getPSFModel(ns, npl, PSF_coe_l, xx, yy, model, model0);
                     ExStar::anaChi2Simple(ns, model.data(), model0.data(), poly_cochi2[i]);
@@ -937,6 +979,7 @@ namespace PSFModel {
             return;
         }
         double beta = ns / (2.0 * LensingConfig::pi) / std::sqrt(area / LensingConfig::pi);
-        FWHM = beta * 2.0 * std::sqrt(2.0 * std::log(2.0)) * LensingConfig::pixel_size;
+        FWHM = beta * 2.0 * std::sqrt(2.0 * std::log(2.0))
+             * RuntimeConfigStore::get().lensing.pixel_size;
     }
 }

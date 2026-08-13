@@ -18,14 +18,14 @@ int process_main(const std::string& exposure_list);
 //         broadcasting the exposure list, preserving the one-argument compatibility entry point.
 // ==========================================
 int process_main(const std::string& exposure_list,
-                 const ProcessConfig::RuntimeOptions& options);
+                 const RuntimeConfig& runtime_config);
 
 // ==========================================
 // Function: Run the numerical Fourier_Quad pipeline with one shared catalog layout
 // Method: Consume the startup-resolved schema while executing stages on unified runtime options.
 // ==========================================
 int process_main(const std::string& exposure_list,
-                 const ProcessConfig::RuntimeOptions& options,
-                 const PipelineCatalog::CatalogLayout& layout);
+                 const RuntimeConfig& runtime_config,
+                 const PipelineCatalog::CatalogLayout* external_layout);
 
 #endif  // PROCESS_MAIN_PROCESS_MAIN_HPP

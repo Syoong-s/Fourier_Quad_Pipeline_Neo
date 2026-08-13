@@ -42,7 +42,7 @@ enum class ExistingPolicy {
 // ==========================================
 // Structure: Configure standalone or integrated external-catalog tiling
 // Method: Keep filesystem, schema, parsing, task-size, and lifecycle controls in
-//         a reusable form below the pipeline RuntimeOptions adapter.
+//         a reusable form below the pipeline RuntimeConfig adapter.
 // ==========================================
 struct Config {
     std::filesystem::path input_directory;
@@ -88,11 +88,10 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator = MPI_COM
 
 // ==========================================
 // Function: Run external-catalog tiling from unified pipeline options
-// Method: Translate ProcessConfig values, verify projection width against the startup
-//         layout, and participate collectively on the pipeline-owned MPI communicator.
+// Method: Translate the extcat section, preserve its configured projection
+//         width, and participate collectively on the pipeline-owned communicator.
 // ==========================================
-int process_extcat(const ProcessConfig::RuntimeOptions& options,
-                   const PipelineCatalog::CatalogLayout& layout,
+int process_extcat(const RuntimeConfig& runtime_config,
                    MPI_Comm communicator = MPI_COMM_WORLD);
 
 #endif  // PROCESS_EXTCAT_PROCESS_EXTCAT_HPP

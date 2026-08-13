@@ -8,6 +8,10 @@ test_point_source_statistics
 test_stamp_cube_io
 test_psf_recons_orientation
 test_catalog_layout
+test_catalog_row_count
+test_psf_model_state
+test_runtime_config
+test_universalblock
 
 # Superplan planning workspace
 .planning/

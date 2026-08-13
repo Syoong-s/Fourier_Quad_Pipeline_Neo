@@ -17,6 +17,7 @@ CPPFLAGS += -I$(EIGEN_INCLUDE)
 endif
 
 SRCS = main.cpp \
+       src/RuntimeConfig.cpp \
        src/CatalogLayout.cpp \
        src/process_extcat/process_extcat.cpp \
        src/process_rearr/process_rearr.cpp \
@@ -64,6 +65,7 @@ UNIVERSALBLOCK_TEST = tests/test_universalblock
 CATALOG_LAYOUT_TEST = tests/test_catalog_layout
 CATALOG_ROW_COUNT_TEST = tests/test_catalog_row_count
 PSF_MODEL_STATE_TEST = tests/test_psf_model_state
+RUNTIME_CONFIG_TEST = tests/test_runtime_config
 
 all: $(TARGET)
 
@@ -87,6 +89,9 @@ test-catalog-row-count: $(CATALOG_ROW_COUNT_TEST)
 
 test-psf-model-state: $(PSF_MODEL_STATE_TEST)
 	./$(PSF_MODEL_STATE_TEST)
+
+test-runtime-config: $(RUNTIME_CONFIG_TEST)
+	./$(RUNTIME_CONFIG_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -124,6 +129,7 @@ $(UNIVERSALBLOCK_TEST): tests/UniversalblockTest.cpp \
 		$(LDFLAGS) -o $@ $(LDLIBS)
 
 $(CATALOG_LAYOUT_TEST): tests/CatalogLayoutTest.cpp \
+                       src/RuntimeConfig.cpp \
                        src/CatalogLayout.cpp \
                        src/process_main/ExternalCatalogReader.cpp \
                        src/process_fd/FDMagnitudeSelector.cpp \
@@ -134,6 +140,7 @@ $(CATALOG_LAYOUT_TEST): tests/CatalogLayoutTest.cpp \
                        include/process_fd/ShearCatalogReader.hpp
 	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
 		tests/CatalogLayoutTest.cpp \
+		src/RuntimeConfig.cpp \
 		src/CatalogLayout.cpp \
 		src/process_main/ExternalCatalogReader.cpp \
 		src/process_fd/FDMagnitudeSelector.cpp \
@@ -151,6 +158,19 @@ $(PSF_MODEL_STATE_TEST): tests/PSFModelStateTest.cpp \
 	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
 		tests/PSFModelStateTest.cpp -o $@
 
+$(RUNTIME_CONFIG_TEST): tests/RuntimeConfigTest.cpp \
+                       src/RuntimeConfig.cpp \
+                       src/CatalogLayout.cpp \
+                       include/RuntimeConfig.hpp \
+                       include/CatalogLayout.hpp \
+                       config/ProcessConfig.hpp \
+                       config/ExtCatConfig.hpp \
+                       config/InitConfig.hpp \
+                       config/LensingConfig.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		tests/RuntimeConfigTest.cpp src/RuntimeConfig.cpp \
+		src/CatalogLayout.cpp -o $@
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -162,10 +182,12 @@ clean:
 	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
 	      $(UNIVERSALBLOCK_TEST) $(CATALOG_LAYOUT_TEST) \
 	      $(CATALOG_ROW_COUNT_TEST) $(PSF_MODEL_STATE_TEST) \
+	      $(RUNTIME_CONFIG_TEST) \
 	      tests/catalog_layout_selected_magnitude.tmp
 
 -include $(DEPS)
 
 .PHONY: all clean test-point-source-statistics test-stamp-cube-io \
         test-psf-recons-orientation test-universalblock test-catalog-layout \
-        test-catalog-row-count test-psf-model-state
+        test-catalog-row-count test-psf-model-state \
+        test-runtime-config

@@ -1,7 +1,7 @@
 #ifndef CATALOG_LAYOUT_HPP
 #define CATALOG_LAYOUT_HPP
 
-#include "ProcessConfig.hpp"
+#include "RuntimeConfig.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -81,7 +81,7 @@ struct CatalogLayout {
 // Method: Map mandatory fields and available optional magnitudes through the
 //         projection, then derive every downstream row offset.
 // ==========================================
-bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
+bool resolveCatalogLayout(const RuntimeConfig& config,
                           CatalogLayout& layout,
                           std::string& error);
 

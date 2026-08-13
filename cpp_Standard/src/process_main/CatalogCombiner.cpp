@@ -4,6 +4,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "ExposureInfo.hpp"
@@ -144,7 +145,8 @@ void applyCombinedCatalogCalibration(std::vector<float>& cat,
 // ==========================================
 void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                         const std::string& dirOutput, float chi2) {
-    constexpr bool use_external_catalog = LensingConfig::ext_cat == 1;
+    const bool use_external_catalog =
+        RuntimeConfigStore::get().lensing.ext_cat == 1;
     const std::string prefix_expo =
         UniversalUtils::getPrefixExpo(imageFiles[0]);
     const std::string out_filename =
@@ -195,7 +197,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
         }
 
         std::string filename_orig;
-        if constexpr (use_external_catalog) {
+        if (use_external_catalog) {
             filename_orig = OutputLayout::chipPath(
                 dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
             Internal::requireMatchingCatalogDataRows(
@@ -217,7 +219,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
 
         std::ifstream fin15;
         std::string original_header;
-        if constexpr (use_external_catalog) {
+        if (use_external_catalog) {
             fin15.open(filename_orig);
             if (!fin15.is_open()) {
                 MPIFailure::abortWorld("read external source catalog", filename_orig);
@@ -237,7 +239,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
         if (!output_opened) {
             fout20.open(out_filename);
             fout20 << std::setprecision(10);
-            if constexpr (use_external_catalog) {
+            if (use_external_catalog) {
                 fout20 << original_header << " ccD_NUM "
                        << shear_probe.header << " Chi2\n";
             } else {
@@ -253,7 +255,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             if (!parseShearRow(line10, num_cols, cat)) continue;
 
             std::string cat_content;
-            if constexpr (use_external_catalog) {
+            if (use_external_catalog) {
                 if (!std::getline(fin15, cat_content)) {
                     break;
                 }
@@ -268,7 +270,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             ++n;
             applyCombinedCatalogCalibration(cat, use_external_catalog);
 
-            if constexpr (use_external_catalog) {
+            if (use_external_catalog) {
                 fout20 << cat_content << " ";
             }
 
@@ -280,7 +282,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             fout20 << " " << chi2 << "\n";
         }
 
-        if constexpr (use_external_catalog) {
+        if (use_external_catalog) {
             fin15.close();
         }
         fin10.close();

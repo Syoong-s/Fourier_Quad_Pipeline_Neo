@@ -19,19 +19,20 @@ namespace {
 // Function: Validate an explicit external-catalog projection
 // Method: Require positive, unique raw one-based indices so every field has one output position.
 // ==========================================
-bool validateProjection(const ProcessConfig::RuntimeOptions& options,
+bool validateProjection(const RuntimeConfig& config,
                         std::string& error) {
-    if (!options.extcat_use_explicit_columns) {
+    const ExtCatRuntimeConfig& extcat = config.extcat;
+    if (!extcat.use_explicit_columns) {
         return true;
     }
-    if (options.extcat_input_columns_one_based.empty()) {
+    if (extcat.input_columns_one_based.empty()) {
         error = "external-catalog explicit projection must not be empty";
         return false;
     }
 
     std::set<std::size_t> unique_columns;
     for (const std::size_t raw_column :
-         options.extcat_input_columns_one_based) {
+         extcat.input_columns_one_based) {
         if (raw_column == 0) {
             error = "external-catalog explicit projection columns must be positive one-based indices";
             return false;
@@ -53,7 +54,7 @@ bool validateProjection(const ProcessConfig::RuntimeOptions& options,
 bool resolveRequiredProjectedColumn(
     std::size_t raw_column_one_based,
     const std::string& field_name,
-    const ProcessConfig::RuntimeOptions& options,
+    const RuntimeConfig& config,
     std::size_t& effective_zero_based,
     std::string& error) {
     if (raw_column_one_based == 0) {
@@ -61,13 +62,14 @@ bool resolveRequiredProjectedColumn(
                 + " raw column must be a positive one-based index";
         return false;
     }
-    if (!options.extcat_use_explicit_columns) {
+    const ExtCatRuntimeConfig& extcat = config.extcat;
+    if (!extcat.use_explicit_columns) {
         effective_zero_based = raw_column_one_based - 1;
         return true;
     }
 
     const std::vector<std::size_t>& projection =
-        options.extcat_input_columns_one_based;
+        extcat.input_columns_one_based;
     const auto match = std::find(projection.begin(), projection.end(),
                                  raw_column_one_based);
     if (match == projection.end()) {
@@ -88,19 +90,20 @@ bool resolveRequiredProjectedColumn(
 // ==========================================
 void resolveOptionalProjectedColumn(
     std::size_t raw_column_one_based,
-    const ProcessConfig::RuntimeOptions& options,
+    const RuntimeConfig& config,
     std::optional<std::size_t>& effective_zero_based) {
     effective_zero_based.reset();
     if (raw_column_one_based == 0) {
         return;
     }
-    if (!options.extcat_use_explicit_columns) {
+    const ExtCatRuntimeConfig& extcat = config.extcat;
+    if (!extcat.use_explicit_columns) {
         effective_zero_based = raw_column_one_based - 1;
         return;
     }
 
     const std::vector<std::size_t>& projection =
-        options.extcat_input_columns_one_based;
+        extcat.input_columns_one_based;
     const auto match = std::find(projection.begin(), projection.end(),
                                  raw_column_one_based);
     if (match != projection.end()) {
@@ -178,47 +181,44 @@ std::string describeOptionalColumn(
 // Method: Map mandatory fields and available optional magnitudes through the
 //         projection, then derive every downstream row offset.
 // ==========================================
-bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
+bool resolveCatalogLayout(const RuntimeConfig& config,
                           CatalogLayout& layout,
                           std::string& error) {
-    if (!validateProjection(options, error)) {
-        return false;
-    }
-    if (LensingConfig::ext_cat != 1) {
-        error = "the shared CatalogLayout currently requires LensingConfig::ext_cat == 1";
+    if (!validateProjection(config, error)) {
         return false;
     }
 
+    const ExtCatRuntimeConfig& extcat = config.extcat;
     CatalogLayout resolved;
-    resolved.external_columns = options.extcat_use_explicit_columns
-        ? options.extcat_input_columns_one_based.size()
-        : options.extcat_total_columns;
+    resolved.external_columns = extcat.use_explicit_columns
+        ? extcat.input_columns_one_based.size()
+        : extcat.total_columns;
     if (resolved.external_columns == 0) {
         error = "external-catalog effective width must be positive";
         return false;
     }
 
     if (!resolveRequiredProjectedColumn(
-            options.extcat_ra_column_one_based, "RA", options,
+            extcat.ra_column_one_based, "RA", config,
             resolved.external.ra, error)
         || !resolveRequiredProjectedColumn(
-            options.extcat_dec_column_one_based, "Dec", options,
+            extcat.dec_column_one_based, "Dec", config,
             resolved.external.dec, error)
         || !resolveRequiredProjectedColumn(
-            options.extcat_zp_column_one_based, "ZP", options,
+            extcat.zp_column_one_based, "ZP", config,
             resolved.external.zp, error)) {
         return false;
     }
-    resolveOptionalProjectedColumn(options.extcat_mag_g_column_one_based,
-                                   options, resolved.external.mag_g);
-    resolveOptionalProjectedColumn(options.extcat_mag_r_column_one_based,
-                                   options, resolved.external.mag_r);
-    resolveOptionalProjectedColumn(options.extcat_mag_i_column_one_based,
-                                   options, resolved.external.mag_i);
-    resolveOptionalProjectedColumn(options.extcat_mag_z_column_one_based,
-                                   options, resolved.external.mag_z);
-    resolveOptionalProjectedColumn(options.extcat_mag_y_column_one_based,
-                                   options, resolved.external.mag_y);
+    resolveOptionalProjectedColumn(extcat.mag_g_column_one_based,
+                                   config, resolved.external.mag_g);
+    resolveOptionalProjectedColumn(extcat.mag_r_column_one_based,
+                                   config, resolved.external.mag_r);
+    resolveOptionalProjectedColumn(extcat.mag_i_column_one_based,
+                                   config, resolved.external.mag_i);
+    resolveOptionalProjectedColumn(extcat.mag_z_column_one_based,
+                                   config, resolved.external.mag_z);
+    resolveOptionalProjectedColumn(extcat.mag_y_column_one_based,
+                                   config, resolved.external.mag_y);
     if (!validateExternalFields(resolved, error)) {
         return false;
     }
@@ -277,6 +277,42 @@ bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
     }
 
     layout = resolved;
+    error.clear();
+    return true;
+}
+
+// ==========================================
+// Function: Resolve process_rearr's minimal runtime schema
+// Method: Reuse the external layout when enabled or derive the 30-field internal
+//         `[CCD_NUM]+28 Stage-7 fields+Chi2` contract directly from fixed indices.
+// ==========================================
+bool resolveRearrCatalogSchema(const RuntimeConfig& config,
+                               const CatalogLayout* external_layout,
+                               RearrCatalogSchema& schema,
+                               std::string& error) {
+    RearrCatalogSchema resolved;
+    if (config.lensing.ext_cat == 1) {
+        if (external_layout == nullptr) {
+            error = "external rearr schema requires a resolved CatalogLayout";
+            return false;
+        }
+        resolved.all_columns = external_layout->all_columns;
+        resolved.ra_column = external_layout->external.ra;
+        resolved.dec_column = external_layout->external.dec;
+    } else {
+        resolved.all_columns = 1U
+            + static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
+        resolved.ra_column = 1U + static_cast<std::size_t>(LensingConfig::ira);
+        resolved.dec_column = 1U + static_cast<std::size_t>(LensingConfig::idec);
+    }
+    if (resolved.all_columns == 0
+        || resolved.ra_column >= resolved.all_columns
+        || resolved.dec_column >= resolved.all_columns
+        || resolved.ra_column == resolved.dec_column) {
+        error = "resolved process_rearr catalog schema is inconsistent";
+        return false;
+    }
+    schema = resolved;
     error.clear();
     return true;
 }

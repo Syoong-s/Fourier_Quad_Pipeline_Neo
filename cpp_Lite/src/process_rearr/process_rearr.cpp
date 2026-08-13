@@ -206,7 +206,7 @@ bool resolveCatalogPathFromImage(const std::string& exposure_list_path,
 //         order before broadcasting the schema and starting dynamic reads.
 // ==========================================
 bool prepareInputs(const std::string& exposure_list,
-                   const ProcessConfig::RuntimeOptions& options,
+                   const ProcessRuntimeConfig& process,
                    PreparedInputs& prepared,
                    std::string& error) {
     std::vector<std::string> exposure_paths;
@@ -228,10 +228,10 @@ bool prepareInputs(const std::string& exposure_list,
         prepared.catalog_paths.push_back(catalog_path.string());
     }
 
-    const std::string base_dir_str(options.rearr_output_base_directory);
+    const std::string base_dir_str(process.rearr_output_base_directory);
     const fs::path base_dir =
         base_dir_str.empty() ? output_base_root : fs::path(base_dir_str);
-    fs::path configured_output(options.rearr_output_directory);
+    fs::path configured_output(process.rearr_output_directory);
     if (configured_output.empty()) {
         configured_output = base_dir;
     } else if (configured_output.is_relative()) {
@@ -978,20 +978,22 @@ bool generateRearrangedExpoList(const std::string& output_directory,
 //         reads, then build, redistribute, and write the weighted k-d partitions.
 // ==========================================
 int process_rearr(const std::string& exposure_list,
-                  const ProcessConfig::RuntimeOptions& options,
+                  const RuntimeConfig& runtime_config,
                   const PipelineCatalog::CatalogLayout& layout,
                   MPI_Comm communicator) {
     int rank = 0;
     int world_size = 1;
     MPI_Comm_rank(communicator, &rank);
     MPI_Comm_size(communicator, &world_size);
+    const ProcessRuntimeConfig& process = runtime_config.process;
 
     std::string local_error;
     bool local_success = true;
 
     PreparedInputs prepared;
     int preparation_ok = 1;
-    if (rank == 0 && !prepareInputs(exposure_list, options, prepared, local_error)) {
+    if (rank == 0
+        && !prepareInputs(exposure_list, process, prepared, local_error)) {
         preparation_ok = 0;
     }
     MPI_Bcast(&preparation_ok, 1, MPI_INT, 0, communicator);
@@ -1242,13 +1244,13 @@ int process_rearr(const std::string& exposure_list,
     std::string rearranged_list_path;
     if (rank == 0) {
         const std::string& configured_list_dir(
-            options.rearranged_expo_list_directory);
+            process.rearranged_expo_list_directory);
         const fs::path list_dir = configured_list_dir.empty()
             ? fs::path(exposure_list).parent_path()
             : fs::path(configured_list_dir);
         rearranged_list_path =
             fs::absolute(list_dir
-                         / options.rearranged_expo_list_filename)
+                         / process.rearranged_expo_list_filename)
                 .lexically_normal().string();
         if (!generateRearrangedExpoList(prepared.output_directory,
                                         rearranged_list_path,

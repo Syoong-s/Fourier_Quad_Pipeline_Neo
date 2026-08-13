@@ -9,10 +9,6 @@ namespace LensingConfig {
     constexpr double pi = 3.14159265358979323846;
     constexpr double arc_convert = pi / 180.0;
 
-    // Image/CCD size parameters
-    constexpr int npx = 3000;
-    constexpr int npy = 5000;
-
     // Stage control parameters
     constexpr int ASTROMETRY_trivial = 0;
     constexpr int PROCESS_stage = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23;
@@ -24,10 +20,10 @@ namespace LensingConfig {
 
     // ==========================================
     // Configuration: Primary external source-catalog directory
-    // Method: Seed process_extcat output and process_main input from one mutable path so a
-    //         command-line override can update both phases before processing starts.
+    // Method: Seed RuntimeConfig's authoritative extcat output/source path;
+    //         runtime file or CLI overrides update the copied value.
     // ==========================================
-    inline std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";
+    inline const std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";
     const std::string FLAT_PATH = "/lustre/home/acct-phyzj/share/DES/testy/DES_super_flat/i2014";
     const std::string PSF_PATH = "hahahaha";
 
@@ -163,9 +159,8 @@ namespace LensingConfig {
     constexpr int expo_cat_ncols = shear_cat_ncols + 1;
     constexpr int ichi2 = shear_cat_ncols;
 
-    // Max counts
-    constexpr int NMAX_EXPO = 25000;
-    constexpr int NMAX_CHIP = 62;
+    // Default camera chip count. RuntimeConfig owns the effective run value.
+    constexpr int DEFAULT_CHIP_COUNT = 62;
 
     // Band correction parameters
     constexpr double g1_c = -0.001;

@@ -7,6 +7,33 @@ configuration, building, run modes, initializer output layout, Docker, and HPC -
 now lives in [`../CPP_GUIDE.md`](../CPP_GUIDE.md). The full parameter reference
 is [`../CPP_PIPELINE_PARAMETERS.md`](../CPP_PIPELINE_PARAMETERS.md).
 
+## Runtime configuration
+
+`RuntimeConfig` now owns every run-selectable Process, ExtCat, Init, and
+Standard Lensing value. Start from [`pipeline.example.ini`](pipeline.example.ini)
+and launch with:
+
+```bash
+./Fourier_Quad_Pipe --config pipeline.ini
+```
+
+The precedence is compiled header defaults, then the INI file, then CLI
+overrides. Both `--name value` and `--name=value` remain supported. Rank 0 alone
+reads the file and broadcasts its exact text; every MPI rank parses and validates
+the same text before the write-once configuration store is initialized.
+
+The INI parser accepts `[process]`, `[extcat]`, `[init]`, and `[lensing]`, `#` or
+`;` comments, quoted strings, comma-separated lists, and common boolean forms.
+Unknown sections/keys and malformed values fail startup with file, section, key,
+value, and reason. `source_cat` is a compatibility alias for the authoritative
+`extcat.output_directory` field.
+
+`ext_cat=0` selects the internal Stage-3/9 catalog path and its 30-column rearr
+schema without resolving or configuring an external catalog. FD still requires
+`ext_cat=1` and fails validation otherwise. `nmax_chip`, `chipnx`, and `chipny`
+are runtime values with positive-value validation but no DECam-specific hard
+ceiling. The removed `npx`, `npy`, and `NMAX_EXPO` settings are not accepted.
+
 ## Stamp-cube format
 
 Stage 3--7 stamp collections are contiguous three-dimensional FITS images with
@@ -51,6 +78,9 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 make CXX="${MPI_PREFIX}/bin/mpicxx" \
   STACK_PREFIX="${STACK_PREFIX}" \
   EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-psf-model-state
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-runtime-config
 ./Fourier_Quad_Pipe --help
 ```
 
@@ -58,7 +88,10 @@ The stamp-cube test verifies a non-square `5 x 3 x 4` round trip, raw FITS axes
 and metadata, and dense selected-plane ordering. The PSF test exercises the same
 row-major copy, centering, and reconstruction helpers used by `PSFRecons`, using
 asymmetric pixels and a numerical comparison with the legacy feature permutation.
-The catalog-row-count test covers equal 100-row catalogs, both mismatch
+The runtime-config test covers compiled defaults, every INI value family,
+transactional diagnostics, file/CLI precedence, list behavior, stage and FD
+dependencies, non-default geometry, internal rearr schema, and the write-once
+store. The catalog-row-count test covers equal 100-row catalogs, both mismatch
 directions, and paired header-only catalogs. The PSF-state test covers actual
 candidate counts of 0, 10, 300, and 2301, including full live-stride matrix
 access beyond the 2000-row reservation hint.
@@ -85,8 +118,9 @@ the existing row parsing, cuts, calibration, and pairing order remain unchanged.
 
 ## Runtime catalog layout
 
-`CatalogLayout` is resolved once in `main` from `RuntimeOptions` and passed to
-`process_extcat`, `process_main`, `process_rearr`, and `process_fd`. In
+External `CatalogLayout` is resolved once in `main` from `RuntimeConfig` and
+passed only to phases that consume external rows. Rearrangement receives the
+smaller external-or-internal `RearrCatalogSchema`. In
 pass-through mode, `EXTCAT_TOTAL_COLUMNS` supplies the external prefix width.
 With explicit projection, the external width is the projection length and all
 downstream CCD, source-suffix, and complete-row offsets follow that runtime

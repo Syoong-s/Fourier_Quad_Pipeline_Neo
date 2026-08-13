@@ -1,6 +1,7 @@
 #include "PreProcess.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
@@ -396,6 +397,7 @@ namespace PreProcess {
     // Method: Match the Fortran Stage 1 flow while keeping diagnostics side-effect free.
     // ==========================================
     void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid) {
+        const LensingRuntimeConfig& lensing = RuntimeConfigStore::get().lensing;
         int proc_error = 0;
         int nx = 0, ny = 0;
         std::vector<float> array;
@@ -405,15 +407,7 @@ namespace PreProcess {
         bool image_read_ok = FitsIO::readImagePara(imageFile, nx, ny, array, wcs);
         if (!image_read_ok || (!array.empty() && array[0] < -99990.0f)) {
             std::cerr << "Error reading image parameters of: " << imageFile << std::endl;
-            proc_error = 1;
-            if (nx <= 0 || ny <= 0 || array.empty()) {
-                nx = LensingConfig::npx;
-                ny = LensingConfig::npy;
-                array.assign(static_cast<size_t>(nx) * static_cast<size_t>(ny), -99999.0f);
-            } else if (array.size() < static_cast<size_t>(nx) * static_cast<size_t>(ny)) {
-                array.assign(static_cast<size_t>(nx) * static_cast<size_t>(ny), -99999.0f);
-            }
-            array[0] = -99999.0f;
+            return;
         }
 
         std::vector<int> weight(nx * ny, 1);
@@ -433,7 +427,7 @@ namespace PreProcess {
         int nxc = nx / 2;
         double aa = 0.0, bb = 0.0, cc = 0.0;
 
-        if (LensingConfig::CCD_split == 2) {
+        if (lensing.ccd_split == 2) {
             setBackground(0, nxc, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             setBackground(nxc, nx, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             
@@ -488,7 +482,8 @@ namespace PreProcess {
         std::string astroFilename = OutputLayout::chipPath(
             dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
-        std::string catfile = UniversalUtils::generateGaiaFileName(LensingConfig::ASTROMETRY_CAT, wcs.crval, proc_error);
+        std::string catfile = UniversalUtils::generateGaiaFileName(
+            lensing.astrometry_cat, wcs.crval, proc_error);
         Astrometry::genAstrometryData(catfile, nx, ny, normap, weight, wcs, astroFilename, proc_error);
 
         locateDefects(nx, ny, array, normap, weight, LensingConfig::area_max, LensingConfig::area_thresh, proc_error);
@@ -510,7 +505,7 @@ namespace PreProcess {
             normap[0] = 1.0f;
         }
 
-        for (int i = 1; i <= LensingConfig::CCD_split; ++i) {
+        for (int i = 1; i <= lensing.ccd_split; ++i) {
             for (int j = 1; j <= 3; ++j) {
                 normap[(j - 1) * nx + i] = static_cast<float>(sigabc[i - 1][j - 1]);
             }

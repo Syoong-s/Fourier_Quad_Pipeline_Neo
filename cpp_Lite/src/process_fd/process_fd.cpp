@@ -49,10 +49,6 @@ bool loadExposureList(const std::string& path, std::vector<std::string>& files,
             std::cerr << "EXPO_LIST contains no exposures: " << path << std::endl;
             return false;
         }
-        if (static_cast<int>(files.size()) > LensingConfig::NMAX_EXPO) {
-            std::cerr << "EXPO_LIST exceeds NMAX_EXPO: " << path << std::endl;
-            return false;
-        }
         std::cout << "Total number of EXPOSURE: " << files.size() << std::endl;
     }
     return true;
@@ -81,11 +77,21 @@ void broadcastExposureList(std::vector<std::string>& files, int rank) {
 //         jackknife), and write FD_test_comb.dat.
 // ==========================================
 int process_fd(const std::string& exposure_list,
-               const ProcessConfig::RuntimeOptions& options,
+               const RuntimeConfig& runtime_config,
                const std::string& dataset_root,
                const PipelineCatalog::CatalogLayout& layout) {
     const int rank = MPIScheduler::my_id;
     const int num_procs = MPIScheduler::num_procs;
+    if (!RuntimeConfigStore::isInitialized()) {
+        std::string store_error;
+        if (!RuntimeConfigStore::initialize(runtime_config, store_error)) {
+            if (rank == 0) {
+                std::cerr << "Runtime config error: " << store_error
+                          << std::endl;
+            }
+            return 1;
+        }
+    }
 
     // ==========================================
     // Logic: Select one catalog magnitude before any FD file I/O
@@ -234,11 +240,13 @@ int process_fd(const std::string& exposure_list,
 
     // 7. Write output
     if (rank == 0) {
-        const std::string base_dir_str(options.fd_output_base_directory);
+        const std::string base_dir_str(
+            runtime_config.process.fd_output_base_directory);
         const std::filesystem::path base_dir =
             base_dir_str.empty() ? std::filesystem::path(dataset_root)
                                  : std::filesystem::path(base_dir_str);
-        std::filesystem::path configured_output(options.fd_output_directory);
+        std::filesystem::path configured_output(
+            runtime_config.process.fd_output_directory);
         if (configured_output.empty()) {
             configured_output = base_dir;
         } else if (configured_output.is_relative()) {

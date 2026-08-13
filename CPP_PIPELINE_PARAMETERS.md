@@ -10,19 +10,22 @@ main, rearrangement, and FD catalog consumers.
 | Column | Meaning |
 |:---|:---|
 | Parameter file name | The constant name as it appears in the configuration header (`ProcessConfig.hpp`, `LensingConfig.hpp`, or `ProcessRearrConfig.hpp`). |
-| CLI parameter | The command-line option that overrides the compiled default at runtime. `—` marks a compile-time-only parameter (no CLI override; rebuild required). |
+| CLI parameter | The command-line option when one exists. `INI [section] key` marks a file-only runtime override. `—` means compile-time-only. |
 | Options | All accepted values; the default is suffixed with `*`. For single-valued constants the sole value is shown with `*`. |
 | Function description | What the parameter controls and what each option value does. |
 
 **Configuration layers and precedence**
 
-1. **`ProcessConfig.hpp`** — workflow defaults. A matching CLI option overrides the
-   default for one invocation; rebuilding is not required.
-2. **`LensingConfig.hpp`** — scientific and numerical constants. Changes require
-   rebuilding the selected C++ variant.
-3. **`ProcessRearrConfig.hpp`** — parameters used only by `process_rearr`.
-   Changes require rebuilding.
-4. **`CatalogLayout` (both C++ variants)** — derived runtime catalog schema. It is not a
+1. **Compiled headers** — `ProcessConfig.hpp`, `ExtCatConfig.hpp`,
+   `InitConfig.hpp`, and the live runtime defaults in `LensingConfig.hpp` seed
+   the selected variant.
+2. **INI file** — `--config PATH` applies `[process]`, `[extcat]`, `[init]`, and
+   `[lensing]` overrides without rebuilding.
+3. **CLI** — matching command-line values override both compiled and file
+   values. The effective precedence is compiled defaults < INI < CLI.
+4. **Fixed headers** — catalog indices, array dimensions, algorithm constants,
+   and `ProcessRearrConfig.hpp` remain compile-time-only.
+5. **`CatalogLayout`** — derived runtime catalog schema. It is not a
    precedence layer: `main` resolves it once from normalized runtime options
    and existing `LensingConfig` source-field indices.
 
@@ -31,16 +34,19 @@ CLI options accept both `--name value` and `--name=value`. Boolean values accept
 value. The first explicit `--dataset`, `--contains`, or `--extcat-contains`
 clears its configured list; later occurrences append.
 
-The root driver calls five functions in order: `process_extcat` (once), then
+Rank 0 reads the INI once and broadcasts its exact text; every rank parses and
+validates before initializing the immutable store. The root driver calls five
+functions in order: `process_extcat` (once), then
 `process_init` → `process_main` → `process_rearr` → `process_fd` (per dataset).
-At least one phase must be enabled.
+All phases may be disabled for a parse/validation dry run.
 
 ---
 
 ## Table 1 — process_extcat: External Catalog Repartitioning
 
-Splits raw external catalogs into 0.1-degree sky tiles. All parameters below
-are from `ProcessConfig.hpp` unless noted.
+Splits raw external catalogs into 0.1-degree sky tiles. Every field below is
+available in `[extcat]` using its lower-case short name; listed CLI options have
+the final precedence.
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -78,7 +84,8 @@ magnitude-range cut and size-magnitude star-bar calculation.
 ## Table 2 — process_init: Archive Discovery and Extraction
 
 Discovers Science/DQ FITS archives, extracts per-chip images, and publishes
-exposure lists. All parameters below are from `ProcessConfig.hpp`.
+exposure lists. Every initializer field is available in `[init]`; listed CLI
+options have the final precedence.
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -89,16 +96,16 @@ exposure lists. All parameters below are from `ProcessConfig.hpp`.
 | `DATASETS` | `--dataset` | List of `TARGET:PREFIX` pairs (both variants default `{"gband","c4d_"}*`) | One or more target/prefix pairs. Repeatable; the first `--dataset` clears the compiled list. Legacy `--target`/`--prefix` set a single pair and cannot mix with `--dataset`. |
 | `CONTAINS` | `--contains` | List of strings (default `{"v1"}*`; repeatable) | Case-sensitive basename substring filters for archive file discovery. A file matches if any token matches. The first CLI use clears the compiled list. |
 | `EXISTING` | `--existing` | `fail*`, `resume`, `overwrite` | `fail` rejects existing output; `resume` keeps existing files and continues; `overwrite` replaces all existing output. |
-| `F77_MAX_PATH` | `--f77-max-path` | Non-negative integer (both variants `150*`) | Maximum path length for generated exposure and chip-list files. `0` disables the limit. |
+| `F77_MAX_PATH` | `--f77-max-path` | Non-negative integer (both variants `0*`) | Maximum path length for generated exposure and chip-list files. `0` disables the limit. |
 | `EXPO_LIST` | `--expo-list` (or positional `LEGACY_EXPO_LIST`) | Path string (default `""*`) | Single exposure list for main/rearr-only mode. When `--run-init=true`, the initializer output takes precedence. Cannot serve multiple datasets in downstream-only mode. |
 
 ---
 
 ## Table 3 — process_main: Numerical Pipeline Stages
 
-Executes the Stage 1–9 Fourier_Quad shear pipeline. CLI-overridable parameters
-are from `ProcessConfig.hpp`; all others are compile-time constants from
-`LensingConfig.hpp` (rebuild required to change).
+Executes the Stage 1–9 Fourier_Quad shear pipeline. Run-selectable values are
+stored in `RuntimeConfig`; fixed dimensions, indices, thresholds, and algorithm
+constants remain in `LensingConfig.hpp`.
 
 ### 3a. Runtime (CLI-overridable) parameters
 
@@ -113,35 +120,32 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `EXTCAT_ZP_COLUMN_ONE_BASED` | `--extcat-zp-column` | Positive integer (default `17*`) | Raw photometric-redshift (`dnf_z`) field consumed by `process_main` and required by the shared layout in both variants. Resolved through projection when enabled. |
 | `EXPO_LIST` | `--expo-list` (or positional, or init output) | Path string (default `""*`) | Exposure-list file. Each non-empty line identifies a per-exposure chip-list file. An initializer-generated list takes precedence in chained execution. |
 
-### 3b. Stage control (compile-time)
+### 3b. Stage and Standard branch controls (runtime INI)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `PROCESS_stage` | — | Product of primes (default `2·3·5·7·11·13·17·19·23 = 223092870*`) | Stage control bitmask. Each prime factor enables one stage: `2`→Pre-process, `3`→Astrometry, `5`→Source extraction, `7`→FFT Stage 1, `11`→PSF model, `13`→FFT Stage 2, `17`→Shear measurement, `19`→Exposure info, `23`→Catalog combination. Stage 9 (`23`) requires Stage 8 (`19`); the pipeline rejects `23` without `19`. |
-| `ASTROMETRY_trivial` | — | `0*`, `1` (Std only; Lite frozen to `0`) | `0` uses Gaia-based astrometric solution; `1` uses trivial (identity) astrometry. Lite implements only `0`. |
-| `include_FLAT` | — | `0*`, `1` (Std only; Lite frozen to `0`) | `0` disables super-flat multiplication; `1` enables it using `FLAT_PATH`. Lite implements only `0`. |
-| `include_Mask` | — | `0`, `1`, `2*`, `3` (Std only; Lite frozen to `2`) | `0` no mask; `1` legacy mask branch; `2` per-chip DQ mask from `dirOutput/dqmask/<exposure>/`; `3` combines legacy and DQ mask. Lite implements only `2`. |
+| `PROCESS_stage` | `INI [lensing] process_stage` | Product of primes (default `2·3·5·7·11·13·17·19·23 = 223092870*`) | Stage control bitmask. Each prime factor enables one stage: `2`→Pre-process, `3`→Astrometry, `5`→Source extraction, `7`→FFT Stage 1, `11`→PSF model, `13`→FFT Stage 2, `17`→Shear measurement, `19`→Exposure info, `23`→Catalog combination. Stage 9 (`23`) requires Stage 8 (`19`). |
+| `ASTROMETRY_trivial` | `INI [lensing] astrometry_trivial` | `0*`, `1` (Standard only; Lite fixed to `0`) | `0` uses Gaia-based astrometric solution; `1` uses trivial astrometry. The key is rejected by Lite because the alternative branch is absent. |
+| `include_FLAT` | `INI [lensing] include_flat` | `0*`, `1` (Standard only; Lite fixed to `0`) | Enables super-flat multiplication with `flat_path`. The key is absent in Lite. |
+| `include_Mask` | `INI [lensing] include_mask` | `0`, `1`, `2*`, `3` (Standard only; Lite fixed to `2`) | Selects no/legacy/DQ/combined masking. Lite implements only DQ masking and rejects the key. |
 
-### 3c. Image / CCD size (compile-time)
+### 3c. Removed nominal image settings
 
-| Parameter file name | CLI parameter | Options | Function description |
-|:---|:---|:---|:---|
-| `npx` | — | `3000*` | Nominal CCD width in pixels. |
-| `npy` | — | `5000*` | Nominal CCD height in pixels. |
-| `strl` | — | `150*` | Maximum string length for internal path/buffer allocations. |
+`npx` and `npy` were removed. Failed Stage-1 reads return without fabricating a
+nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 
 ### 3d. Split and background parameters (compile-time)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `ext_cat` | — | `0`, `1*` (Std only; Lite frozen to `1`) | `0` disables external source catalog; `1` enables `SOURCE_CAT` usage. Lite implements only `1`. |
-| `ext_PSF` | — | `0*`, `1` (Std only; Lite frozen to `0`) | `0` measures PSF from frame stars; `1` uses external PSF image from `PSF_PATH`. Lite implements only `0`. |
-| `CCD_split` | — | `1`, `2*` | `1` whole-chip amplifier region for background/noise fits; `2` two-amplifier split. Other values are unsafe. |
+| `ext_cat` | `INI [lensing] ext_cat` | `0`, `1*` (Standard only; Lite fixed to `1`) | Selects internal or external source catalogs. Lite is external-only and rejects this key. Standard FD requires `1`. |
+| `ext_PSF` | `INI [lensing] ext_psf` | `0*`, `1` (Standard only; Lite fixed to `0`) | Selects frame-star or external-PSF input. Lite rejects this key. |
+| `CCD_split` | `INI [lensing] ccd_split` | `1`, `2*` | `1` uses one whole-chip background/noise region; `2` uses two amplifier regions. |
 | `blocksize` | — | `200*` | Pixel width/height of blocks sampled for background estimation. |
 | `nct` | — | `12*` | Number of rectangular-monomial terms in the background surface fit. Must not exceed available stable background samples. |
 | `ncx` | — | `3*` | Number of successive x powers in the background basis before y power increments. With `nct=12`, the basis spans `x^0..2` for `y^0..3`. |
 
-### 3e. PSF selection and configuration (compile-time)
+### 3e. PSF selection and configuration
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -151,9 +155,9 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `nstar_min_local` | — | `16*` | Minimum finite stars required for one local chip PSF fit. |
 | `step_psf` | — | `100*` (Std only) | Standard very-local PSF map grid spacing in pixels; used only with `PSF_type=2`. Absent in Lite. |
 | `n_neighbor` | — | `5*` (Std only) | Standard number of nearest stars used by the very-local PSF branch. Absent in Lite. |
-| `deblending` | — | `0`, `1*` (Std only; Lite frozen to `1`) | `0` disables source deblending; `1` always applies deblending. Lite implements only `1`. |
-| `PSF_type` | — | `1*`, `2` (Std only; Lite frozen to `1`) | `1` uses local polynomial PSF fit; `2` uses very-local PSF map with nearest-neighbor interpolation. Lite implements only `1`. |
-| `PSF_Ms` | — | `0*`, `1` (Std only; Lite frozen to `0`) | `0` disables multi-scale/PCA PSF reconstruction; `1` enables it (Standard only). When `1`, all PCA parameters in §3j become active. |
+| `deblending` | `INI [lensing] deblending` | `0`, `1*` (Standard only; Lite fixed to `1`) | Selects source deblending. Lite's always-on implementation has no key. |
+| `PSF_type` | `INI [lensing] psf_type` | `1*`, `2` (Standard only; Lite fixed to `1`) | Selects local polynomial or very-local PSF fitting. Lite has only the local implementation. |
+| `PSF_Ms` | `INI [lensing] psf_ms` | `0*`, `1` (Standard only; Lite fixed to `0`) | Enables Standard multi-scale/PCA reconstruction. Lite has no PCA implementation or key. |
 
 ### 3f. Stamp geometry and detection (compile-time)
 
@@ -177,8 +181,8 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `gal_smooth` | — | `0*` Std / `2*` Lite | Galaxy/noise FFT power smoothing. `0` none; `1` linear 5×5 hole-aware; `2` log-power 5×5 hole-aware. This intentional default difference changes main-galaxy processing. |
-| `star_smooth` | — | `0`, `1`, `2*` | Star FFT power smoothing with the same modes. In star power normalization, `0` uses four neighboring central pixels while values `≥1` use the central pixel. |
+| `gal_smooth` | `INI [lensing] gal_smooth` | Non-negative integer (`0*` both variants) | Galaxy/noise FFT power smoothing. `0` disables smoothing; the existing smoothing implementation interprets positive radii/modes. |
+| `star_smooth` | `INI [lensing] star_smooth` | Non-negative integer (`2*`) | Star FFT power smoothing and regularization control. |
 | `size_fit_rmax` | — | `4*` | Radius in Fourier pixels for the equal-weight low-frequency curvature fits that produce `gal_size_T` and `psf_size_T`. |
 | `point_stat_beta` | — | `0.10*` | Single survey-wide shape parameter for the Stage 7 extended template `P(k) exp[-beta (k/kmax)^2]`. Compile-time; tune offline and rebuild rather than fitting per source. |
 | `point_stat_k_frac` | — | `0.90*` | Fraction of the PSF reliable Fourier radius retained as `kmax` for `delta_chi2` and `orth_ext`. |
@@ -186,23 +190,22 @@ are from `ProcessConfig.hpp`; all others are compile-time constants from
 | `point_stat_min_corr` | — | `1e-6*` | Minimum absolute normalized source–PSF projection needed for stable `orth_ext`; numerical protection only. |
 | `SNR_PSF` | — | `100.0*` | S/N threshold used to select PSF-star candidates; some preliminary selection uses half this value. |
 | `saturation_thresh` | — | `25000.0*` | Raw-pixel saturation cutoff and normalized peak rejection reference. |
-| `pixel_size` | — | `0.2628` arcsec* | Detector pixel scale used to convert PSF sizes to angular units. |
+| `pixel_size` | `INI [lensing] pixel_size` | Finite positive double (`0.2628` arcsec*) | Detector pixel scale used to convert PSF sizes to angular units. |
 
 ### 3h. Catalog and memory dimensions (compile-time)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `len_g` | — | `40*` | Galaxy stamps per FITS layout row/block used by stamp I/O. |
-| `len_s` | — | `15*` | Star stamps per FITS layout row/block. |
-| `ngal_max` | — | `4000*` | Maximum galaxies stored per chip. Larger detected catalogs are truncated at this limit. |
-| `nstar_max` | — | `2000*` | Maximum stars stored per chip. Memory use includes arrays scaling as `nstar_max²`. |
+| `ngal_max` | — | `4000*` | Initial source metadata reservation hint; vectors grow beyond it. |
+| `nstar_max` | — | `2000*` | Initial star metadata reservation hint; live pairwise storage uses actual candidate counts. |
 | `src_npara` | — | `12*` | Shared source/PSF/FFT2 internal row width. It exactly covers fields through `iSNR_F` and PSF parameter slot 11. |
 | `shear_cat_ncols` | — | `iorth_ext + 1 = 28*` | Stage 7 shear-catalog width through `gal_size_T`, `psf_size_T`, `delta_chi2`, and `orth_ext`. The exposure `chi2` appended later is not part of this count. |
 | `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 29*` | Exposure-catalog width containing the 28 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |
-| `len_sam` | — | `50*` | Number of exposure-wide selected-star stamps placed in one FITS layout row/block. |
 | `npd` | — | `33*` | Number of astrometric PU distortion coefficients per coordinate. Must match astrometry file serialization and fitting code. |
-| `NMAX_EXPO` | — | `25000*` | Maximum accepted exposure records; Stage 8 allocates aggregation storage for the runtime `N_EXPO` count. |
-| `NMAX_CHIP` | — | `62*` | Maximum chips represented in fixed-capacity PSF/exposure arrays. |
+| `nmax_chip` | `INI [lensing] nmax_chip` | Positive integer (`62*`) | Runtime chip capacity used for initializer checks and PSF allocations. Exposure chip counts above it fail explicitly; there is no instrument-specific upper ceiling. |
+
+`NMAX_EXPO` was removed. Exposure lists and FD per-exposure arrays use checked
+runtime sizes; large MPI vectors are transferred in `INT_MAX`-bounded chunks.
 
 ### 3i. Mode-bar noise-plane estimator (compile-time)
 
@@ -251,14 +254,14 @@ parameters.
 | `npp6th` | — | `28*` | Number of ordered 2D sixth-degree polynomial terms used for PCA coefficient surfaces. |
 | `pca_negative_eigenvalue_threshold` | — | `-1.0e-5*` | Eigenvalue below which a PCA covariance result is classified as invalid. |
 
-### 3k. File-system paths (compile-time)
+### 3k. File-system paths
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
-| `SOURCE_CAT` | `--extcat-output` | Path string (default `"/lustre/.../des_y6_cat"*`) | Primary external source-catalog tile directory. Overridden at runtime by `--extcat-output`; also used as the extcat output default. |
-| `ASTROMETRY_CAT` | — | Path string (default `"/lustre/.../gaia_cat_sorted"*`) | Directory of Gaia reference tiles expected by `generateGaiaFileName`. |
-| `FLAT_PATH` | — | Path string (default `"/lustre/.../DES_super_flat/i2014"*`; Std only) | Per-chip flat FITS files used for super-flat multiplication when `include_FLAT=1`. Absent in Lite. |
-| `PSF_PATH` | — | Path string (default `"hahahaha"*`; Std only) | Directory containing `PSF.fits` used when `ext_PSF=1`. Absent in Lite. |
+| `SOURCE_CAT` fallback / `extcat.output_directory` | `--extcat-output` or `INI [lensing] source_cat` | Path string (default `"/lustre/.../des_y6_cat"*`) | One authoritative external tile directory for generation and reading. `source_cat` is an INI alias. |
+| `ASTROMETRY_CAT` | `INI [lensing] astrometry_cat` | Path string (default `"/lustre/.../gaia_cat_sorted"*`) | Gaia reference-tile directory used by both variants. |
+| `FLAT_PATH` | `INI [lensing] flat_path` | Path string (Standard only) | Super-flat directory used when `include_flat=1`; absent from Lite config. |
+| `PSF_PATH` | `INI [lensing] psf_path` | Path string (Standard only) | External PSF directory used when `ext_psf=1`; absent from Lite config. |
 
 ### 3l. Internal catalog column indices (compile-time, 0-based)
 
@@ -296,25 +299,25 @@ internal/output layout and requires coordinated reader/writer changes.
 | `iorth_ext` | — | `27*` | Source projection along the PSF-orthogonal extension direction; larger positive values are more extended. |
 | `ichi2` | — | `shear_cat_ncols = 28*` | Zero-based index of the appended exposure chi2, immediately after the 28-field shear catalog. |
 
-### 3m. Calibration and camera geometry (compile-time)
+### 3m. Calibration and runtime camera geometry
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
 | `g1_c` | — | `-0.001*` | Additive correction applied to field-distortion component 1 during final catalog combination. |
 | `g2_c` | — | `-0.0003*` | Additive correction applied to field-distortion component 2 during final catalog combination. |
 | `chi2_thresh` | — | `0.01*` | Maximum accepted exposure/PSF chi-square diagnostic during catalog combination. |
-| `chipnx` | — | `2046*` | Nominal science CCD width used to normalize PSF coordinates. Must match the instrument geometry. |
-| `chipny` | — | `4094*` | Nominal science CCD height used to normalize PSF coordinates. Must match the instrument geometry. |
-| `Camera_ccd_num` | — | `62*` | Instrument CCD count used by exposure and PCA allocations. |
+| `chipnx` | `INI [lensing] chipnx` | Positive integer (`2046*`) | Runtime science CCD width used for PSF maps, bounds, and coordinate normalization. |
+| `chipny` | `INI [lensing] chipny` | Positive integer (`4094*`) | Runtime science CCD height used for PSF maps, bounds, and coordinate normalization. |
 
 ---
 
 ## Table 4 — process_rearr: Catalog Rearrangement
 
 Redistributes per-exposure `_all.cat` rows into spatially sorted subcatalogs.
-Compile-time algorithm parameters are from `ProcessRearrConfig.hpp`;
-CLI-overridable parameters are from `ProcessConfig.hpp`. Both variants consume
-the startup `CatalogLayout` and do not derive width or coordinates locally.
+Compile-time algorithm parameters are from `ProcessRearrConfig.hpp`; runtime
+paths and switches are seeded by `ProcessConfig.hpp` and may be overridden by
+INI or CLI. Both variants consume the startup schema and do not derive width or
+coordinates locally.
 
 ### 4a. Runtime (CLI-overridable) parameters
 
@@ -373,13 +376,12 @@ directory. Existing same-name files are truncated like the legacy pipeline.
 
 ## Standard and Lite summary
 
-The runtime command line is intentionally identical in both variants. Their
-current configuration differences are:
+The process/extcat/init CLI is intentionally identical in both variants. Their
+runtime lensing domains differ:
 
-- Standard `gal_smooth=0`; Lite `gal_smooth=2`.
 - Lite freezes Gaia astrometry, no flat, DQ-mask mode, external source catalogs,
   frame-derived PSF stars, deblending, local-polynomial PSF, and no PCA. The
-  unselected Standard branches and their exclusive constants are absent.
+  unselected Standard branches and their runtime keys are absent.
 - Standard retains the optional external PSF, very-local PSF, and PCA branches.
 - Both variants resolve one pipeline-level runtime `CatalogLayout`; Lite still
   defaults `process_rearr` and `process_fd` off while Standard defaults them on.

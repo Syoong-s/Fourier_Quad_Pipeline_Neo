@@ -3,6 +3,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -61,6 +62,8 @@ namespace SourceExtractor {
     //         for coefficients and source extraction through the Lite external-catalog branch.
     // ==========================================
     void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput) {
+        const RuntimeConfig& runtime_config = RuntimeConfigStore::get();
+        const LensingRuntimeConfig& lensing = runtime_config.lensing;
         const std::string& imageFile = imageFiles[ichip - 1];
         const Universalblock::NormStatus normStatus =
             Universalblock::checkNorm(imageFile, dirOutput);
@@ -96,7 +99,7 @@ namespace SourceExtractor {
             return;
         }
         const size_t expected_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
-        if (nx <= LensingConfig::CCD_split || ny < 3
+        if (nx <= lensing.ccd_split || ny < 3
             || norm_nx != nx || norm_ny != ny || normap.size() < expected_size
             || normap.empty()) {
             std::cerr << "Error / proc_source malformed norm chip "
@@ -105,7 +108,7 @@ namespace SourceExtractor {
         }
 
         float sigabc[2][3] = {0};
-        for (int i = 0; i < LensingConfig::CCD_split; ++i) {
+        for (int i = 0; i < lensing.ccd_split; ++i) {
             for (int j = 0; j < 3; ++j) {
                 sigabc[i][j] = normap[j * nx + (i + 1)];
             }
@@ -123,7 +126,7 @@ namespace SourceExtractor {
 
         int nxc = nx / 2;
         std::vector<float> sigmap(nx * ny, 0.0f);
-        if (LensingConfig::CCD_split == 2) {
+        if (lensing.ccd_split == 2) {
             for (int x = 0; x < nxc; ++x) {
                 int ii = x + nxc;
                 for (int y = 0; y < ny; ++y) {
@@ -155,7 +158,7 @@ namespace SourceExtractor {
 
         Astrometry::readAstrometryPara(filename, ichip, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
 
-        std::string catfile = LensingConfig::SOURCE_CAT;
+        std::string catfile = runtime_config.extcat.output_directory;
         std::vector<std::string> sortfile(27);
         int sortnum = 0;
 

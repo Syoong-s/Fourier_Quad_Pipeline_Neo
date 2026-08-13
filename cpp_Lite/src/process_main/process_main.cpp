@@ -31,7 +31,7 @@ namespace {
 
 // ==========================================
 // Function: Load and validate the top-level exposure list on rank zero
-// Method: Parse quoted per-exposure list paths and reject empty or oversized
+// Method: Parse quoted per-exposure list paths and reject empty or malformed
 //         input before any rank enters the numerical stage scheduler.
 // ==========================================
 bool loadExposureList(const std::string& exposure_list, std::string& error) {
@@ -62,12 +62,6 @@ bool loadExposureList(const std::string& exposure_list, std::string& error) {
         error = "EXPO_LIST contains no exposures: " + exposure_list;
         return false;
     }
-    if (EXPO_FILE.size() > static_cast<std::size_t>(LensingConfig::NMAX_EXPO)) {
-        error = "EXPO_LIST exceeds LensingConfig::NMAX_EXPO: " + exposure_list;
-        EXPO_FILE.clear();
-        return false;
-    }
-
     N_EXPO = static_cast<int>(EXPO_FILE.size());
     std::cout << "Total number of EXPOSURE: " << N_EXPO << std::endl;
     return true;
@@ -99,10 +93,20 @@ void broadcastExposureList(int rank) {
 
 // ==========================================
 // Function: Run the numerical Fourier_Quad pipeline with compiled defaults
-// Method: Preserve the historical one-argument API by forwarding a default RuntimeOptions object.
+// Method: Preserve the historical one-argument API by installing and forwarding
+//         a default RuntimeConfig with its default external layout.
 // ==========================================
 int process_main(const std::string& exposure_list) {
-    return process_main(exposure_list, ProcessConfig::RuntimeOptions{});
+    RuntimeConfig config = makeDefaultRuntimeConfig();
+    std::string store_error;
+    if (!RuntimeConfigStore::isInitialized()
+        && !RuntimeConfigStore::initialize(config, store_error)) {
+        if (MPIScheduler::my_id == 0) {
+            std::cerr << "Runtime config error: " << store_error << std::endl;
+        }
+        return 1;
+    }
+    return process_main(exposure_list, RuntimeConfigStore::get());
 }
 
 // ==========================================
@@ -110,11 +114,11 @@ int process_main(const std::string& exposure_list) {
 // Method: Resolve one compatibility layout, then forward to the startup-layout implementation.
 // ==========================================
 int process_main(const std::string& exposure_list,
-                 const ProcessConfig::RuntimeOptions& options) {
+                 const RuntimeConfig& runtime_config) {
     PipelineCatalog::CatalogLayout layout;
     std::string layout_error;
     const int local_layout_ok =
-        PipelineCatalog::resolveCatalogLayout(options, layout, layout_error)
+        PipelineCatalog::resolveCatalogLayout(runtime_config, layout, layout_error)
             ? 1
             : 0;
     int global_layout_ok = 0;
@@ -130,7 +134,7 @@ int process_main(const std::string& exposure_list,
         }
         return 1;
     }
-    return process_main(exposure_list, options, layout);
+    return process_main(exposure_list, runtime_config, layout);
 }
 
 // ==========================================
@@ -138,10 +142,19 @@ int process_main(const std::string& exposure_list,
 // Method: Configure readers from the startup schema, then execute MPI stages without re-resolution.
 // ==========================================
 int process_main(const std::string& exposure_list,
-                 const ProcessConfig::RuntimeOptions& options,
+                 const RuntimeConfig& runtime_config,
                  const PipelineCatalog::CatalogLayout& layout) {
-    (void)options;
     const int rank = MPIScheduler::my_id;
+    if (!RuntimeConfigStore::isInitialized()) {
+        std::string store_error;
+        if (!RuntimeConfigStore::initialize(runtime_config, store_error)) {
+            if (rank == 0) {
+                std::cerr << "Runtime config error: " << store_error
+                          << std::endl;
+            }
+            return 1;
+        }
+    }
 
     std::string column_error;
     const int local_columns_ok =
@@ -180,7 +193,8 @@ int process_main(const std::string& exposure_list,
     // Function: Validate stage dependency before execution
     // Method: Stage 9 consumes Stage 8 exposure chi2, so reject PROCESS_stage with 23 but without 19.
     // ==========================================
-    if (LensingConfig::PROCESS_stage % 23 == 0 && LensingConfig::PROCESS_stage % 19 != 0) {
+    const LensingRuntimeConfig& lensing = runtime_config.lensing;
+    if (lensing.process_stage % 23 == 0 && lensing.process_stage % 19 != 0) {
         if (rank == 0) {
             std::cerr << "Error: Stage 9 requires Stage 8. PROCESS_stage enables "
                          "CatalogCombiner without ExposureInfo."
@@ -189,42 +203,42 @@ int process_main(const std::string& exposure_list,
         return 1;
     }
 
-    if (LensingConfig::PROCESS_stage % 2 == 0) {
+    if (lensing.process_stage % 2 == 0) {
         MPIScheduler::distribute(N_EXPO, PreProcess::preProcess, "Pre-process...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 3 == 0) {
+    if (lensing.process_stage % 3 == 0) {
         MPIScheduler::distribute(N_EXPO, Astrometry::procAstrometry, "Astrometry...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 5 == 0) {
+    if (lensing.process_stage % 5 == 0) {
         MPIScheduler::distribute(N_EXPO, SourceExtractor::procSource, "Sources ...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 7 == 0) {
+    if (lensing.process_stage % 7 == 0) {
         MPIScheduler::distribute(N_EXPO, FourierTransformSt1::procFourierTSt1, "FFT st1...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 11 == 0) {
+    if (lensing.process_stage % 11 == 0) {
         MPIScheduler::distribute(N_EXPO, PSFModel::procPSF, "PSF ...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 13 == 0) {
+    if (lensing.process_stage % 13 == 0) {
         MPIScheduler::distribute(N_EXPO, FourierTransformSt2::procFourierTSt2, "FFT st2...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 17 == 0) {
+    if (lensing.process_stage % 17 == 0) {
         MPIScheduler::distribute(N_EXPO, ShearMeasurement::procShear, "Shear ...");
     }
     MPIScheduler::barrier();
 
-    if (LensingConfig::PROCESS_stage % 19 == 0) {
+    if (lensing.process_stage % 19 == 0) {
         const int mpi_parameter_count = N_EXPO * 6;
         const std::size_t parameter_count =
             static_cast<std::size_t>(mpi_parameter_count);
@@ -257,7 +271,7 @@ int process_main(const std::string& exposure_list,
         MPIScheduler::barrier();
     }
 
-    if (LensingConfig::PROCESS_stage % 23 == 0) {
+    if (lensing.process_stage % 23 == 0) {
         MPIScheduler::distribute(N_EXPO, CatalogCombiner::procComb, "combine ...");
     }
     MPIScheduler::barrier();

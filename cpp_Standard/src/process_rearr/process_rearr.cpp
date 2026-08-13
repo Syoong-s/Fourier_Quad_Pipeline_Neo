@@ -206,7 +206,7 @@ bool resolveCatalogPathFromImage(const std::string& exposure_list_path,
 //         order before broadcasting the schema and starting dynamic reads.
 // ==========================================
 bool prepareInputs(const std::string& exposure_list,
-                   const ProcessConfig::RuntimeOptions& options,
+                   const RuntimeConfig& runtime_config,
                    PreparedInputs& prepared,
                    std::string& error) {
     std::vector<std::string> exposure_paths;
@@ -228,10 +228,11 @@ bool prepareInputs(const std::string& exposure_list,
         prepared.catalog_paths.push_back(catalog_path.string());
     }
 
-    const std::string base_dir_str(options.rearr_output_base_directory);
+    const ProcessRuntimeConfig& process = runtime_config.process;
+    const std::string base_dir_str(process.rearr_output_base_directory);
     const fs::path base_dir =
         base_dir_str.empty() ? output_base_root : fs::path(base_dir_str);
-    fs::path configured_output(options.rearr_output_directory);
+    fs::path configured_output(process.rearr_output_directory);
     if (configured_output.empty()) {
         configured_output = base_dir;
     } else if (configured_output.is_relative()) {
@@ -382,7 +383,7 @@ bool collectiveSuccess(bool local_success,
 //         preserve the original exposure index, and accumulate only numeric rows.
 // ==========================================
 bool readCatalogJob(const PreparedInputs& prepared,
-                    const PipelineCatalog::CatalogLayout& layout,
+                    const PipelineCatalog::RearrCatalogSchema& schema,
                     std::size_t exposure,
                     LocalRows& rows,
                     std::string& error) {
@@ -422,7 +423,7 @@ bool readCatalogJob(const PreparedInputs& prepared,
         }
         std::vector<double> parsed;
         std::string row_error;
-        if (!ProcessRearr::parseCatalogRow(line, layout.all_columns,
+        if (!ProcessRearr::parseCatalogRow(line, schema.all_columns,
                                            parsed, row_error)) {
             ++rows.malformed_rows;
             if (ProcessRearrConfig::SKIP_MALFORMED_ROWS) {
@@ -450,23 +451,23 @@ bool readCatalogJob(const PreparedInputs& prepared,
 //         later partition lookup without recomputing coordinate boundaries.
 // ==========================================
 bool binLocalRows(const LocalRows& rows,
-                  const PipelineCatalog::CatalogLayout& layout,
+                  const PipelineCatalog::RearrCatalogSchema& schema,
                   std::vector<std::uint64_t>& tile_counts,
                   std::vector<std::size_t>& row_tiles,
                   std::string& error) {
     tile_counts.assign(ProcessRearrConfig::SKY_TILE_COUNT, 0);
     const std::size_t row_count = rows.source_rows.size();
     row_tiles.resize(row_count);
-    if (rows.values.size() != row_count * layout.all_columns) {
+    if (rows.values.size() != row_count * schema.all_columns) {
         error = "local row buffer has inconsistent dimensions";
         return false;
     }
 
     for (std::size_t row = 0; row < row_count; ++row) {
         const double ra =
-            rows.values[row * layout.all_columns + layout.external.ra];
+            rows.values[row * schema.all_columns + schema.ra_column];
         const double dec =
-            rows.values[row * layout.all_columns + layout.external.dec];
+            rows.values[row * schema.all_columns + schema.dec_column];
         std::size_t tile = 0;
         if (!ProcessRearr::skyTileIndex(ra, dec, tile, error)) {
             error = "local row " + std::to_string(row) + ": " + error;
@@ -641,14 +642,14 @@ bool completeTransferPlan(std::size_t column_count,
 // ==========================================
 bool exchangeRows(const LocalRows& local_rows,
                   const std::vector<int>& row_partitions,
-                  const PipelineCatalog::CatalogLayout& layout,
+                  const PipelineCatalog::RearrCatalogSchema& schema,
                   const TransferPlan& plan,
                   int world_size,
                   MPI_Comm communicator,
                   ReceivedRows& received,
                   std::string& error) {
     const std::size_t local_count = local_rows.source_rows.size();
-    if (local_rows.values.size() != local_count * layout.all_columns
+    if (local_rows.values.size() != local_count * schema.all_columns
         || local_rows.source_exposures.size() != local_count
         || row_partitions.size() != local_count
         || plan.total_send_rows != static_cast<int>(local_count)) {
@@ -664,10 +665,10 @@ bool exchangeRows(const LocalRows& local_rows,
         const std::size_t packed_row = static_cast<std::size_t>(
             cursor[static_cast<std::size_t>(destination)]++);
         std::copy_n(local_rows.values.begin()
-                        + static_cast<std::ptrdiff_t>(row * layout.all_columns),
-                    layout.all_columns,
+                        + static_cast<std::ptrdiff_t>(row * schema.all_columns),
+                    schema.all_columns,
                     send_values.begin()
-                        + static_cast<std::ptrdiff_t>(packed_row * layout.all_columns));
+                        + static_cast<std::ptrdiff_t>(packed_row * schema.all_columns));
         send_metadata[packed_row * 3] =
             static_cast<std::uint64_t>(row_partitions[row]);
         send_metadata[packed_row * 3 + 1] = local_rows.source_exposures[row];
@@ -675,7 +676,7 @@ bool exchangeRows(const LocalRows& local_rows,
     }
 
     received.values.resize(static_cast<std::size_t>(plan.total_receive_rows)
-                           * layout.all_columns);
+                           * schema.all_columns);
     std::vector<std::uint64_t> receive_metadata(
         static_cast<std::size_t>(plan.total_receive_rows) * 3);
     const int value_status =
@@ -736,7 +737,7 @@ std::string subcatalogFilename(std::size_t partition) {
 //         header and complete rows, and fill global-summary reduction arrays.
 // ==========================================
 bool writeLocalPartitions(const ReceivedRows& received,
-                          const PipelineCatalog::CatalogLayout& layout,
+                          const PipelineCatalog::RearrCatalogSchema& schema,
                           const PreparedInputs& prepared,
                           std::size_t partition_count,
                           int rank,
@@ -748,7 +749,7 @@ bool writeLocalPartitions(const ReceivedRows& received,
                           std::vector<double>& ra_max,
                           std::string& error) {
     const std::size_t row_count = received.partitions.size();
-    if (received.values.size() != row_count * layout.all_columns
+    if (received.values.size() != row_count * schema.all_columns
         || received.source_exposures.size() != row_count
         || received.source_rows.size() != row_count) {
         error = "received row buffers have inconsistent dimensions";
@@ -780,8 +781,8 @@ bool writeLocalPartitions(const ReceivedRows& received,
         if (indices.empty()) {
             continue;
         }
-        ProcessRearr::sortRowIndices(received.values, layout.all_columns,
-                                     layout.external.ra, layout.external.dec,
+        ProcessRearr::sortRowIndices(received.values, schema.all_columns,
+                                     schema.ra_column, schema.dec_column,
                                      received.source_exposures,
                                      received.source_rows, indices);
 
@@ -798,18 +799,18 @@ bool writeLocalPartitions(const ReceivedRows& received,
         const std::size_t summary_index = partition - 1;
         counts[summary_index] = static_cast<std::uint64_t>(indices.size());
         for (const std::size_t row : indices) {
-            for (std::size_t column = 0; column < layout.all_columns; ++column) {
+            for (std::size_t column = 0; column < schema.all_columns; ++column) {
                 if (column != 0) {
                     output << ' ';
                 }
-                output << received.values[row * layout.all_columns + column];
+                output << received.values[row * schema.all_columns + column];
             }
             output << '\n';
 
             const double dec =
-                received.values[row * layout.all_columns + layout.external.dec];
+                received.values[row * schema.all_columns + schema.dec_column];
             const double ra =
-                received.values[row * layout.all_columns + layout.external.ra];
+                received.values[row * schema.all_columns + schema.ra_column];
             dec_min[summary_index] = std::min(dec_min[summary_index], dec);
             dec_max[summary_index] = std::max(dec_max[summary_index], dec);
             ra_min[summary_index] = std::min(ra_min[summary_index], ra);
@@ -978,8 +979,8 @@ bool generateRearrangedExpoList(const std::string& output_directory,
 //         reads, then build, redistribute, and write the weighted k-d partitions.
 // ==========================================
 int process_rearr(const std::string& exposure_list,
-                  const ProcessConfig::RuntimeOptions& options,
-                  const PipelineCatalog::CatalogLayout& layout,
+                  const RuntimeConfig& runtime_config,
+                  const PipelineCatalog::RearrCatalogSchema& schema,
                   MPI_Comm communicator) {
     int rank = 0;
     int world_size = 1;
@@ -991,7 +992,8 @@ int process_rearr(const std::string& exposure_list,
 
     PreparedInputs prepared;
     int preparation_ok = 1;
-    if (rank == 0 && !prepareInputs(exposure_list, options, prepared, local_error)) {
+    if (rank == 0
+        && !prepareInputs(exposure_list, runtime_config, prepared, local_error)) {
         preparation_ok = 0;
     }
     MPI_Bcast(&preparation_ok, 1, MPI_INT, 0, communicator);
@@ -1053,7 +1055,7 @@ int process_rearr(const std::string& exposure_list,
                 static_cast<std::size_t>(iexpo - 1);
             std::string job_error;
             const bool job_success = readCatalogJob(
-                prepared, layout, exposure, local_rows, job_error);
+                prepared, schema, exposure, local_rows, job_error);
             if (!job_success && local_read_success) {
                 local_read_error = job_error;
             }
@@ -1087,7 +1089,7 @@ int process_rearr(const std::string& exposure_list,
 
     std::vector<std::uint64_t> local_tile_counts;
     std::vector<std::size_t> row_tiles;
-    local_success = binLocalRows(local_rows, layout, local_tile_counts,
+    local_success = binLocalRows(local_rows, schema, local_tile_counts,
                                  row_tiles, local_error);
     if (!collectiveSuccess(local_success, local_error, "bin", rank,
                            world_size, communicator)) {
@@ -1152,7 +1154,7 @@ int process_rearr(const std::string& exposure_list,
                            world_size, communicator)) {
         return 1;
     }
-    local_success = completeTransferPlan(layout.all_columns, transfer_plan,
+    local_success = completeTransferPlan(schema.all_columns, transfer_plan,
                                          communicator, local_error);
     if (!collectiveSuccess(local_success, local_error, "transfer-plan", rank,
                            world_size, communicator)) {
@@ -1163,7 +1165,7 @@ int process_rearr(const std::string& exposure_list,
         std::cout << "process_rearr: redistributing rows" << std::endl;
     }
     ReceivedRows received;
-    local_success = exchangeRows(local_rows, row_partitions, layout,
+    local_success = exchangeRows(local_rows, row_partitions, schema,
                                  transfer_plan, world_size, communicator,
                                  received, local_error);
     if (!collectiveSuccess(local_success, local_error, "redistribute", rank,
@@ -1202,7 +1204,7 @@ int process_rearr(const std::string& exposure_list,
     std::vector<double> local_ra_min;
     std::vector<double> local_ra_max;
     local_success = writeLocalPartitions(
-        received, layout, prepared, partition_count, rank, world_size,
+        received, schema, prepared, partition_count, rank, world_size,
         local_summary_counts, local_dec_min, local_dec_max,
         local_ra_min, local_ra_max, local_error);
     if (!collectiveSuccess(local_success, local_error, "write", rank,
@@ -1242,13 +1244,13 @@ int process_rearr(const std::string& exposure_list,
     std::string rearranged_list_path;
     if (rank == 0) {
         const std::string& configured_list_dir(
-            options.rearranged_expo_list_directory);
+            runtime_config.process.rearranged_expo_list_directory);
         const fs::path list_dir = configured_list_dir.empty()
             ? fs::path(exposure_list).parent_path()
             : fs::path(configured_list_dir);
         rearranged_list_path =
             fs::absolute(list_dir
-                         / options.rearranged_expo_list_filename)
+                         / runtime_config.process.rearranged_expo_list_filename)
                 .lexically_normal().string();
         if (!generateRearrangedExpoList(prepared.output_directory,
                                         rearranged_list_path,

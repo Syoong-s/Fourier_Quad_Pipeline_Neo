@@ -9,9 +9,9 @@
 
 namespace PSFModel {
     // Global PSF PCA components and coefficients loaded from disk (replacing psf_storage_mod)
-    extern std::vector<double> global_components; // [NMAX_CHIP][nsns][n_pcs]
-    extern std::vector<double> global_mean_psf;   // [NMAX_CHIP][nsns]
-    extern std::vector<float> global_poly_coefs;  // [NMAX_CHIP][2][2][n_pcs][npp6th]
+    extern std::vector<double> global_components; // [runtime chips][nsns][n_pcs]
+    extern std::vector<double> global_mean_psf;   // [runtime chips][nsns]
+    extern std::vector<float> global_poly_coefs;  // [runtime chips][2][2][n_pcs][npp6th]
     extern bool is_data_loaded;
 
     // Load and broadcast PSF PCA components
@@ -31,7 +31,9 @@ namespace PSFModel {
         int ns, int npp, int nx, int ny, std::vector<double>& PSF_coe,
         LinearSolve::SolveDiagnostics* diagnostics = nullptr);
     void getPSFModel(int ns, int npp, const std::vector<double>& PSF_coe, double xx, double yy, std::vector<float>& modelp, std::vector<float>& model0);
-    void getPSFModelVeryLocal(const std::vector<float>& psfmap, double x, double y, std::vector<float>& model, double& dmax, int stride = LensingConfig::npx);
+    void getPSFModelVeryLocal(const std::vector<float>& psfmap, double x,
+                              double y, std::vector<float>& model,
+                              double& dmax, int stride);
     void getPowerAll(int nx, int ny, const std::vector<float>& power, std::array<double, 2>& e, double& size, float thresh_ratio);
 
     // Helpers to access global components flat layout

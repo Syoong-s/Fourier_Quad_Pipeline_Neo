@@ -26,7 +26,7 @@ inline const std::vector<DatasetSpec> DATASETS = {
 // "Contains1", "Contains2" ...
 inline const std::vector<std::string> CONTAINS = {"v1"};
 inline constexpr const char* EXISTING = "fail";
-inline constexpr int F77_MAX_PATH = 150;
+inline constexpr int F77_MAX_PATH = 0;
 
 }  // namespace InitConfig
 

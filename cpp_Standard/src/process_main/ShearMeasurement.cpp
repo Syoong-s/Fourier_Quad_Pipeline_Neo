@@ -3,6 +3,7 @@
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -133,7 +134,7 @@ void getPSFArea(const float* model, float& FWHM) {
     float r = std::sqrt(area / LensingConfig::pi);
     float beta = ns / (2.0f * LensingConfig::pi) / r;
     FWHM = beta * 2.0f * std::sqrt(2.0f * std::log(2.0f))
-         * static_cast<float>(LensingConfig::pixel_size);
+         * static_cast<float>(RuntimeConfigStore::get().lensing.pixel_size);
 }
 
 // ==========================================
@@ -144,6 +145,8 @@ void getPSFArea(const float* model, float& FWHM) {
 void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int chipnx, int chipny) {
     int ns = LensingConfig::ns;
     int npl = LensingConfig::npl;
+    const LensingRuntimeConfig& lensing =
+        RuntimeConfigStore::get().lensing;
 
     int proc_error = 0;
     int nstar = 0;
@@ -156,8 +159,8 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
 
     std::vector<double> local_coe(ns * ns * (npl + 1), 0.0);
 
-    if (LensingConfig::ext_PSF == 1) {
-        std::string filename = LensingConfig::PSF_PATH + "/PSF.fits";
+    if (lensing.ext_psf == 1) {
+        std::string filename = lensing.psf_path + "/PSF.fits";
         int nx = 0, ny = 0;
         std::vector<float> ePSF;
         if (!FitsIO::readImage(filename, nx, ny, ePSF)) {
@@ -174,7 +177,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
     }
 
     float res_factor = 1.0f;
-    if (LensingConfig::PSF_Ms == 1) {
+    if (lensing.psf_ms == 1) {
         std::string filename = dirOutput + "/stamps/dat_Rescale/" + prefix_expo + "_factor.dat";
         std::ifstream fin(filename);
         if (!fin.is_open()) {
@@ -202,7 +205,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         int nx = 0, ny = 0;
         std::vector<float> psfmap;
 
-        if (LensingConfig::ext_PSF != 1 && LensingConfig::PSF_type == 1) {
+        if (lensing.ext_psf != 1 && lensing.psf_type == 1) {
             std::string filename = OutputLayout::chipPath(
                 dirOutput, "stamps/dat_PsfFit", PREFIX, "_PSF_coe_local.dat");
             std::ifstream fin(filename);
@@ -232,11 +235,11 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                 fin.close();
             }
 
-            if (LensingConfig::PSF_Ms == 1) {
+            if (lensing.psf_ms == 1) {
                 i_ccd = UniversalUtils::getChipId(imageFiles[ichip]);
             }
 
-        } else if (LensingConfig::ext_PSF != 1 && LensingConfig::PSF_type == 2) {
+        } else if (lensing.ext_psf != 1 && lensing.psf_type == 2) {
             std::string filename = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_PsfLocal", PREFIX, "_PSF_local.fits");
             if (FitsIO::readImage(filename, nx, ny, psfmap)) {
@@ -344,18 +347,18 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
 
             std::vector<float> psf_model(ns * ns, 0.0f);
             std::vector<float> psf_model0(ns * ns, 0.0f);
-            if (LensingConfig::ext_PSF == 1) {
+            if (lensing.ext_psf == 1) {
                 PSFModel::getPSFModel(ns, 1, local_coe, x, y, psf_model, psf_model0);
             } else {
-                if (LensingConfig::PSF_type == 1) {
-                    if (LensingConfig::PSF_Ms == 1) {
+                if (lensing.psf_type == 1) {
+                    if (lensing.psf_ms == 1) {
                         PSFRecons::getPSFModelHierarchical(i_ccd, x, y, res_factor, local_coe, psf_model);
-                    } else if (LensingConfig::PSF_Ms == 0) {
+                    } else if (lensing.psf_ms == 0) {
                         double xx = 2.0 * (x / static_cast<double>(chipnx)) - 1.0;
                         double yy = 2.0 * (y / static_cast<double>(chipny)) - 1.0;
                         PSFModel::getPSFModel(ns, npl, local_coe, xx, yy, psf_model, psf_model0);
                     }
-                } else if (LensingConfig::PSF_type == 2) {
+                } else if (lensing.psf_type == 2) {
                     double dstar = 0.0;
                     PSFModel::getPSFModelVeryLocal(psfmap, x, y, psf_model, dstar, nx);
                 }
@@ -443,7 +446,11 @@ void procShear(int iexpo) {
     std::string dir_output;
     UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
 
-    expoShear(image_files.size(), image_files, dir_output, LensingConfig::chipnx, LensingConfig::chipny);
+    const LensingRuntimeConfig& lensing =
+        RuntimeConfigStore::get().lensing;
+    expoShear(
+        static_cast<int>(image_files.size()), image_files, dir_output,
+        lensing.chipnx, lensing.chipny);
 }
 
 } // namespace ShearMeasurement

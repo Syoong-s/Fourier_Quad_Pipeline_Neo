@@ -3,6 +3,7 @@
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -25,6 +26,8 @@ namespace FourierTransformSt2 {
 //         publish all text/FITS outputs through checked main-process writers.
 // ==========================================
 void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dirOutput) {
+    const LensingRuntimeConfig& lensing =
+        RuntimeConfigStore::get().lensing;
     const Universalblock::NormStatus normStatus =
         Universalblock::checkNorm(imageFile, dirOutput);
     if (normStatus == Universalblock::NormStatus::Invalid) {
@@ -123,7 +126,7 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
 
         // SNR calculation uses star_smooth (2)
         ImageProcessing::getPower(ns, ns, source, source_p,
-                                  LensingConfig::star_smooth, pc);
+                                  lensing.star_smooth, pc);
 
         int ns_2 = LensingConfig::ns_2;
         float cen_val = source_p[ns_2 * ns + ns_2];
@@ -131,8 +134,10 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
         source_para[i][11] = source_para[i][10] / source_para[i][3] * ns;
 
         // Main power spectrum computation uses gal_smooth
-        ImageProcessing::getPower(ns, ns, source, source_p, LensingConfig::gal_smooth, pc);
-        ImageProcessing::getPower(ns, ns, noise, noise_p, LensingConfig::gal_smooth, pc);
+        ImageProcessing::getPower(ns, ns, source, source_p,
+                                  lensing.gal_smooth, pc);
+        ImageProcessing::getPower(ns, ns, noise, noise_p,
+                                  lensing.gal_smooth, pc);
         ImageProcessing::processPowers(ns, source_p, noise_p);
 
         std::copy_n(source_p.data(), stamp_size, power_coll.data() + offset);

@@ -3,6 +3,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -184,7 +185,9 @@ namespace SourceExtractor {
         }
 
         std::string filter_str(1, b);
-        flatFile = LensingConfig::FLAT_PATH + "/expo_" + filter_str + "/" + filter_str + tttt + "/flat_" + cc + "_smooth.fits";
+        flatFile = RuntimeConfigStore::get().lensing.flat_path + "/expo_"
+                   + filter_str + "/" + filter_str + tttt + "/flat_" + cc
+                   + "_smooth.fits";
     }
 
     // ==========================================
@@ -193,6 +196,8 @@ namespace SourceExtractor {
     //         for coefficients and source extraction through the configured catalog branch.
     // ==========================================
     void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput, const std::string& flatFile) {
+        const RuntimeConfig& runtime_config = RuntimeConfigStore::get();
+        const LensingRuntimeConfig& lensing = runtime_config.lensing;
         const std::string& imageFile = imageFiles[ichip - 1];
         const Universalblock::NormStatus normStatus =
             Universalblock::checkNorm(imageFile, dirOutput);
@@ -212,7 +217,7 @@ namespace SourceExtractor {
         std::vector<float> array;
 
         std::vector<float> flat;
-        if (LensingConfig::include_FLAT == 1) {
+        if (lensing.include_flat == 1) {
             int fnx = 0, fny = 0;
             if (!FitsIO::readImage(flatFile, fnx, fny, flat)) {
                 std::cerr << "Warning: flat file could not be read: " << flatFile << std::endl;
@@ -236,7 +241,7 @@ namespace SourceExtractor {
             return;
         }
         const size_t expected_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
-        if (nx <= LensingConfig::CCD_split || ny < 3
+        if (nx <= lensing.ccd_split || ny < 3
             || norm_nx != nx || norm_ny != ny || normap.size() < expected_size
             || normap.empty()) {
             std::cerr << "Error / proc_source malformed norm chip "
@@ -245,7 +250,7 @@ namespace SourceExtractor {
         }
 
         float sigabc[2][3] = {0};
-        for (int i = 0; i < LensingConfig::CCD_split; ++i) {
+        for (int i = 0; i < lensing.ccd_split; ++i) {
             for (int j = 0; j < 3; ++j) {
                 sigabc[i][j] = normap[j * nx + (i + 1)];
             }
@@ -258,7 +263,7 @@ namespace SourceExtractor {
                 if (normap[idx] < -900.0f) {
                     weight[idx] = 0;
                 }
-                if (LensingConfig::include_FLAT == 1) {
+                if (lensing.include_flat == 1) {
                     if (!flat.empty()) {
                         array[idx] *= flat[idx];
                     }
@@ -268,7 +273,7 @@ namespace SourceExtractor {
 
         int nxc = nx / 2;
         std::vector<float> sigmap(nx * ny, 0.0f);
-        if (LensingConfig::CCD_split == 2) {
+        if (lensing.ccd_split == 2) {
             for (int x = 0; x < nxc; ++x) {
                 int ii = x + nxc;
                 for (int y = 0; y < ny; ++y) {
@@ -290,9 +295,9 @@ namespace SourceExtractor {
 
         getExpoCatalog(dirOutput, PREFIX, nx, ny, sigmap, weight, normap, proc_error);
 
-        if (LensingConfig::ext_cat == 0) {
+        if (lensing.ext_cat == 0) {
             genSourceCatalog(dirOutput, PREFIX, nx, ny, array, weight, ngal, proc_error);
-            if (LensingConfig::ext_PSF == 0) {
+            if (lensing.ext_psf == 0) {
                 genStarCandidate(dirOutput, PREFIX, nstar, proc_error);
             }
         } else {
@@ -306,7 +311,7 @@ namespace SourceExtractor {
 
             Astrometry::readAstrometryPara(filename, ichip, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
 
-            std::string catfile = LensingConfig::SOURCE_CAT;
+            std::string catfile = runtime_config.extcat.output_directory;
             std::vector<std::string> sortfile(27);
             int sortnum = 0;
 
@@ -314,13 +319,13 @@ namespace SourceExtractor {
                 generateGalCatFileName(cRVAL, catfile, sortfile, sortnum);
             }
 
-            if (LensingConfig::deblending == 1) {
+            if (lensing.deblending == 1) {
                 deBlending(sortfile, sortnum, nx, ny, weight, cRPIX, cD, cRVAL, PU, proc_error);
             }
 
             genSourceExtCatalog(dirOutput, sortfile, sortnum, PREFIX, nx, ny, array, weight, sigmap, cRPIX, cD, cRVAL, PU, ngal, proc_error);
 
-            if (LensingConfig::ext_PSF == 0) {
+            if (lensing.ext_psf == 0) {
                 genStarCandidateDirect(dirOutput, PREFIX, nx, ny, array, weight, nstar, proc_error);
             }
         }

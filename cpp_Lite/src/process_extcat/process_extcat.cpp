@@ -1308,30 +1308,31 @@ ProcessExtcat::ExistingPolicy configuredExtcatExistingPolicy(const std::string& 
 // Method: Convert variable one-based output and coordinate columns plus MiB task sizes while
 //         preserving every validated parser and publication setting.
 // ==========================================
-ProcessExtcat::Config buildIntegratedConfig(const ProcessConfig::RuntimeOptions& options) {
+ProcessExtcat::Config buildIntegratedConfig(const RuntimeConfig& runtime_config) {
+    const ExtCatRuntimeConfig& extcat = runtime_config.extcat;
     constexpr std::uint64_t bytes_per_mib = 1024ULL * 1024ULL;
-    if (options.extcat_chunk_mib == 0
-        || options.extcat_chunk_mib
+    if (extcat.chunk_mib == 0
+        || extcat.chunk_mib
                > std::numeric_limits<std::uint64_t>::max() / bytes_per_mib) {
         throw std::runtime_error("extcat chunk MiB must be a positive uint64 value");
     }
 
     ProcessExtcat::Config config;
-    config.input_directory = options.extcat_input_directory;
-    config.output_directory = options.extcat_output_directory;
-    config.filename_tokens = options.extcat_filename_tokens;
-    config.recursive = options.extcat_recursive;
-    config.delimiter = configuredDelimiter(options.extcat_delimiter);
-    config.header_mode = configuredHeaderMode(options.extcat_header_mode);
-    config.malformed_policy = configuredMalformedPolicy(options.extcat_malformed_policy);
+    config.input_directory = extcat.input_directory;
+    config.output_directory = extcat.output_directory;
+    config.filename_tokens = extcat.filename_tokens;
+    config.recursive = extcat.recursive;
+    config.delimiter = configuredDelimiter(extcat.delimiter);
+    config.header_mode = configuredHeaderMode(extcat.header_mode);
+    config.malformed_policy = configuredMalformedPolicy(extcat.malformed_policy);
     config.existing_policy = configuredExtcatExistingPolicy(
-        options.extcat_existing_policy);
-    config.chunk_bytes = options.extcat_chunk_mib * bytes_per_mib;
-    config.use_explicit_columns = options.extcat_use_explicit_columns;
+        extcat.existing_policy);
+    config.chunk_bytes = extcat.chunk_mib * bytes_per_mib;
+    config.use_explicit_columns = extcat.use_explicit_columns;
     if (config.use_explicit_columns) {
         config.input_columns.clear();
-        config.input_columns.reserve(options.extcat_input_columns_one_based.size());
-        for (const std::size_t one_based : options.extcat_input_columns_one_based) {
+        config.input_columns.reserve(extcat.input_columns_one_based.size());
+        for (const std::size_t one_based : extcat.input_columns_one_based) {
             if (one_based == 0) {
                 throw std::runtime_error(
                     "extcat explicit columns must use positive one-based indices");
@@ -1340,14 +1341,14 @@ ProcessExtcat::Config buildIntegratedConfig(const ProcessConfig::RuntimeOptions&
         }
     }
     config.use_explicit_coordinate_columns =
-        options.extcat_use_explicit_coordinate_columns;
-    if (options.extcat_ra_column_one_based == 0
-        || options.extcat_dec_column_one_based == 0) {
+        extcat.use_explicit_coordinate_columns;
+    if (extcat.ra_column_one_based == 0
+        || extcat.dec_column_one_based == 0) {
         throw std::runtime_error(
             "extcat coordinate columns must use positive one-based indices");
     }
-    config.ra_column = options.extcat_ra_column_one_based - 1;
-    config.dec_column = options.extcat_dec_column_one_based - 1;
+    config.ra_column = extcat.ra_column_one_based - 1;
+    config.dec_column = extcat.dec_column_one_based - 1;
     return config;
 }
 
@@ -1526,23 +1527,19 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
 // Method: Translate and check configuration against the startup layout collectively, then
 //         call the reusable implementation without owning MPI initialization or finalization.
 // ==========================================
-int process_extcat(const ProcessConfig::RuntimeOptions& options,
-                   const PipelineCatalog::CatalogLayout& layout,
+int process_extcat(const RuntimeConfig& runtime_config,
                    MPI_Comm communicator) {
     ProcessExtcat::Config config;
     int local_adapter_ok = 1;
     std::string local_error;
     try {
-        config = buildIntegratedConfig(options);
-        if (layout.external_columns == 0) {
+        config = buildIntegratedConfig(runtime_config);
+        config.expected_output_columns = config.use_explicit_columns
+            ? config.input_columns.size()
+            : runtime_config.extcat.total_columns;
+        if (config.expected_output_columns == 0) {
             throw std::runtime_error(
-                "integrated extcat layout width must be positive");
-        }
-        config.expected_output_columns = layout.external_columns;
-        if (config.use_explicit_columns
-            && config.input_columns.size() != layout.external_columns) {
-            throw std::runtime_error(
-                "integrated extcat projection width differs from CatalogLayout");
+                "integrated extcat output width must be positive");
         }
     } catch (const std::exception& exception) {
         local_adapter_ok = 0;

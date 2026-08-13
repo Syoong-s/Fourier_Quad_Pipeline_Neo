@@ -1,6 +1,7 @@
 #include "process_fd/ShearCatalogReader.hpp"
 #include "FDConfig.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -51,6 +52,7 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                                       const PipelineCatalog::CatalogLayout& layout,
                                       std::size_t magnitude_column,
                                       int rank) {
+    const double pixel_size = RuntimeConfigStore::get().lensing.pixel_size;
     if (iexpo < 1 || iexpo > static_cast<int>(expo_files.size())) {
         if (rank == 0)
             std::cerr << "Invalid exposure index: " << iexpo << std::endl;
@@ -115,7 +117,7 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
             data.star_mag[idx] = row[magnitude_column];
             data.sizerel[idx] =
                 ((std::sqrt(row[layout.source.h_area] / LensingConfig::pi)
-                  * LensingConfig::pixel_size * 2.0)
+                  * pixel_size * 2.0)
                  - row[layout.source.psf])
                 / row[layout.source.psf];
             data.src_snr[idx] =
@@ -172,7 +174,9 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
 
         // Half-light radius cut
         if (fc::r_half_thresh > 0.0) {
-            float r_half = std::sqrt(item[layout.source.h_area] / LensingConfig::pi) * LensingConfig::pixel_size * 2.0;
+            const float r_half = static_cast<float>(
+                std::sqrt(item[layout.source.h_area] / LensingConfig::pi)
+                * pixel_size * 2.0);
             if (r_half <= fc::r_half_thresh * item[layout.source.psf]) continue;
         }
 

@@ -1,7 +1,7 @@
 #ifndef CATALOG_LAYOUT_HPP
 #define CATALOG_LAYOUT_HPP
 
-#include "ProcessConfig.hpp"
+#include "RuntimeConfig.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -81,9 +81,30 @@ struct CatalogLayout {
 // Method: Map mandatory fields and available optional magnitudes through the
 //         projection, then derive every downstream row offset.
 // ==========================================
-bool resolveCatalogLayout(const ProcessConfig::RuntimeOptions& options,
+bool resolveCatalogLayout(const RuntimeConfig& config,
                           CatalogLayout& layout,
                           std::string& error);
+
+// ==========================================
+// Structure: RearrCatalogSchema
+// Method: Describe only the complete-row width and sky columns needed by
+//         process_rearr for either external or internal Stage-9 output.
+// ==========================================
+struct RearrCatalogSchema {
+    std::size_t all_columns = 0;
+    std::size_t ra_column = 0;
+    std::size_t dec_column = 0;
+};
+
+// ==========================================
+// Function: resolveRearrCatalogSchema
+// Method: Derive rearr fields from the external layout when ext_cat=1 or from
+//         the fixed internal `[CCD_NUM]+source` schema when ext_cat=0.
+// ==========================================
+bool resolveRearrCatalogSchema(const RuntimeConfig& config,
+                               const CatalogLayout* external_layout,
+                               RearrCatalogSchema& schema,
+                               std::string& error);
 
 // ==========================================
 // Function: Describe one resolved catalog layout

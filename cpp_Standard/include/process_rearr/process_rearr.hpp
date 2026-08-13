@@ -13,8 +13,8 @@
 //         partitioning the sky, redistributing complete rows, and writing output.
 // ==========================================
 int process_rearr(const std::string& exposure_list,
-                  const ProcessConfig::RuntimeOptions& options,
-                  const PipelineCatalog::CatalogLayout& layout,
+                  const RuntimeConfig& runtime_config,
+                  const PipelineCatalog::RearrCatalogSchema& schema,
                   MPI_Comm communicator = MPI_COMM_WORLD);
 
 #endif  // PROCESS_REARR_PROCESS_REARR_HPP

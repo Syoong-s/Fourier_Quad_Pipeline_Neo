@@ -52,7 +52,7 @@ namespace Astrometry {
                            const std::vector<float>& map, const std::vector<int>& weight,
                            WCSParams& wcs, const std::string& filename, int& procError);
 
-    void getAstrometryCatalog(int nx, int ny, int npx, int npy, const std::vector<float>& image,
+    void getAstrometryCatalog(int nx, int ny, const std::vector<float>& image,
                               const std::vector<int>& weight, int n_user_max, int ns_max,
                               int& ns, std::vector<double>& xs, std::vector<double>& ys);
 

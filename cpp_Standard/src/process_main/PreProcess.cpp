@@ -1,6 +1,7 @@
 #include "PreProcess.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "FitsIO.hpp"
 #include "Astrometry.hpp"
@@ -376,6 +377,8 @@ namespace PreProcess {
 
     // Stage 1 driver
     void preProcess(int iexpo) {
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
         if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
             return;
@@ -390,7 +393,8 @@ namespace PreProcess {
             
             std::ostringstream oss;
             oss << std::setw(2) << std::setfill('0') << cid;
-            std::string flat_file = LensingConfig::FLAT_PATH + "/flat_" + oss.str() + "_weight.fits";
+            std::string flat_file = lensing.flat_path + "/flat_" + oss.str()
+                                    + "_weight.fits";
             
             chipPreProcess(image_file, dir_output, cid, flat_file);
         }
@@ -401,6 +405,8 @@ namespace PreProcess {
     // Method: Match the Fortran Stage 1 flow while keeping diagnostics side-effect free.
     // ==========================================
     void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid, const std::string& maskFile) {
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
         int proc_error = 0;
         int nx = 0, ny = 0;
         std::vector<float> array;
@@ -410,19 +416,11 @@ namespace PreProcess {
         bool image_read_ok = FitsIO::readImagePara(imageFile, nx, ny, array, wcs);
         if (!image_read_ok || (!array.empty() && array[0] < -99990.0f)) {
             std::cerr << "Error reading image parameters of: " << imageFile << std::endl;
-            proc_error = 1;
-            if (nx <= 0 || ny <= 0 || array.empty()) {
-                nx = LensingConfig::npx;
-                ny = LensingConfig::npy;
-                array.assign(static_cast<size_t>(nx) * static_cast<size_t>(ny), -99999.0f);
-            } else if (array.size() < static_cast<size_t>(nx) * static_cast<size_t>(ny)) {
-                array.assign(static_cast<size_t>(nx) * static_cast<size_t>(ny), -99999.0f);
-            }
-            array[0] = -99999.0f;
+            return;
         }
 
         std::vector<float> flat;
-        if (LensingConfig::include_FLAT == 1) {
+        if (lensing.include_flat == 1) {
             int fnx = 0, fny = 0;
             if (!FitsIO::readImage(maskFile, fnx, fny, flat)) {
                 std::cerr << "Error reading flat file: " << maskFile << std::endl;
@@ -439,7 +437,7 @@ namespace PreProcess {
         for (int y = 0; y < ny; ++y) {
             for (int x = 0; x < nx; ++x) {
                 int idx = y * nx + x;
-                if (LensingConfig::include_FLAT == 1 && proc_error == 0) {
+                if (lensing.include_flat == 1 && proc_error == 0) {
                     if (flat[idx] < 0.5f) {
                         weight[idx] = 0;
                     } else {
@@ -457,7 +455,7 @@ namespace PreProcess {
         int nxc = nx / 2;
         double aa = 0.0, bb = 0.0, cc = 0.0;
 
-        if (LensingConfig::CCD_split == 2) {
+        if (lensing.ccd_split == 2) {
             setBackground(0, nxc, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             setBackground(nxc, nx, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             
@@ -488,7 +486,7 @@ namespace PreProcess {
         //         later preprocessing stages.
         // ==========================================
         if (proc_error == 0
-            && (LensingConfig::include_Mask == 2 || LensingConfig::include_Mask == 3)) {
+            && (lensing.include_mask == 2 || lensing.include_mask == 3)) {
             std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
             std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
                                           + prefix_e + "_" + std::to_string(cid) + ".fits";
@@ -513,10 +511,11 @@ namespace PreProcess {
         std::string astroFilename = OutputLayout::chipPath(
             dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
-        if (LensingConfig::ASTROMETRY_trivial == 1) {
+        if (lensing.astrometry_trivial == 1) {
             Astrometry::genAstrometryDataTrivial(wcs, astroFilename);
         } else {
-            std::string catfile = UniversalUtils::generateGaiaFileName(LensingConfig::ASTROMETRY_CAT, wcs.crval, proc_error);
+            std::string catfile = UniversalUtils::generateGaiaFileName(
+                lensing.astrometry_cat, wcs.crval, proc_error);
             Astrometry::genAstrometryData(catfile, nx, ny, normap, weight, wcs, astroFilename, proc_error);
         }
 
@@ -524,7 +523,7 @@ namespace PreProcess {
         mergeDefects(nx, ny, weight, normap, LensingConfig::area_max, LensingConfig::source_thresh, LensingConfig::area_thresh, proc_error);
 
         if (proc_error == 0) {
-            if (LensingConfig::include_Mask == 1 || LensingConfig::include_Mask == 3) {
+            if (lensing.include_mask == 1 || lensing.include_mask == 3) {
                 int nxx = 0, nyy = 0;
                 std::vector<float> flat_weight;
                 if (!FitsIO::readImage(maskFile, nxx, nyy, flat_weight)) {
@@ -560,7 +559,7 @@ namespace PreProcess {
             normap[0] = 1.0f;
         }
 
-        for (int i = 1; i <= LensingConfig::CCD_split; ++i) {
+        for (int i = 1; i <= lensing.ccd_split; ++i) {
             for (int j = 1; j <= 3; ++j) {
                 normap[(j - 1) * nx + i] = static_cast<float>(sigabc[i - 1][j - 1]);
             }
@@ -1095,7 +1094,8 @@ namespace PreProcess {
            map[i] = UniversalUtils::loga(array[i], 1);
        }
 
-        ImageProcessing::removeContinuous(nx, ny, nx, ny, map, UniversalUtils::iden, 4);
+        ImageProcessing::removeContinuous(
+            nx, ny, nx, map, UniversalUtils::iden, 4);
 
         std::vector<float> diffx(nx * ny);
         std::vector<float> diffy(nx * ny);

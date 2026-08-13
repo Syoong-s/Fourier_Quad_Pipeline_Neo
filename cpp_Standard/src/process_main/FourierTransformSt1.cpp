@@ -2,6 +2,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -42,6 +43,8 @@ namespace FourierTransformSt1 {
     // ==========================================
     void chipProcessFourierTSt1(const std::string& imageFile,
                                 const std::string& dirOutput) {
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
         const Universalblock::NormStatus normStatus =
             Universalblock::checkNorm(imageFile, dirOutput);
         if (normStatus == Universalblock::NormStatus::Invalid) {
@@ -52,7 +55,7 @@ namespace FourierTransformSt1 {
             return;
         }
 
-        if (LensingConfig::ext_PSF == 1) {
+        if (lensing.ext_psf == 1) {
             return;
         }
 
@@ -127,10 +130,13 @@ namespace FourierTransformSt1 {
                 double source_pc = 0.0;
                 double noise_pc = 0.0;
 
-                ImageProcessing::getPower(ns, ns, source, source_p, LensingConfig::star_smooth, source_pc);
-                ImageProcessing::getPower(ns, ns, noise, noise_p, LensingConfig::star_smooth, noise_pc);
+                ImageProcessing::getPower(ns, ns, source, source_p,
+                                          lensing.star_smooth, source_pc);
+                ImageProcessing::getPower(ns, ns, noise, noise_p,
+                                          lensing.star_smooth, noise_pc);
                 ImageProcessing::processPowers(ns, source_p, noise_p);
-                ImageProcessing::regularizePower(ns, ns, source_p, LensingConfig::star_smooth);
+                ImageProcessing::regularizePower(ns, ns, source_p,
+                                                 lensing.star_smooth);
 
                 std::copy_n(source_p.data(), stamp_size,
                             power_coll.data() + offset);

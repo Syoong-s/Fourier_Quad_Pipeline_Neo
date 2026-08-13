@@ -3,6 +3,7 @@
 #include "OutputFile.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "UniversalUtils.hpp"
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
@@ -132,7 +133,7 @@ void getPSFArea(const float* model, float& FWHM) {
     float r = std::sqrt(area / LensingConfig::pi);
     float beta = ns / (2.0f * LensingConfig::pi) / r;
     FWHM = beta * 2.0f * std::sqrt(2.0f * std::log(2.0f))
-         * static_cast<float>(LensingConfig::pixel_size);
+         * static_cast<float>(RuntimeConfigStore::get().lensing.pixel_size);
 }
 
 // ==========================================
@@ -380,7 +381,11 @@ void procShear(int iexpo) {
     std::string dir_output;
     UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
 
-    expoShear(image_files.size(), image_files, dir_output, LensingConfig::chipnx, LensingConfig::chipny);
+    const LensingRuntimeConfig& lensing =
+        RuntimeConfigStore::get().lensing;
+    expoShear(
+        static_cast<int>(image_files.size()), image_files, dir_output,
+        lensing.chipnx, lensing.chipny);
 }
 
 } // namespace ShearMeasurement

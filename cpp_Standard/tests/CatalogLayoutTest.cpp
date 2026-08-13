@@ -29,11 +29,11 @@ void expect(bool condition, const std::string& message, int& failures) {
 // Function: Create explicit projection options
 // Method: Start from production defaults and replace only projection controls.
 // ==========================================
-ProcessConfig::RuntimeOptions projectionOptions(
+RuntimeConfig projectionOptions(
     std::vector<std::size_t> columns) {
-    ProcessConfig::RuntimeOptions options;
-    options.extcat_use_explicit_columns = true;
-    options.extcat_input_columns_one_based = std::move(columns);
+    RuntimeConfig options = makeDefaultRuntimeConfig();
+    options.extcat.use_explicit_columns = true;
+    options.extcat.input_columns_one_based = std::move(columns);
     return options;
 }
 
@@ -69,14 +69,14 @@ std::string numericRow(const std::vector<float>& values) {
 
 // ==========================================
 // Function: Mark every configured magnitude as absent
-// Method: Apply the raw one-based zero sentinel to all five RuntimeOptions fields.
+// Method: Apply the raw one-based zero sentinel to all five extcat fields.
 // ==========================================
-void clearMagnitudeColumns(ProcessConfig::RuntimeOptions& options) {
-    options.extcat_mag_g_column_one_based = 0;
-    options.extcat_mag_r_column_one_based = 0;
-    options.extcat_mag_i_column_one_based = 0;
-    options.extcat_mag_z_column_one_based = 0;
-    options.extcat_mag_y_column_one_based = 0;
+void clearMagnitudeColumns(RuntimeConfig& options) {
+    options.extcat.mag_g_column_one_based = 0;
+    options.extcat.mag_r_column_one_based = 0;
+    options.extcat.mag_i_column_one_based = 0;
+    options.extcat.mag_z_column_one_based = 0;
+    options.extcat.mag_y_column_one_based = 0;
 }
 
 // ==========================================
@@ -84,7 +84,7 @@ void clearMagnitudeColumns(ProcessConfig::RuntimeOptions& options) {
 // Method: Check the 18 + 1 + 29 contract and its terminal source field.
 // ==========================================
 void testLegacyLayout(int& failures) {
-    ProcessConfig::RuntimeOptions options;
+    RuntimeConfig options = makeDefaultRuntimeConfig();
     PipelineCatalog::CatalogLayout layout;
     std::string error;
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
@@ -108,16 +108,16 @@ void testLegacyLayout(int& failures) {
 // Method: Place all eight named fields in an eight-column raw catalog.
 // ==========================================
 void testCompactPassThroughLayout(int& failures) {
-    ProcessConfig::RuntimeOptions options;
-    options.extcat_total_columns = 8;
-    options.extcat_ra_column_one_based = 1;
-    options.extcat_dec_column_one_based = 2;
-    options.extcat_mag_g_column_one_based = 3;
-    options.extcat_mag_r_column_one_based = 4;
-    options.extcat_mag_i_column_one_based = 5;
-    options.extcat_mag_z_column_one_based = 6;
-    options.extcat_mag_y_column_one_based = 7;
-    options.extcat_zp_column_one_based = 8;
+    RuntimeConfig options = makeDefaultRuntimeConfig();
+    options.extcat.total_columns = 8;
+    options.extcat.ra_column_one_based = 1;
+    options.extcat.dec_column_one_based = 2;
+    options.extcat.mag_g_column_one_based = 3;
+    options.extcat.mag_r_column_one_based = 4;
+    options.extcat.mag_i_column_one_based = 5;
+    options.extcat.mag_z_column_one_based = 6;
+    options.extcat.mag_y_column_one_based = 7;
+    options.extcat.zp_column_one_based = 8;
 
     PipelineCatalog::CatalogLayout layout;
     std::string error;
@@ -146,11 +146,11 @@ void testCompactPassThroughLayout(int& failures) {
 //         magnitude absent through the raw zero sentinel.
 // ==========================================
 void testRequiredOnlyPassThroughLayout(int& failures) {
-    ProcessConfig::RuntimeOptions options;
-    options.extcat_total_columns = 3;
-    options.extcat_ra_column_one_based = 1;
-    options.extcat_dec_column_one_based = 2;
-    options.extcat_zp_column_one_based = 3;
+    RuntimeConfig options = makeDefaultRuntimeConfig();
+    options.extcat.total_columns = 3;
+    options.extcat.ra_column_one_based = 1;
+    options.extcat.dec_column_one_based = 2;
+    options.extcat.zp_column_one_based = 3;
     clearMagnitudeColumns(options);
 
     PipelineCatalog::CatalogLayout layout;
@@ -178,7 +178,7 @@ void testRequiredOnlyPassThroughLayout(int& failures) {
 // Method: Project only the eight named fields in canonical order and check offsets.
 // ==========================================
 void testOrderedProjection(int& failures) {
-    ProcessConfig::RuntimeOptions options = projectionOptions(
+    RuntimeConfig options = projectionOptions(
         {5, 6, 7, 9, 11, 13, 15, 17});
     PipelineCatalog::CatalogLayout layout;
     std::string error;
@@ -202,7 +202,7 @@ void testOrderedProjection(int& failures) {
 // Method: Move ZP/RA/Dec to the first columns and parse their effective positions.
 // ==========================================
 void testReorderedProjection(int& failures) {
-    ProcessConfig::RuntimeOptions options = projectionOptions(
+    RuntimeConfig options = projectionOptions(
         {17, 5, 6, 7, 9, 11, 13, 15});
     PipelineCatalog::CatalogLayout layout;
     std::string error;
@@ -235,7 +235,7 @@ void testReorderedProjection(int& failures) {
 // Method: Retain unrelated projected fields while resolving only eight named positions.
 // ==========================================
 void testExtraUnmodeledColumns(int& failures) {
-    ProcessConfig::RuntimeOptions options = projectionOptions(
+    RuntimeConfig options = projectionOptions(
         {17, 5, 6, 1, 7, 8, 9, 11, 13, 15});
     PipelineCatalog::CatalogLayout layout;
     std::string error;
@@ -264,17 +264,17 @@ void testProjectionRules(int& failures) {
     PipelineCatalog::CatalogLayout layout;
     std::string error;
 
-    ProcessConfig::RuntimeOptions missing_ra = projectionOptions(
+    RuntimeConfig missing_ra = projectionOptions(
         {6, 7, 9, 11, 13, 15, 17});
     expect(!PipelineCatalog::resolveCatalogLayout(missing_ra, layout, error),
            "projection missing RA should fail", failures);
 
-    ProcessConfig::RuntimeOptions missing_zp = projectionOptions(
+    RuntimeConfig missing_zp = projectionOptions(
         {5, 6, 7, 9, 11, 13, 15});
     expect(!PipelineCatalog::resolveCatalogLayout(missing_zp, layout, error),
            "projection missing ZP should fail", failures);
 
-    ProcessConfig::RuntimeOptions missing_mag_i = projectionOptions(
+    RuntimeConfig missing_mag_i = projectionOptions(
         {17, 5, 6, 13});
     expect(PipelineCatalog::resolveCatalogLayout(missing_mag_i, layout, error),
            "projection missing optional mag_i should resolve: " + error,
@@ -284,14 +284,14 @@ void testProjectionRules(int& failures) {
            "projection omission should mark mag_i absent and retain mag_z",
            failures);
 
-    ProcessConfig::RuntimeOptions duplicate = projectionOptions(
+    RuntimeConfig duplicate = projectionOptions(
         {5, 6, 7, 9, 11, 11, 13, 15, 17});
     expect(!PipelineCatalog::resolveCatalogLayout(duplicate, layout, error),
            "projection with duplicate raw columns should fail", failures);
 
-    ProcessConfig::RuntimeOptions overlap;
-    overlap.extcat_mag_g_column_one_based =
-        overlap.extcat_ra_column_one_based;
+    RuntimeConfig overlap = makeDefaultRuntimeConfig();
+    overlap.extcat.mag_g_column_one_based =
+        overlap.extcat.ra_column_one_based;
     expect(!PipelineCatalog::resolveCatalogLayout(overlap, layout, error),
            "two required meanings assigned to one raw column should fail",
            failures);
@@ -303,7 +303,7 @@ void testProjectionRules(int& failures) {
 //         followed by an explicit failure when no magnitude remains.
 // ==========================================
 void testFdMagnitudeSelection(int& failures) {
-    ProcessConfig::RuntimeOptions options;
+    RuntimeConfig options = makeDefaultRuntimeConfig();
     PipelineCatalog::CatalogLayout layout;
     ProcessFD::MagnitudeSelection selection;
     std::string error;
@@ -319,15 +319,15 @@ void testFdMagnitudeSelection(int& failures) {
     };
 
     expect_band("i");
-    options.extcat_mag_i_column_one_based = 0;
+    options.extcat.mag_i_column_one_based = 0;
     expect_band("z");
-    options.extcat_mag_z_column_one_based = 0;
+    options.extcat.mag_z_column_one_based = 0;
     expect_band("r");
-    options.extcat_mag_r_column_one_based = 0;
+    options.extcat.mag_r_column_one_based = 0;
     expect_band("g");
-    options.extcat_mag_g_column_one_based = 0;
+    options.extcat.mag_g_column_one_based = 0;
     expect_band("y");
-    options.extcat_mag_y_column_one_based = 0;
+    options.extcat.mag_y_column_one_based = 0;
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
            "layout without magnitudes should remain valid: " + error,
            failures);
@@ -345,7 +345,7 @@ void testFdMagnitudeSelection(int& failures) {
 //         then require the reader to accept and store the z magnitude.
 // ==========================================
 void testSelectedMagnitudeReader(int& failures) {
-    ProcessConfig::RuntimeOptions options = projectionOptions(
+    RuntimeConfig options = projectionOptions(
         {17, 5, 6, 7, 13});
     PipelineCatalog::CatalogLayout layout;
     ProcessFD::MagnitudeSelection selection;
@@ -405,7 +405,7 @@ void testSelectedMagnitudeReader(int& failures) {
 // Method: Accept N columns and reject both N-1 and N+1 rows.
 // ==========================================
 void testFdRowWidth(int& failures) {
-    ProcessConfig::RuntimeOptions options = projectionOptions(
+    RuntimeConfig options = projectionOptions(
         {17, 5, 6, 7, 9, 11, 13, 15});
     PipelineCatalog::CatalogLayout layout;
     std::string error;
@@ -436,6 +436,12 @@ void testFdRowWidth(int& failures) {
 // ==========================================
 int main() {
     int failures = 0;
+    std::string store_error;
+    expect(RuntimeConfigStore::initialize(
+               makeDefaultRuntimeConfig(), store_error),
+           "runtime store should initialize for FD reader coverage: " +
+               store_error,
+           failures);
     testLegacyLayout(failures);
     testCompactPassThroughLayout(failures);
     testRequiredOnlyPassThroughLayout(failures);

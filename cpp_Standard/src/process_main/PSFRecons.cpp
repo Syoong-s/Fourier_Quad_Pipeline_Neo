@@ -4,6 +4,7 @@
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
 #include "LensingConfig.hpp"
+#include "RuntimeConfig.hpp"
 #include "PSFModel.hpp"
 #include "FitsIO.hpp"
 #include "UniversalUtils.hpp"
@@ -171,7 +172,11 @@ namespace PSFRecons {
         }
     }
 
-    // Stage 6 main entry: coordinates PSF fitting and reconstruction across chips and exposures
+    // ==========================================
+    // Function: Run Stage-6 hierarchical PSF reconstruction
+    // Method: Schedule the runtime chip range, load the matching shared PCA
+    //         buffers, then distribute residual mapping over exposures.
+    // ==========================================
     void chipPSFRecons(int nexpo) {
         std::vector<std::string> image_files;
         std::string dir_output;
@@ -181,7 +186,7 @@ namespace PSFRecons {
         MPIScheduler::forcecov(
             LensingConfig::procs_pn,
             LensingConfig::work_pn,
-            LensingConfig::NMAX_CHIP,
+            RuntimeConfigStore::get().lensing.nmax_chip,
             [](int ichip, int nexpo_inner) {
                 chipResPCAFit(ichip, nexpo_inner);
             },
@@ -220,6 +225,8 @@ namespace PSFRecons {
         int ns = LensingConfig::ns;
         int nsns = LensingConfig::nsns;
         int block_size = 2000;
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
 
         std::vector<double> block_dble(static_cast<size_t>(block_size) * nsns, 0.0);
         std::vector<double> cov_arr(static_cast<size_t>(nsns) * nsns, 0.0);
@@ -493,8 +500,8 @@ namespace PSFRecons {
         }
 
         // 3. Fit PCA coefficients as functions of position
-        double nxc = static_cast<double>(LensingConfig::chipnx) / LensingConfig::nblocks;
-        double nyc = static_cast<double>(LensingConfig::chipny) / LensingConfig::nblocks;
+        double nxc = static_cast<double>(lensing.chipnx) / LensingConfig::nblocks;
+        double nyc = static_cast<double>(lensing.chipny) / LensingConfig::nblocks;
 
         for (int j = 1; j <= LensingConfig::nblocks; ++j) {
             double lxd = (j - 1.0) * nxc;
@@ -777,6 +784,8 @@ namespace PSFRecons {
                                  const std::vector<double>& local_coe, std::vector<float>& psf_model) {
         int ns = LensingConfig::ns;
         int npl = LensingConfig::npl;
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
         
         psf_model.assign(ns * ns, 0.0f);
 
@@ -785,9 +794,16 @@ namespace PSFRecons {
                 "reconstruct hierarchical PSF",
                 "PCA data is not loaded for CCD " + std::to_string(i_ccd));
         }
+        if (i_ccd <= 0 || i_ccd > lensing.nmax_chip) {
+            MPIFailure::abortWorld(
+                "reconstruct hierarchical PSF",
+                "CCD " + std::to_string(i_ccd) +
+                    " is outside configured nmax_chip=" +
+                    std::to_string(lensing.nmax_chip));
+        }
 
-        double xx_norm = 2.0 * (x / static_cast<double>(LensingConfig::chipnx)) - 1.0;
-        double yy_norm = 2.0 * (y / static_cast<double>(LensingConfig::chipny)) - 1.0;
+        double xx_norm = 2.0 * (x / static_cast<double>(lensing.chipnx)) - 1.0;
+        double yy_norm = 2.0 * (y / static_cast<double>(lensing.chipny)) - 1.0;
 
         std::vector<float> psf_layer1(ns * ns, 0.0f);
         std::vector<float> psf_layer2(ns * ns, 0.0f);
@@ -801,8 +817,8 @@ namespace PSFRecons {
 
         int bx = 0;
         int by = 0;
-        double nxc = static_cast<double>(LensingConfig::chipnx) / LensingConfig::nblocks;
-        double nyc = static_cast<double>(LensingConfig::chipny) / LensingConfig::nblocks;
+        double nxc = static_cast<double>(lensing.chipnx) / LensingConfig::nblocks;
+        double nyc = static_cast<double>(lensing.chipny) / LensingConfig::nblocks;
         double x_norm = 0.0;
         double y_norm = 0.0;
 

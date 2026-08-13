@@ -7,6 +7,29 @@ The complete C++ pipeline guide lives in
 [`../CPP_GUIDE.md`](../CPP_GUIDE.md). The full parameter reference is
 [`../CPP_PIPELINE_PARAMETERS.md`](../CPP_PIPELINE_PARAMETERS.md).
 
+## Runtime configuration
+
+`RuntimeConfig` owns every run-selectable Process, ExtCat, Init, and surviving
+Lite Lensing value. Start from [`pipeline.example.ini`](pipeline.example.ini):
+
+```bash
+./Fourier_Quad_Pipe --config pipeline.ini
+```
+
+Precedence is compiled defaults, then INI values, then CLI overrides. Rank 0
+alone reads the file and broadcasts its exact text; every MPI rank parses and
+validates that text before the write-once store is initialized. Unknown keys,
+sections, or malformed values fail startup transactionally with structured
+diagnostics. `source_cat` aliases the authoritative
+`extcat.output_directory`.
+
+Lite exposes only `process_stage`, `astrometry_cat`, `ccd_split`, `gal_smooth`,
+`star_smooth`, `pixel_size`, `nmax_chip`, `chipnx`, and `chipny` in
+`[lensing]`. Its frozen Gaia/DQ/external-catalog/frame-star/deblending/local-PSF
+behaviors remain implemented directly; Standard-only selector and path keys are
+rejected instead of silently pretending to work. The removed `npx`, `npy`, and
+`NMAX_EXPO` settings are not accepted.
+
 ## Stamp-cube format
 
 Stage 3--7 stamp collections are contiguous three-dimensional FITS images with
@@ -47,6 +70,9 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 make CXX="${MPI_PREFIX}/bin/mpicxx" \
   STACK_PREFIX="${STACK_PREFIX}" \
   EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-psf-model-state
+make CXX="${MPI_PREFIX}/bin/mpicxx" \
+  STACK_PREFIX="${STACK_PREFIX}" \
+  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-runtime-config
 ./Fourier_Quad_Pipe --help
 ```
 
@@ -56,6 +82,10 @@ covers equal 100-row catalogs, both mismatch directions, and paired header-only
 catalogs. The PSF-state test covers actual candidate counts of 0, 10, 300, and
 2301, including full live-stride matrix access beyond the 2000-row reservation
 hint.
+
+The runtime-config test covers Lite defaults, all four INI sections, strict
+rejection of deleted-branch keys, default/file/CLI precedence, geometry and
+stage validation, transactional failures, and the immutable store.
 
 The current local WSL2 stack is GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.3,
 FFTW 3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33; portable cluster versions
@@ -80,9 +110,10 @@ unchanged.
 
 ## Runtime catalog layout
 
-Lite now uses the same startup-resolved `CatalogLayout` contract as Standard.
-`main` passes one immutable layout to `process_extcat`, `process_main`,
-`process_rearr`, and `process_fd`. Pass-through mode takes the external
+Lite uses the same startup-resolved external `CatalogLayout` contract as
+Standard. `main` passes one immutable layout to `process_main`,
+`process_rearr`, and `process_fd`; `process_extcat` consumes the same runtime
+extcat section directly. Pass-through mode takes the external
 prefix width from `EXTCAT_TOTAL_COLUMNS`; explicit projection uses the
 projection length. CCD, source-suffix, and complete-row offsets are derived
 from that effective width, while the process-main suffix remains 29 fields.

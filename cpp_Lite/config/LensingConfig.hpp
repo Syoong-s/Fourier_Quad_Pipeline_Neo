@@ -9,10 +9,6 @@ namespace LensingConfig {
     constexpr double pi = 3.14159265358979323846;
     constexpr double arc_convert = pi / 180.0;
 
-    // Image/CCD size parameters
-    constexpr int npx = 3000;
-    constexpr int npy = 5000;
-
     // ==========================================
     // cpp_lite: the following build-time branch selectors of the full pipeline are FROZEN and
     // their unused branches have been deleted from the sources.  They no longer exist as
@@ -25,7 +21,8 @@ namespace LensingConfig {
     //   deblending         = 1  -> de-blending always applied
     //   PSF_type           = 1  -> local polynomial PSF fit
     //   PSF_Ms             = 0  -> no multi-scale / PCA PSF reconstruction
-    // Still selectable: PROCESS_stage, CCD_split, gal_smooth, star_smooth.
+    // Runtime-selectable Lite fields also include the Gaia/source paths, pixel
+    // scale, chip count, and physical chip geometry; see pipeline.example.ini.
     // ==========================================
 
     // Stage control parameters
@@ -35,11 +32,11 @@ namespace LensingConfig {
     const std::string ASTROMETRY_CAT = "/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted";
 
     // ==========================================
-    // Configuration: Primary external source-catalog directory
-    // Method: Seed process_extcat output and process_main input from one mutable path so a
-    //         command-line override can update both phases before processing starts.
+    // Configuration: Primary external source-catalog directory fallback
+    // Method: Seed the unified runtime extcat output/input path without allowing
+    //         deep pipeline code to mutate the compiled default.
     // ==========================================
-    inline std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";
+    inline const std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";
 
     // Split parameters
     constexpr int CCD_split = 2;
@@ -164,9 +161,8 @@ namespace LensingConfig {
     constexpr int expo_cat_ncols = shear_cat_ncols + 1;
     constexpr int ichi2 = shear_cat_ncols;
     
-    // Max counts
-    constexpr int NMAX_EXPO = 25000;
-    constexpr int NMAX_CHIP = 62;
+    // Compiled fallback copied into RuntimeConfig before file/CLI overrides.
+    constexpr int DEFAULT_CHIP_COUNT = 62;
 
     // Band correction parameters
     constexpr double g1_c = -0.001;
