@@ -12,6 +12,7 @@ test_catalog_row_count
 test_psf_model_state
 test_runtime_config
 test_universalblock
+test_astrometry_dynamic_capacity
 
 # Superplan planning workspace
 .planning/

@@ -20,6 +20,10 @@ extern std::vector<std::string> EXPO_FILE;
 
 namespace Astrometry {
 
+    namespace {
+        constexpr std::size_t initial_astrometry_rows = 500;
+    }
+
     // ==========================================
     // Function: Emulate Fortran INT(value + 0.5)
     // Method: Fortran INT truncates toward zero, unlike floor for negative values.
@@ -331,7 +335,11 @@ namespace Astrometry {
         }
     }
 
-    void getRaDecBound(int np, int n, const std::vector<double>& a, const std::vector<double>& d,
+    // ==========================================
+    // Function: Measure sky-coordinate bounds for one catalog.
+    // Method: Scan declination directly and unwrap right ascension across 0/360.
+    // ==========================================
+    void getRaDecBound(int n, const std::vector<double>& a, const std::vector<double>& d,
                        double& ra, double& dra, double& dec, double& ddec) {
         if (n <= 0) return;
         double dec1 = d[0];
@@ -378,6 +386,10 @@ namespace Astrometry {
         }
     }
 
+    // ==========================================
+    // Function: Measure distorted sky bounds for an image.
+    // Method: Project all four pixel corners through the fitted PU transform.
+    // ==========================================
     void getRaDecRangeFine(int nx, int ny, double& ra, double dec[2], double& dra,
                            const double cRPIX[2], const double cD[2][2], const double cRVAL[2],
                            const double PU[2][LensingConfig::npd], int npd, double astrometryShiftRatio) {
@@ -389,7 +401,7 @@ namespace Astrometry {
         }
 
         double ra_c = 0.0, dec_c = 0.0, ddec = 0.0;
-        getRaDecBound(4, 4, a, d, ra_c, dra, dec_c, ddec);
+        getRaDecBound(4, a, d, ra_c, dra, dec_c, ddec);
 
         dec[0] = dec_c - 0.5 * ddec;
         dec[1] = dec_c + 0.5 * ddec;
@@ -402,6 +414,10 @@ namespace Astrometry {
         ra = ra_c;
     }
 
+    // ==========================================
+    // Function: Measure initial sky bounds for an image.
+    // Method: Project all four pixel corners through the linear WCS transform.
+    // ==========================================
     void getRaDecRange(int nx, int ny, double& ra, double dec[2], double& dra,
                        const double cRPIX[2], const double cD[2][2], const double cRVAL[2],
                        double astrometryShiftRatio) {
@@ -413,7 +429,7 @@ namespace Astrometry {
         }
 
         double ra_c = 0.0, dec_c = 0.0, ddec = 0.0;
-        getRaDecBound(4, 4, a, d, ra_c, dra, dec_c, ddec);
+        getRaDecBound(4, a, d, ra_c, dra, dec_c, ddec);
 
         dec[0] = dec_c - 0.5 * ddec;
         dec[1] = dec_c + 0.5 * ddec;
@@ -444,12 +460,12 @@ namespace Astrometry {
 
     // ==========================================
     // Function: Extract sources for astrometric matching
-    // Method: Segment the supplied image at its physical dimensions and retain
-    //         the strongest bounded connected components for matching.
+    // Method: Segment the supplied image at its physical dimensions, grow all
+    //         row buffers dynamically, and retain every bounded component.
     // ==========================================
     void getAstrometryCatalog(int nx, int ny, const std::vector<float>& image,
-                              const std::vector<int>& weight, int n_user_max, int ns_max,
-                              int& ns, std::vector<double>& xs, std::vector<double>& ys) {
+                              const std::vector<int>& weight, int& ns,
+                              std::vector<double>& xs, std::vector<double>& ys) {
         std::vector<int> mark(nx * ny, 0);
         for (int y = 0; y < ny; ++y) {
             for (int x = 0; x < nx; ++x) {
@@ -467,8 +483,11 @@ namespace Astrometry {
         std::vector<double> ysb;
         std::vector<float> flux_array;
         std::vector<int> order;
+        xsb.reserve(initial_astrometry_rows);
+        ysb.reserve(initial_astrometry_rows);
+        flux_array.reserve(initial_astrometry_rows);
+        order.reserve(initial_astrometry_rows);
 
-        constexpr int sizemax = 10000;
         constexpr int area_limit = 400;
 
         for (int i = 0; i < nx; ++i) {
@@ -477,15 +496,12 @@ namespace Astrometry {
                 if (mark[start_idx] == 1) {
                     int nbb = 0;
                     std::vector<std::pair<int, int>> buffer;
-                    buffer.reserve(sizemax);
+                    buffer.reserve(initial_astrometry_rows);
                     buffer.push_back({i, j});
                     mark[start_idx] = -1;
 
-                    int xp = i;
-                    int yp = j;
                     float peak = image[start_idx];
                     float flux = 0.0f;
-                    int toobig = 0;
 
                     while (static_cast<int>(buffer.size()) > nbb) {
                         int k1 = nbb;
@@ -509,56 +525,36 @@ namespace Astrometry {
                                         flux += image[nidx];
                                         if (image[nidx] > peak) {
                                             peak = image[nidx];
-                                            xp = u;
-                                            yp = v;
                                         }
-                                        if (buffer.size() == sizemax) {
-                                            toobig = 1;
-                                            goto label20;
-                                        }
-                                    } else if (mark[nidx] == 2) {
-                                        toobig = 1;
-                                        goto label20;
                                     }
                                 }
                             }
                         }
                     }
 
-                label20:
-                    if (toobig == 1) {
-                        for (const auto& pt : buffer) {
-                            mark[pt.second * nx + pt.first] = 2;
+                    int area = 0;
+                    flux = 0.0f;
+                    double xc = 0.0;
+                    double yc = 0.0;
+                    float temp = peak * 0.5f;
+                    for (const auto& pt : buffer) {
+                        int idx = pt.second * nx + pt.first;
+                        if (image[idx] >= temp) {
+                            area++;
+                            flux += image[idx];
+                            xc += image[idx] * (pt.first + 1.0); // 1-based coordinates
+                            yc += image[idx] * (pt.second + 1.0); // 1-based coordinates
                         }
-                    } else {
-                        int area = 0;
-                        flux = 0.0f;
-                        double xc = 0.0;
-                        double yc = 0.0;
-                        float temp = peak * 0.5f;
-                        for (const auto& pt : buffer) {
-                            int idx = pt.second * nx + pt.first;
-                            if (image[idx] >= temp) {
-                                area++;
-                                flux += image[idx];
-                                xc += image[idx] * (pt.first + 1.0); // 1-based coordinates
-                                yc += image[idx] * (pt.second + 1.0); // 1-based coordinates
-                            }
-                        }
-                        xc /= flux;
-                        yc /= flux;
+                    }
+                    xc /= flux;
+                    yc /= flux;
 
-                        if (area <= area_limit) {
-                            nsb++;
-                            xsb.push_back(xc);
-                            ysb.push_back(yc);
-                            flux_array.push_back(flux);
-                            order.push_back(nsb - 1);
-                            if (nsb == ns_max) {
-                                ns = 0;
-                                return;
-                            }
-                        }
+                    if (area <= area_limit) {
+                        nsb++;
+                        xsb.push_back(xc);
+                        ysb.push_back(yc);
+                        flux_array.push_back(flux);
+                        order.push_back(nsb - 1);
                     }
                 }
             }
@@ -568,23 +564,23 @@ namespace Astrometry {
             return flux_array[a] > flux_array[b];
         });
 
-        ns = 0;
-        int limit = std::min(n_user_max, nsb);
-        xs.resize(limit);
-        ys.resize(limit);
-        for (int i = 0; i < limit; ++i) {
-            xs[i] = xsb[order[i]];
-            ys[i] = ysb[order[i]];
-            ns++;
+        xs.clear();
+        ys.clear();
+        xs.reserve(initial_astrometry_rows);
+        ys.reserve(initial_astrometry_rows);
+        for (int index : order) {
+            xs.push_back(xsb[index]);
+            ys.push_back(ysb[index]);
         }
+        ns = static_cast<int>(xs.size());
     }
 
     // ==========================================
     // Function: Match two astrometric point catalogs
     // Method: Exclude non-finite samples, preserve the F77 shift search, then run one checked affine refinement.
     // ==========================================
-    void patternMatching(int np0, int n0, const std::vector<double>& x0, const std::vector<double>& y0,
-                         int np1, int n1, const std::vector<double>& x1, const std::vector<double>& y1,
+    void patternMatching(int n0, const std::vector<double>& x0, const std::vector<double>& y0,
+                         int n1, const std::vector<double>& x1, const std::vector<double>& y1,
                          int shift_range, std::vector<int>& box_final) {
         std::vector<unsigned char> finite0(n0, 0);
         std::vector<unsigned char> finite1(n1, 0);
@@ -729,6 +725,8 @@ namespace Astrometry {
         int n_match = 0;
         std::vector<std::array<double, 2>> xx_fit;
         std::vector<std::array<double, 2>> xxt_fit;
+        xx_fit.reserve(initial_astrometry_rows);
+        xxt_fit.reserve(initial_astrometry_rows);
 
         for (int i = 0; i < n0; ++i) {
             if (box_final[i] == 0) continue;
@@ -868,7 +866,8 @@ namespace Astrometry {
 
     // ==========================================
     // Function: Generate matched astrometry calibration data.
-    // Method: Preserve F77 matching/output logic with 17-digit double serialization.
+    // Method: Grow row storage from a 500-row reservation, match every available
+    //         source, and preserve 17-digit double serialization.
     // ==========================================
     void genAstrometryData(const std::string& catStandard, int nx, int ny,
                            const std::vector<float>& map, const std::vector<int>& weight,
@@ -891,14 +890,14 @@ namespace Astrometry {
 
         getRaDecRange(nx, ny, ra, dec, dra, wcs.crpix, wcs.cd, wcs.crval, astrometry_shift_ratio);
 
-        int n_ref = 0;
-        constexpr int nss_max = 10000;
-        constexpr int n_user_max = 200;
-
         std::vector<double> ra_r;
         std::vector<double> dec_r;
         std::vector<double> xr;
         std::vector<double> yr;
+        ra_r.reserve(initial_astrometry_rows);
+        dec_r.reserve(initial_astrometry_rows);
+        xr.reserve(initial_astrometry_rows);
+        yr.reserve(initial_astrometry_rows);
 
         std::ifstream ifs(catStandard);
         if (!ifs) {
@@ -932,20 +931,6 @@ namespace Astrometry {
             if (std::abs(diffra(a, ra)) > dra * 0.5) continue;
             if (d < dec[0] || d > dec[1]) continue;
 
-            n_ref++;
-            if (n_ref > nss_max) {
-                std::cerr << "n_ref is too large!! " << filename << std::endl;
-                MainIO::OutputFile ofs(filename);
-                if (ofs) {
-                    ofs << std::setprecision(17) << wcs.crpix[0] << " " << wcs.crpix[1] << " "
-                        << wcs.crval[0] << " " << wcs.crval[1] << "\n";
-                    ofs << std::setprecision(17) << wcs.cd[0][0] << " " << wcs.cd[0][1] << " "
-                        << wcs.cd[1][0] << " " << wcs.cd[1][1] << "\n";
-                    ofs << "0 0 0\n";
-                }
-                return;
-            }
-
             ra_r.push_back(a);
             dec_r.push_back(d);
             double x_pixel = 0.0, y_pixel = 0.0;
@@ -954,19 +939,23 @@ namespace Astrometry {
             yr.push_back(y_pixel);
         }
         ifs.close();
+        const int n_ref = static_cast<int>(ra_r.size());
 
         int n_user = 0;
         std::vector<double> xs, ys;
-        getAstrometryCatalog(
-            nx, ny, map, weight, n_user_max, nss_max, n_user, xs, ys);
+        getAstrometryCatalog(nx, ny, map, weight, n_user, xs, ys);
 
         int astrometry_shift_range = static_cast<int>(std::max(nx, ny) * astrometry_shift_ratio);
         std::vector<int> box(n_ref, 0);
 
-        patternMatching(nss_max, n_ref, xr, yr, nss_max, n_user, xs, ys, astrometry_shift_range, box);
+        patternMatching(n_ref, xr, yr, n_user, xs, ys, astrometry_shift_range, box);
 
         int nss = 0;
         std::vector<double> ra2, dec2, x2, y2;
+        ra2.reserve(initial_astrometry_rows);
+        dec2.reserve(initial_astrometry_rows);
+        x2.reserve(initial_astrometry_rows);
+        y2.reserve(initial_astrometry_rows);
         for (int i = 0; i < n_ref; ++i) {
             if (box[i] == 0) continue;
             nss++;
@@ -997,7 +986,7 @@ namespace Astrometry {
     // Method: Assemble the original least-squares design matrix and solve both coordinate RHS columns with one pivoted QR.
     // ==========================================
     LinearSolve::SolveStatus measureAstrometryGlobal(
-        int np, const std::vector<int>& n, int nc,
+        const std::vector<int>& n, int nc,
         const std::vector<std::vector<double>>& ra,
         const std::vector<std::vector<double>>& dec,
         const std::vector<std::vector<double>>& x,
@@ -1007,7 +996,6 @@ namespace Astrometry {
         const double cRVAL[2], double PU[2][LensingConfig::npd],
         int npd, std::vector<int>& valid,
         LinearSolve::SolveDiagnostics* diagnostics) {
-        (void)np;
         LinearSolve::SolveDiagnostics local_diagnostics;
         LinearSolve::SolveDiagnostics& diag = diagnostics == nullptr ? local_diagnostics : *diagnostics;
         diag = {};
@@ -1157,7 +1145,11 @@ namespace Astrometry {
         return LinearSolve::SolveStatus::Normal;
     }
 
-    void checkAstrometryGlobal(int np, const std::vector<int>& n, int nc,
+    // ==========================================
+    // Function: Validate the fitted exposure astrometry on every usable chip.
+    // Method: Reproject every matched row and invalidate chips outside their bounds.
+    // ==========================================
+    void checkAstrometryGlobal(const std::vector<int>& n, int nc,
                                const std::vector<std::vector<double>>& ra,
                                const std::vector<std::vector<double>>& dec,
                                const std::vector<std::vector<double>>& x,
@@ -1179,7 +1171,7 @@ namespace Astrometry {
             }
 
             double ra_c = 0.0, dra = 0.0, dec_c = 0.0, ddec = 0.0;
-            getRaDecBound(np, n_stars, a_stars, d_stars, ra_c, dra, dec_c, ddec);
+            getRaDecBound(n_stars, a_stars, d_stars, ra_c, dra, dec_c, ddec);
 
             double crp[2] = {cRPIX[ic][0], cRPIX[ic][1]};
             double cdd[2][2] = {{cD[ic][0][0], cD[ic][0][1]}, {cD[ic][1][0], cD[ic][1][1]}};
@@ -1292,16 +1284,22 @@ namespace Astrometry {
 
     // ==========================================
     // Function: Fit and write exposure astrometry parameters.
-    // Method: Preserve F77 header layout with 17-digit double serialization.
+    // Method: Read every matched row into dynamically growing per-chip storage,
+    //         then preserve F77 header layout with 17-digit serialization.
     // ==========================================
     void getAstrometry(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput) {
-        constexpr int nss_max = 10000;
         std::string prefix_expo = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::vector<int> nss(nchip, 0);
-        std::vector<std::vector<double>> ra2(nchip, std::vector<double>(nss_max, 0.0));
-        std::vector<std::vector<double>> dec2(nchip, std::vector<double>(nss_max, 0.0));
-        std::vector<std::vector<double>> x2(nchip, std::vector<double>(nss_max, 0.0));
-        std::vector<std::vector<double>> y2(nchip, std::vector<double>(nss_max, 0.0));
+        std::vector<std::vector<double>> ra2(nchip);
+        std::vector<std::vector<double>> dec2(nchip);
+        std::vector<std::vector<double>> x2(nchip);
+        std::vector<std::vector<double>> y2(nchip);
+        for (int ichip = 0; ichip < nchip; ++ichip) {
+            ra2[ichip].reserve(initial_astrometry_rows);
+            dec2[ichip].reserve(initial_astrometry_rows);
+            x2[ichip].reserve(initial_astrometry_rows);
+            y2[ichip].reserve(initial_astrometry_rows);
+        }
 
         std::vector<std::array<double, 2>> cRPIX2(nchip);
         std::vector<std::array<std::array<double, 2>, 2>> cD2(nchip);
@@ -1377,11 +1375,10 @@ namespace Astrometry {
                 continue;
             }
 
-            int actual_nss = std::min(nss[ichip - 1], nss_max);
             int kept_nss = 0;
             int removed_non_finite = 0;
             bool astro_row_error = false;
-            for (int i = 0; i < actual_nss; ++i) {
+            for (int i = 0; i < nss[ichip - 1]; ++i) {
                 double ra_value = 0.0;
                 double dec_value = 0.0;
                 double x_value = 0.0;
@@ -1397,13 +1394,18 @@ namespace Astrometry {
                     removed_non_finite++;
                     continue;
                 }
-                ra2[ichip - 1][kept_nss] = ra_value;
-                dec2[ichip - 1][kept_nss] = dec_value;
-                x2[ichip - 1][kept_nss] = x_value;
-                y2[ichip - 1][kept_nss] = y_value;
+                ra2[ichip - 1].push_back(ra_value);
+                dec2[ichip - 1].push_back(dec_value);
+                x2[ichip - 1].push_back(x_value);
+                y2[ichip - 1].push_back(y_value);
                 kept_nss++;
             }
             if (astro_row_error) {
+                nss[ichip - 1] = 0;
+                ra2[ichip - 1].clear();
+                dec2[ichip - 1].clear();
+                x2[ichip - 1].clear();
+                y2[ichip - 1].clear();
                 continue;
             }
             nss[ichip - 1] = kept_nss;
@@ -1447,6 +1449,10 @@ namespace Astrometry {
                     kept_nss++;
                 }
                 nss[ichip] = kept_nss;
+                ra2[ichip].resize(kept_nss);
+                dec2[ichip].resize(kept_nss);
+                x2[ichip].resize(kept_nss);
+                y2[ichip].resize(kept_nss);
                 if (kept_nss >= 10) {
                     tot_valid++;
                     tot_source += kept_nss;
@@ -1475,10 +1481,10 @@ namespace Astrometry {
         if (tot_valid > 0 && tot_source >= required_system_rows) {
             LinearSolve::SolveDiagnostics fit_diagnostics;
             LinearSolve::SolveStatus fit_status = measureAstrometryGlobal(
-                nss_max, nss, nchip, ra2, dec2, x2, y2, cRPIX2, cD2, cRVAL2,
+                nss, nchip, ra2, dec2, x2, y2, cRPIX2, cD2, cRVAL2,
                 PU, LensingConfig::npd, valid, &fit_diagnostics);
             if (fit_status == LinearSolve::SolveStatus::Normal) {
-                checkAstrometryGlobal(nss_max, nss, nchip, ra2, dec2, x2, y2,
+                checkAstrometryGlobal(nss, nchip, ra2, dec2, x2, y2,
                                       cRPIX2, cD2, cRVAL2, PU, LensingConfig::npd, valid);
             } else {
                 LinearSolve::reportFailure(

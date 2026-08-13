@@ -866,12 +866,18 @@ namespace ImageProcessing {
         }
     }
 
-    void removeContinuous(int nx, int ny, int npx, int npy, std::vector<float>& map, 
+    // ==========================================
+    // Function: Remove a smooth continuous image component
+    // Method: Transform the active rectangle through func, smooth a compact
+    //         work image, then subtract through the caller-supplied map stride.
+    // ==========================================
+    void removeContinuous(int nx, int ny, int map_stride, std::vector<float>& map,
                           const std::function<double(double, int)>& func, int ord) {
         std::vector<float> maps(nx * ny, 0.0f);
         for (int i = 0; i < nx; ++i) {
             for (int j = 0; j < ny; ++j) {
-                maps[j * nx + i] = static_cast<float>(func(map[j * npx + i], 1));
+                maps[j * nx + i] = static_cast<float>(
+                    func(map[j * map_stride + i], 1));
             }
         }
 
@@ -886,7 +892,7 @@ namespace ImageProcessing {
         for (int i = 0; i < nx; ++i) {
             for (int j = 0; j < ny; ++j) {
                 float val = static_cast<float>(func(maps[j * nx + i], -1));
-                map[j * npx + i] -= val;
+                map[j * map_stride + i] -= val;
             }
         }
     }

@@ -66,6 +66,7 @@ CATALOG_LAYOUT_TEST = tests/test_catalog_layout
 CATALOG_ROW_COUNT_TEST = tests/test_catalog_row_count
 PSF_MODEL_STATE_TEST = tests/test_psf_model_state
 RUNTIME_CONFIG_TEST = tests/test_runtime_config
+ASTROMETRY_DYNAMIC_CAPACITY_TEST = tests/test_astrometry_dynamic_capacity
 
 all: $(TARGET)
 
@@ -92,6 +93,9 @@ test-psf-model-state: $(PSF_MODEL_STATE_TEST)
 
 test-runtime-config: $(RUNTIME_CONFIG_TEST)
 	./$(RUNTIME_CONFIG_TEST)
+
+test-astrometry-dynamic-capacity: $(ASTROMETRY_DYNAMIC_CAPACITY_TEST)
+	./$(ASTROMETRY_DYNAMIC_CAPACITY_TEST)
 
 $(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
                      src/process_main/PointSourceStatistics.cpp \
@@ -171,6 +175,21 @@ $(RUNTIME_CONFIG_TEST): tests/RuntimeConfigTest.cpp \
 		tests/RuntimeConfigTest.cpp src/RuntimeConfig.cpp \
 		src/CatalogLayout.cpp -o $@
 
+$(ASTROMETRY_DYNAMIC_CAPACITY_TEST): tests/AstrometryDynamicCapacityTest.cpp \
+                                    src/process_main/Astrometry.cpp \
+                                    src/process_main/UniversalUtils.cpp \
+                                    src/process_main/LinearSolve.cpp \
+                                    include/process_main/Astrometry.hpp \
+                                    include/process_main/UniversalUtils.hpp \
+                                    include/process_main/LinearSolve.hpp
+	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
+		-ffunction-sections -fdata-sections \
+		tests/AstrometryDynamicCapacityTest.cpp \
+		src/process_main/Astrometry.cpp \
+		src/process_main/UniversalUtils.cpp \
+		src/process_main/LinearSolve.cpp $(LDFLAGS) \
+		-Wl,--gc-sections -o $@
+
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
 
@@ -182,7 +201,7 @@ clean:
 	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
 	      $(UNIVERSALBLOCK_TEST) $(CATALOG_LAYOUT_TEST) \
 	      $(CATALOG_ROW_COUNT_TEST) $(PSF_MODEL_STATE_TEST) \
-	      $(RUNTIME_CONFIG_TEST) \
+	      $(RUNTIME_CONFIG_TEST) $(ASTROMETRY_DYNAMIC_CAPACITY_TEST) \
 	      tests/catalog_layout_selected_magnitude.tmp
 
 -include $(DEPS)
@@ -190,4 +209,4 @@ clean:
 .PHONY: all clean test-point-source-statistics test-stamp-cube-io \
         test-psf-recons-orientation test-universalblock test-catalog-layout \
         test-catalog-row-count test-psf-model-state \
-        test-runtime-config
+        test-runtime-config test-astrometry-dynamic-capacity

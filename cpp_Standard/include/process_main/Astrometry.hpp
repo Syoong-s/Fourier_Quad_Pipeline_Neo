@@ -34,7 +34,7 @@ namespace Astrometry {
 
     void xyToXxyy(double x, double y, double& xx, double& yy, const double cRPIX[2], const double cD[2][2]);
 
-    void getRaDecBound(int np, int n, const std::vector<double>& a, const std::vector<double>& d,
+    void getRaDecBound(int n, const std::vector<double>& a, const std::vector<double>& d,
                        double& ra, double& dra, double& dec, double& ddec);
 
     void getRaDecRangeFine(int nx, int ny, double& ra, double dec[2], double& dra,
@@ -53,14 +53,14 @@ namespace Astrometry {
                            WCSParams& wcs, const std::string& filename, int& procError);
 
     void getAstrometryCatalog(int nx, int ny, const std::vector<float>& image,
-                              const std::vector<int>& weight, int n_user_max, int ns_max,
-                              int& ns, std::vector<double>& xs, std::vector<double>& ys);
+                              const std::vector<int>& weight, int& ns,
+                              std::vector<double>& xs, std::vector<double>& ys);
 
-    void patternMatching(int np0, int n0, const std::vector<double>& x0, const std::vector<double>& y0,
-                         int np1, int n1, const std::vector<double>& x1, const std::vector<double>& y1,
+    void patternMatching(int n0, const std::vector<double>& x0, const std::vector<double>& y0,
+                         int n1, const std::vector<double>& x1, const std::vector<double>& y1,
                          int shift_range, std::vector<int>& box_final);
 
-    void checkAstrometryGlobal(int np, const std::vector<int>& n, int nc,
+    void checkAstrometryGlobal(const std::vector<int>& n, int nc,
                                const std::vector<std::vector<double>>& ra,
                                const std::vector<std::vector<double>>& dec,
                                const std::vector<std::vector<double>>& x,
@@ -71,7 +71,7 @@ namespace Astrometry {
                                int npd, std::vector<int>& valid);
 
     LinearSolve::SolveStatus measureAstrometryGlobal(
-        int np, const std::vector<int>& n, int nc,
+        const std::vector<int>& n, int nc,
         const std::vector<std::vector<double>>& ra,
         const std::vector<std::vector<double>>& dec,
         const std::vector<std::vector<double>>& x,

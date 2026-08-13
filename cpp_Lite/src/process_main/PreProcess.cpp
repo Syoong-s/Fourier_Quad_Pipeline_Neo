@@ -1040,7 +1040,8 @@ namespace PreProcess {
            map[i] = UniversalUtils::loga(array[i], 1);
        }
 
-        ImageProcessing::removeContinuous(nx, ny, nx, ny, map, UniversalUtils::iden, 4);
+        ImageProcessing::removeContinuous(
+            nx, ny, nx, map, UniversalUtils::iden, 4);
 
         std::vector<float> diffx(nx * ny);
         std::vector<float> diffy(nx * ny);

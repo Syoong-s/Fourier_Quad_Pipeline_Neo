@@ -47,7 +47,7 @@ namespace ImageProcessing {
     void getEntropy(int nx, int ny, const std::vector<float>& image, double sig, double med, int r, std::vector<float>& entropy);
 
     // Background continuous removal
-    void removeContinuous(int nx, int ny, int npx, int npy, std::vector<float>& map, 
+    void removeContinuous(int nx, int ny, int map_stride, std::vector<float>& map,
                           const std::function<double(double, int)>& func, int ord);
 
     // 2D FFT wrappers using FFTW3

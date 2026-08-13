@@ -731,7 +731,6 @@ namespace PSFModel {
     // ==========================================
     void plotStarExpo(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
-        int nmax_stamp = 5000;
 
         std::vector<int> opt;
         std::vector<float> star_test;
@@ -758,9 +757,7 @@ namespace PSFModel {
             for (int i = 0; i < nstar; ++i) {
                 if (state.getStarPara(ichip, i, 4) <= 0.0) continue;
                 ntot++;
-                if (ntot < nmax_stamp) {
-                    opt[start + i] = 1;
-                }
+                opt[start + i] = 1;
             }
             start += nstar;
         }
