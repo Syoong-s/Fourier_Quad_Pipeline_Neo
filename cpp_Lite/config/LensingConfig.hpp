@@ -63,12 +63,28 @@ namespace LensingConfig {
 
     // Initial catalog reservation capacities. These values are not hard
     // source or star limits; vectors may grow beyond them as needed.
+    // Maximum number of flux-ranked image detections passed to astrometric pattern matching.
+    // This is a scientific selection limit, not a catalog-storage capacity limit.
+    constexpr int n_user_max = 200;
+    static_assert(n_user_max > 0, "n_user_max must be positive");
     constexpr int ngal_max = 4000;
     constexpr int nstar_max = 2000;
     constexpr int src_npara = 12;
 
     constexpr int npd = 33;
+    // Target side length for the balanced background blocks.
     constexpr int blocksize = 200;
+    constexpr int bg_rough_grid_x = 32;
+    constexpr int bg_rough_grid_y = 32;
+    constexpr int bg_min_block_pixels = 1000;
+    constexpr int bg_min_clipped_pixels = 200;
+    static_assert(bg_min_clipped_pixels > 0, "bg_min_clipped_pixels must be positive");
+    constexpr double bg_min_valid_frac = 0.25;
+    constexpr double bg_clip_low = 4.0;
+    constexpr double bg_clip_high = 2.5;
+    constexpr double bg_fit_clip_sigma = 3.0;
+    constexpr int bg_fit_max_iter = 4;
+    constexpr int bg_min_fit_factor = 3;
 
     // Thresholds
     constexpr double source_thresh = 2.0;

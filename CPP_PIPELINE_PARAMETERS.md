@@ -141,9 +141,17 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 | `ext_cat` | `INI [lensing] ext_cat` | `0`, `1*` (Standard only; Lite fixed to `1`) | Selects internal or external source catalogs. Lite is external-only and rejects this key. Standard FD requires `1`. |
 | `ext_PSF` | `INI [lensing] ext_psf` | `0*`, `1` (Standard only; Lite fixed to `0`) | Selects frame-star or external-PSF input. Lite rejects this key. |
 | `CCD_split` | `INI [lensing] ccd_split` | `1`, `2*` | `1` uses one whole-chip background/noise region; `2` uses two amplifier regions. |
-| `blocksize` | — | `200*` | Pixel width/height of blocks sampled for background estimation. |
+| `blocksize` | — | `200*` | Target pixel width/height for balanced background blocks; the implementation rounds the amplifier dimensions to a block count and covers the complete region. |
 | `nct` | — | `12*` | Number of rectangular-monomial terms in the background surface fit. Must not exceed available stable background samples. |
 | `ncx` | — | `3*` | Number of successive x powers in the background basis before y power increments. With `nct=12`, the basis spans `x^0..2` for `y^0..3`. |
+| `bg_rough_grid_x` / `bg_rough_grid_y` | — | `32*` / `32*` | Deterministic rough-fit sampling grid. The rough bilinear fit is a residual preconditioner and is not subtracted from the image. |
+| `bg_min_block_pixels` | — | `1000*` | Minimum weight-valid, finite pixels required for one background block point. |
+| `bg_min_clipped_pixels` | — | `200*` | Minimum pixels surviving asymmetric pixel-level clipping inside one background block before its clipped mean is accepted. |
+| `bg_min_valid_frac` | — | `0.25*` | Minimum valid-pixel fraction required for one background block point. |
+| `bg_clip_low` / `bg_clip_high` | — | `4.0*` / `2.5*` | Asymmetric lower/upper MAD clipping thresholds for block residuals. |
+| `bg_fit_clip_sigma` | — | `3.0*` | MAD clipping threshold applied to residuals of the final 12-term model. |
+| `bg_fit_max_iter` | — | `4*` | Maximum iterative final-model MAD clipping passes. |
+| `bg_min_fit_factor` | — | `3*` | Minimum final-fit block count factor relative to `nct`; the absolute minimum is 30. |
 
 ### 3e. PSF selection and configuration
 
@@ -198,6 +206,7 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 |:---|:---|:---|:---|
 | `ngal_max` | — | `4000*` | Initial source metadata reservation hint; vectors grow beyond it. |
 | `nstar_max` | — | `2000*` | Initial star metadata reservation hint; live pairwise storage uses actual candidate counts. |
+| `n_user_max` | — | `200*` | Maximum number of flux-ranked image-side astrometry detections passed to `patternMatching()`. Detection, sorting, and dynamic catalog storage remain uncapped; Standard and Lite use the same compile-time value. |
 | `src_npara` | — | `12*` | Shared source/PSF/FFT2 internal row width. It exactly covers fields through `iSNR_F` and PSF parameter slot 11. |
 | `shear_cat_ncols` | — | `iorth_ext + 1 = 28*` | Stage 7 shear-catalog width through `gal_size_T`, `psf_size_T`, `delta_chi2`, and `orth_ext`. The exposure `chi2` appended later is not part of this count. |
 | `expo_cat_ncols` | — | `shear_cat_ncols + 1 = 29*` | Exposure-catalog width containing the 28 shear fields plus the appended exposure `chi2`. FD consumes this width directly. |

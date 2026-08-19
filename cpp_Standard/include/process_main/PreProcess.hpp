@@ -14,7 +14,8 @@ namespace PreProcess {
     void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid, const std::string& maskFile);
 
     // Helper functions for preprocessing
-    void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny, std::vector<float>& image,
+    void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny,
+                       std::vector<float>& image, const std::vector<int>& weight,
                        int blocksize, int nct, int ncx, int& ierror);
 
     void flattenChip(int x_start, int x_end, int y_start, int y_end, int nx, int ny, std::vector<float>& array,

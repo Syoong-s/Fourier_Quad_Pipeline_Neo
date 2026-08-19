@@ -945,6 +945,15 @@ namespace Astrometry {
         std::vector<double> xs, ys;
         getAstrometryCatalog(nx, ny, map, weight, n_user, xs, ys);
 
+        // Apply the scientific selection only after the complete dynamic catalog has been
+        // detected and sorted by flux. This preserves dynamic storage and F77 top-ranked
+        // matching semantics without turning n_user_max into a detection-capacity limit.
+        const std::size_t n_user_selected = std::min(
+            xs.size(), static_cast<std::size_t>(LensingConfig::n_user_max));
+        xs.resize(n_user_selected);
+        ys.resize(n_user_selected);
+        n_user = static_cast<int>(n_user_selected);
+
         int astrometry_shift_range = static_cast<int>(std::max(nx, ny) * astrometry_shift_ratio);
         std::vector<int> box(n_ref, 0);
 

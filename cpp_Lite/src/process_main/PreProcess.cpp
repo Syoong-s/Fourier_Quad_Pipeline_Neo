@@ -428,8 +428,8 @@ namespace PreProcess {
         double aa = 0.0, bb = 0.0, cc = 0.0;
 
         if (lensing.ccd_split == 2) {
-            setBackground(0, nxc, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
-            setBackground(nxc, nx, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
+            setBackground(0, nxc, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
+            setBackground(nxc, nx, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             
             setSig(0, nxc, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
                    LensingConfig::sig_scale);
@@ -444,7 +444,7 @@ namespace PreProcess {
                 sigabc[1][0] = aa; sigabc[1][1] = bb; sigabc[1][2] = cc;
             }
         } else {
-            setBackground(0, nx, 0, ny, nx, ny, normap, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
+            setBackground(0, nx, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
             setSig(0, nx, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
                    LensingConfig::sig_scale);
             if (proc_error == 0) {
@@ -525,108 +525,340 @@ namespace PreProcess {
         // }
     }
 
-    // Helper functions for preprocessing
-    void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny, std::vector<float>& image,
+    // ==========================================
+    // Function: Estimate and subtract one amplifier's global background model
+    // Method: Use a deterministic rough bilinear predictor, full weight-valid block residuals,
+    //         and iterative MAD rejection against the final 12-term polynomial before one
+    //         validated image subtraction.
+    // ==========================================
+    void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny,
+                       std::vector<float>& image, const std::vector<int>& weight,
                        int blocksize, int nct, int ncx, int& ierror) {
-        if (ierror == 1) return;
+        if (ierror != 0) return;
 
-        // A rough flattening of the field first
-        flattenChip(x_start, x_end, y_start, y_end, nx, ny, image, 4, 2, ierror);
-
-        if (ierror == 1) return;
-
-        // numerical_fix F1: replaces the legacy absolute-coordinate scaling by 1/max(dx,dy).
-        const SubRegionFrame frame(x_start, x_end, y_start, y_end);
-        int nbx = std::max((x_end - x_start) / blocksize, 1);
-        int nby = std::max((y_end - y_start) / blocksize, 1);
-
-        constexpr int npp = 1000;
-        int nfit = nbx * nby;
-        std::vector<Point3D> mean_sam;
-        mean_sam.reserve(nfit);
-
-        for (int i = 0; i < nbx; ++i) {
-            int xmin = i * blocksize + x_start;
-            int xmax = std::min(xmin + blocksize, x_end);
-            for (int j = 0; j < nby; ++j) {
-                int ymin = j * blocksize + y_start;
-                int ymax = std::min(ymin + blocksize, y_end);
-
-                std::vector<Point3D> arr(npp);
-                std::vector<float> pix(npp);
-                for (int k = 0; k < npp; ++k) {
-                    int ix = xmin + static_cast<int>(NumericalRecipes::ran1() * (xmax - xmin));
-                    int iy = ymin + static_cast<int>(NumericalRecipes::ran1() * (ymax - ymin));
-                    arr[k].x = frame.normX(ix);
-                    arr[k].y = frame.normY(iy);
-                    arr[k].z = image[iy * nx + ix];
-                    pix[k] = static_cast<float>(arr[k].z);
-                }
-
-                std::vector<int> indx;
-                NumericalRecipes::indexx(pix, indx);
-
-                int median_idx = indx[npp / 2 - 1];
-                mean_sam.push_back(arr[median_idx]);
-            }
-        }
-
-        int nct_min = nct * 3 / 2;
-        int nsam1 = mean_sam.size();
-        bool changed = true;
-
-        double aa = 0.0, bb = 0.0, cc = 0.0;
-        while (changed && nsam1 >= nct_min) {
-            std::vector<Point3D> current_points(nsam1);
-            for (int i = 0; i < nsam1; ++i) {
-                current_points[i] = mean_sam[i];
-            }
-
-            UniversalUtils::findSlope2D(current_points, aa, bb, cc);
-
-            std::vector<double> sam(nsam1);
-            std::vector<double> tempo(nsam1);
-            for (int i = 0; i < nsam1; ++i) {
-                sam[i] = mean_sam[i].z - aa - bb * mean_sam[i].x - cc * mean_sam[i].y;
-                tempo[i] = sam[i];
-            }
-
-            std::sort(tempo.begin(), tempo.end());
-            double mean = tempo[nsam1 / 2 - 1];
-            double sig = 0.5 * (tempo[(nsam1 * 5) / 6 - 1] - tempo[nsam1 / 6 - 1]);
-
-            int nsam = 0;
-            changed = false;
-            std::vector<Point3D> filtered_mean_sam;
-            filtered_mean_sam.reserve(nsam1);
-
-            for (int i = 0; i < nsam1; ++i) {
-                if (std::abs(sam[i] - mean) < 3.0 * sig) {
-                    nsam++;
-                    filtered_mean_sam.push_back(mean_sam[i]);
-                } else {
-                    changed = true;
-                }
-            }
-            mean_sam = filtered_mean_sam;
-            nsam1 = nsam;
-        }
-
-        if (nsam1 < nct_min) {
-            std::cerr << "Background not stable enough! nsam1 = " << nsam1 << std::endl;
+        const size_t image_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
+        if (nx <= 0 || ny <= 0 || x_start < 0 || x_end > nx || y_start < 0 || y_end > ny
+            || x_end <= x_start || y_end <= y_start || image.size() < image_size
+            || weight.size() < image_size || blocksize <= 0 || nct <= 0 || ncx <= 0) {
+            std::cerr << "Error / setBackground invalid amplifier geometry or configuration"
+                      << std::endl;
             ierror = 1;
             return;
         }
 
-        std::vector<double> c_coeffs;
-        UniversalUtils::fit2D(mean_sam, nct, ncx, c_coeffs);
+        // ==========================================
+        // Function: Compute a median without sorting the full sample
+        // Method: Use nth_element for the upper middle and the maximum lower-half value.
+        // ==========================================
+        const auto medianNthElement = [](std::vector<double>& values) -> double {
+            if (values.empty()) return 0.0;
+            const size_t middle_index = values.size() / 2;
+            auto middle = values.begin() + static_cast<std::ptrdiff_t>(middle_index);
+            std::nth_element(values.begin(), middle, values.end());
+            const double upper = *middle;
+            if ((values.size() & 1U) != 0U) return upper;
+            const double lower = *std::max_element(values.begin(), middle);
+            return 0.5 * (lower + upper);
+        };
 
-        // numerical_fix F1: evaluate on the same normalized frame used to fit.
-        for (int i = x_start; i < x_end; ++i) {
-            for (int j = y_start; j < y_end; ++j) {
-                double x = frame.normX(i);
-                double y = frame.normY(j);
-                image[j * nx + i] -= UniversalUtils::funcVal(x, y, nct, ncx, c_coeffs);
+        constexpr double fit_zero_epsilon = 1.0e-14;
+        constexpr double mad_epsilon = 1.0e-12;
+        const auto fitFailed = [fit_zero_epsilon](const std::vector<double>& coeffs,
+                                                   int expected_size) {
+            if (coeffs.size() != static_cast<size_t>(expected_size)) return true;
+
+            bool all_zero = true;
+            for (double value : coeffs) {
+                if (!std::isfinite(value)) return true;
+                if (std::abs(value) > fit_zero_epsilon) all_zero = false;
+            }
+            return all_zero;
+        };
+
+        const SubRegionFrame frame(x_start, x_end, y_start, y_end);
+        const int width = x_end - x_start;
+        const int height = y_end - y_start;
+
+        struct RoughSample {
+            Point3D point;
+            double flux = 0.0;
+        };
+
+        // Rough fitting is only a preconditioner for block residuals. It must never mutate image.
+        std::vector<RoughSample> rough_samples;
+        rough_samples.reserve(static_cast<size_t>(LensingConfig::bg_rough_grid_x)
+                              * static_cast<size_t>(LensingConfig::bg_rough_grid_y));
+        for (int gy = 0; gy < LensingConfig::bg_rough_grid_y; ++gy) {
+            const int y = y_start + static_cast<int>(
+                (static_cast<long long>(2 * gy + 1) * height)
+                / (2 * LensingConfig::bg_rough_grid_y));
+            for (int gx = 0; gx < LensingConfig::bg_rough_grid_x; ++gx) {
+                const int x = x_start + static_cast<int>(
+                    (static_cast<long long>(2 * gx + 1) * width)
+                    / (2 * LensingConfig::bg_rough_grid_x));
+                const size_t index = static_cast<size_t>(y) * static_cast<size_t>(nx)
+                                   + static_cast<size_t>(x);
+                if (weight[index] <= 0 || !std::isfinite(image[index])) continue;
+                RoughSample sample;
+                sample.point.x = frame.normX(x);
+                sample.point.y = frame.normY(y);
+                sample.point.z = static_cast<double>(image[index]);
+                sample.flux = sample.point.z;
+                if (std::isfinite(sample.flux)) rough_samples.push_back(sample);
+            }
+        }
+
+        const size_t rough_lower = rough_samples.size() / 3;
+        const size_t rough_upper = (rough_samples.size() * 2) / 3;
+        if (rough_upper <= rough_lower || rough_upper - rough_lower < 4) {
+            std::cerr << "Error / setBackground insufficient rough samples: "
+                      << rough_samples.size() << std::endl;
+            ierror = 1;
+            return;
+        }
+        std::sort(rough_samples.begin(), rough_samples.end(),
+                  [](const RoughSample& lhs, const RoughSample& rhs) {
+                      return lhs.flux < rhs.flux;
+                  });
+
+        std::vector<Point3D> rough_points;
+        rough_points.reserve(rough_upper - rough_lower);
+        for (size_t i = rough_lower; i < rough_upper; ++i) {
+            rough_points.push_back(rough_samples[i].point);
+        }
+        std::vector<double> rough_coeffs;
+        UniversalUtils::fit2D(rough_points, 4, 2, rough_coeffs);
+        if (fitFailed(rough_coeffs, 4)) {
+            std::cerr << "Error / setBackground rough fit failed" << std::endl;
+            ierror = 1;
+            return;
+        }
+
+        const auto evaluateRough = [&](double x, double y) {
+            return UniversalUtils::funcVal(x, y, 4, 2, rough_coeffs);
+        };
+
+        const int nbx = std::max(
+            static_cast<int>(std::lround(static_cast<double>(width) / blocksize)), 1);
+        const int nby = std::max(
+            static_cast<int>(std::lround(static_cast<double>(height) / blocksize)), 1);
+        const size_t initial_block_count = static_cast<size_t>(nbx) * static_cast<size_t>(nby);
+        const int min_fit_blocks = std::max(LensingConfig::bg_min_fit_factor * nct, 30);
+
+        std::vector<Point3D> block_points;
+        block_points.reserve(initial_block_count);
+        const size_t max_block_pixels = static_cast<size_t>((width + nbx - 1) / nbx)
+                                      * static_cast<size_t>((height + nby - 1) / nby);
+        std::vector<double> residual_values;
+        std::vector<double> deviations;
+        std::vector<double> clipped_values;
+        residual_values.reserve(max_block_pixels);
+        deviations.reserve(max_block_pixels);
+        clipped_values.reserve(max_block_pixels);
+
+        for (int ib = 0; ib < nbx; ++ib) {
+            const int xmin = x_start + ib * width / nbx;
+            const int xmax = x_start + (ib + 1) * width / nbx;
+            for (int jb = 0; jb < nby; ++jb) {
+                const int ymin = y_start + jb * height / nby;
+                const int ymax = y_start + (jb + 1) * height / nby;
+                const size_t total_pixels = static_cast<size_t>(xmax - xmin)
+                                          * static_cast<size_t>(ymax - ymin);
+
+                residual_values.clear();
+                for (int y = ymin; y < ymax; ++y) {
+                    for (int x = xmin; x < xmax; ++x) {
+                        const size_t index = static_cast<size_t>(y) * static_cast<size_t>(nx)
+                                           + static_cast<size_t>(x);
+                        if (weight[index] <= 0 || !std::isfinite(image[index])) continue;
+                        const double rough = evaluateRough(frame.normX(x), frame.normY(y));
+                        const double residual = static_cast<double>(image[index]) - rough;
+                        if (std::isfinite(residual)) residual_values.push_back(residual);
+                    }
+                }
+
+                if (residual_values.size() < static_cast<size_t>(LensingConfig::bg_min_block_pixels)
+                    || total_pixels == 0
+                    || static_cast<double>(residual_values.size()) / total_pixels
+                       < LensingConfig::bg_min_valid_frac) {
+                    continue;
+                }
+
+                const double residual_median = medianNthElement(residual_values);
+                deviations.resize(residual_values.size());
+                for (size_t i = 0; i < residual_values.size(); ++i) {
+                    deviations[i] = std::abs(residual_values[i] - residual_median);
+                }
+                const double sigma_mad = 1.4826 * medianNthElement(deviations);
+
+                if (!std::isfinite(sigma_mad)) continue;
+                double block_residual = 0.0;
+                if (sigma_mad <= mad_epsilon) {
+                    block_residual = residual_median;
+                } else {
+                    clipped_values.clear();
+                    const double lower = residual_median
+                                       - LensingConfig::bg_clip_low * sigma_mad;
+                    const double upper = residual_median
+                                       + LensingConfig::bg_clip_high * sigma_mad;
+                    for (double residual : residual_values) {
+                        if (residual >= lower && residual <= upper) {
+                            clipped_values.push_back(residual);
+                        }
+                    }
+                    if (clipped_values.size()
+                        < static_cast<size_t>(LensingConfig::bg_min_clipped_pixels)) {
+                        continue;
+                    }
+
+                    double residual_sum = 0.0;
+                    for (double residual : clipped_values) residual_sum += residual;
+                    block_residual = residual_sum
+                                   / static_cast<double>(clipped_values.size());
+                }
+                if (!std::isfinite(block_residual)) continue;
+                const double x_center = 0.5 * (frame.normX(xmin) + frame.normX(xmax - 1));
+                const double y_center = 0.5 * (frame.normY(ymin) + frame.normY(ymax - 1));
+                const double z = evaluateRough(x_center, y_center) + block_residual;
+                if (!std::isfinite(x_center) || !std::isfinite(y_center) || !std::isfinite(z)) {
+                    continue;
+                }
+                block_points.push_back({x_center, y_center, z});
+            }
+        }
+
+        const auto hasQuadrantCoverage = [](const std::vector<Point3D>& points) {
+            bool coverage[2][2] = {{false, false}, {false, false}};
+            for (const Point3D& point : points) {
+                if (!std::isfinite(point.x) || !std::isfinite(point.y)) continue;
+                const int x_side = point.x < 0.0 ? 0 : 1;
+                const int y_side = point.y < 0.0 ? 0 : 1;
+                coverage[x_side][y_side] = true;
+            }
+            return coverage[0][0] && coverage[0][1]
+                && coverage[1][0] && coverage[1][1];
+        };
+
+        if (block_points.size() < static_cast<size_t>(min_fit_blocks)
+            || !hasQuadrantCoverage(block_points)) {
+            std::cerr << "Error / setBackground insufficient block coverage: "
+                      << block_points.size() << " of " << initial_block_count << std::endl;
+            ierror = 1;
+            return;
+        }
+
+        std::vector<Point3D> fit_points = block_points;
+        std::vector<double> final_coeffs;
+        std::vector<double> fit_residuals;
+        fit_residuals.reserve(fit_points.size());
+        double final_residual_median = 0.0;
+        double final_sigma_mad = 0.0;
+
+        for (int iter = 0; iter < LensingConfig::bg_fit_max_iter; ++iter) {
+            UniversalUtils::fit2D(fit_points, nct, ncx, final_coeffs);
+            if (fitFailed(final_coeffs, nct)) {
+                std::cerr << "Error / setBackground final fit failed" << std::endl;
+                ierror = 1;
+                return;
+            }
+
+            fit_residuals.clear();
+            for (const Point3D& point : fit_points) {
+                const double residual = point.z
+                    - UniversalUtils::funcVal(point.x, point.y, nct, ncx, final_coeffs);
+                if (!std::isfinite(residual)) {
+                    std::cerr << "Error / setBackground nonfinite model residual" << std::endl;
+                    ierror = 1;
+                    return;
+                }
+                fit_residuals.push_back(residual);
+            }
+            std::vector<double> median_residuals = fit_residuals;
+            final_residual_median = medianNthElement(median_residuals);
+            deviations.resize(fit_residuals.size());
+            for (size_t i = 0; i < fit_residuals.size(); ++i) {
+                deviations[i] = std::abs(fit_residuals[i] - final_residual_median);
+            }
+            final_sigma_mad = 1.4826 * medianNthElement(deviations);
+            if (!std::isfinite(final_sigma_mad)) {
+                std::cerr << "Error / setBackground nonfinite final MAD" << std::endl;
+                ierror = 1;
+                return;
+            }
+            if (final_sigma_mad <= mad_epsilon) break;
+
+            const double clip_limit = LensingConfig::bg_fit_clip_sigma * final_sigma_mad;
+            std::vector<Point3D> filtered_points;
+            filtered_points.reserve(fit_points.size());
+            for (size_t i = 0; i < fit_points.size(); ++i) {
+                if (std::abs(fit_residuals[i] - final_residual_median) <= clip_limit) {
+                    filtered_points.push_back(fit_points[i]);
+                }
+            }
+            if (filtered_points.size() == fit_points.size()) break;
+            if (filtered_points.size() < static_cast<size_t>(min_fit_blocks)
+                || !hasQuadrantCoverage(filtered_points)) {
+                // Reject this clipping step and retain the previous valid fit_points.
+                break;
+            }
+            fit_points.swap(filtered_points);
+        }
+
+        UniversalUtils::fit2D(fit_points, nct, ncx, final_coeffs);
+        if (fitFailed(final_coeffs, nct)) {
+            std::cerr << "Error / setBackground final refit failed" << std::endl;
+            ierror = 1;
+            return;
+        }
+
+        const double x_low = frame.normX(x_start);
+        const double x_high = frame.normX(x_end - 1);
+        const double y_low = frame.normY(y_start);
+        const double y_high = frame.normY(y_end - 1);
+        const double x_mid = 0.5 * (x_low + x_high);
+        const double y_mid = 0.5 * (y_low + y_high);
+        const double validation_points[9][2] = {
+            {x_low, y_low}, {x_low, y_high}, {x_high, y_low}, {x_high, y_high},
+            {x_mid, y_low}, {x_mid, y_high}, {x_low, y_mid}, {x_high, y_mid},
+            {x_mid, y_mid}
+        };
+        for (const auto& point : validation_points) {
+            const double value = UniversalUtils::funcVal(
+                point[0], point[1], nct, ncx, final_coeffs);
+            if (!std::isfinite(value)) {
+                std::cerr << "Error / setBackground nonfinite validation model" << std::endl;
+                ierror = 1;
+                return;
+            }
+        }
+        fit_residuals.clear();
+        for (const Point3D& point : fit_points) {
+            fit_residuals.push_back(point.z
+                - UniversalUtils::funcVal(point.x, point.y, nct, ncx, final_coeffs));
+        }
+        std::vector<double> median_residuals = fit_residuals;
+        final_residual_median = medianNthElement(median_residuals);
+        deviations.resize(fit_residuals.size());
+        for (size_t i = 0; i < fit_residuals.size(); ++i) {
+            deviations[i] = std::abs(fit_residuals[i] - final_residual_median);
+        }
+        final_sigma_mad = 1.4826 * medianNthElement(deviations);
+
+        std::cout << "setBackground blocks=" << initial_block_count
+                  << " valid=" << block_points.size()
+                  << " fit=" << fit_points.size()
+                  << " residual_median=" << final_residual_median
+                  << " residual_sigma_mad=" << final_sigma_mad << std::endl;
+
+        // Apply only the final validated model. The rough predictor and block residuals never
+        // write to image, so this is the one and only background subtraction.
+        for (int y = y_start; y < y_end; ++y) {
+            for (int x = x_start; x < x_end; ++x) {
+                const size_t index = static_cast<size_t>(y) * static_cast<size_t>(nx)
+                                   + static_cast<size_t>(x);
+                const double background = UniversalUtils::funcVal(
+                    frame.normX(x), frame.normY(y), nct, ncx, final_coeffs);
+                image[index] -= static_cast<float>(background);
             }
         }
     }

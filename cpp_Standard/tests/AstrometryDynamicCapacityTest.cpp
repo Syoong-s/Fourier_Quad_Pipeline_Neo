@@ -1,7 +1,9 @@
 #include "Astrometry.hpp"
+#include "LensingConfig.hpp"
 #include "OutputLayout.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -162,6 +164,91 @@ void testReferenceCatalogGrowth() {
 }
 
 // ==========================================
+// Function: Verify the post-detection astrometry user-source selection
+// Method: Keep the dynamic catalog complete, then require genAstrometryData to serialize
+//         min(n_detected, n_user_max) as the count passed to pattern matching.
+// ==========================================
+void testUserSelectionLimit() {
+    constexpr int columns = 20;
+    constexpr int rows = 15;
+    constexpr int spacing = 8;
+    constexpr int margin = 3;
+    constexpr int nx = 2 * margin + (columns - 1) * spacing + 1;
+    constexpr int ny = 2 * margin + (rows - 1) * spacing + 1;
+    const std::filesystem::path directory = makeTemporaryDirectory("user_limit");
+    const std::filesystem::path catalog_path = directory / "reference.cat";
+
+    {
+        std::ofstream catalog(catalog_path);
+        require(static_cast<bool>(catalog), "selection reference catalog must open");
+        catalog << "ra dec\n";
+    }
+
+    WCSParams wcs{};
+    wcs.crpix[0] = 0.5 * nx;
+    wcs.crpix[1] = 0.5 * ny;
+    wcs.crval[0] = 180.0;
+    wcs.crval[1] = 0.0;
+    wcs.cd[0][0] = 0.001;
+    wcs.cd[1][1] = 0.001;
+
+    std::vector<float> image(static_cast<std::size_t>(nx) * ny, 0.0f);
+    std::vector<int> weight(image.size(), 1);
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const int x = margin + column * spacing;
+            const int y = margin + row * spacing;
+            image[static_cast<std::size_t>(y) * nx + x] =
+                10.0f + static_cast<float>(row * columns + column);
+        }
+    }
+
+    int detected = 0;
+    std::vector<double> xs;
+    std::vector<double> ys;
+    Astrometry::getAstrometryCatalog(nx, ny, image, weight, detected, xs, ys);
+    require(detected == columns * rows && xs.size() == static_cast<std::size_t>(detected)
+                && ys.size() == static_cast<std::size_t>(detected),
+            "selection regression must detect all 300 sources before truncation");
+
+    const auto readUserCount = [&](const std::filesystem::path& output_path,
+                                   int expected_count) {
+        int process_error = 0;
+        Astrometry::genAstrometryData(
+            catalog_path.string(), nx, ny, image, weight, wcs,
+            output_path.string(), process_error);
+        std::ifstream output(output_path);
+        require(process_error == 0 && static_cast<bool>(output),
+                "selection regression must write an astrometry output");
+        double discarded_value = 0.0;
+        for (int value = 0; value < 8; ++value) {
+            require(static_cast<bool>(output >> discarded_value),
+                    "selection output must contain both WCS rows");
+        }
+        int matched_count = 0;
+        int user_count = 0;
+        int reference_count = 0;
+        require(static_cast<bool>(output >> matched_count >> user_count >> reference_count),
+                "selection output must contain catalog counts");
+        require(user_count == expected_count && reference_count == 0,
+                "_astro.dat must record the number of selected image detections");
+    };
+
+    readUserCount(directory / "many_astro.dat", LensingConfig::n_user_max);
+
+    std::fill(image.begin(), image.end(), 0.0f);
+    for (int index = 0; index < 37; ++index) {
+        const int row = index / columns;
+        const int column = index % columns;
+        const int x = margin + column * spacing;
+        const int y = margin + row * spacing;
+        image[static_cast<std::size_t>(y) * nx + x] = 10.0f + static_cast<float>(index);
+    }
+    readUserCount(directory / "few_astro.dat", 37);
+    std::filesystem::remove_all(directory);
+}
+
+// ==========================================
 // Function: Verify the Stage-2 reader consumes rows beyond 10,000.
 // Method: Put a malformed sentinel at row 10,001 and require the production
 //         reader to report that row instead of silently stopping at row 10,000.
@@ -216,6 +303,7 @@ int main() {
     testSourceRowGrowth();
     testConnectedComponentGrowth();
     testReferenceCatalogGrowth();
+    testUserSelectionLimit();
     testMatchedCatalogReaderGrowth();
     std::cout << "Astrometry dynamic-capacity tests passed\n";
     return EXIT_SUCCESS;
