@@ -451,32 +451,51 @@ namespace PreProcess {
             }
         }
 
-        double sigabc[2][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+        std::vector<double> bg_coeffs;
+        std::vector<double> amplifier_bg_coeffs;
+        std::vector<double> sig_coeffs;
         int nxc = nx / 2;
         double aa = 0.0, bb = 0.0, cc = 0.0;
 
+        const auto collectBackground = [&](int x_start, int x_end) {
+            amplifier_bg_coeffs.clear();
+            setBackground(x_start, x_end, 0, ny, nx, ny, normap, weight,
+                          LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx,
+                          amplifier_bg_coeffs, proc_error);
+            if (proc_error == 0) {
+                bg_coeffs.insert(bg_coeffs.end(), amplifier_bg_coeffs.begin(),
+                                 amplifier_bg_coeffs.end());
+            }
+        };
+
         if (lensing.ccd_split == 2) {
-            setBackground(0, nxc, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
-            setBackground(nxc, nx, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
+            collectBackground(0, nxc);
+            collectBackground(nxc, nx);
             
             setSig(0, nxc, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
                    LensingConfig::sig_scale);
             if (proc_error == 0) {
-                sigabc[0][0] = aa; sigabc[0][1] = bb; sigabc[0][2] = cc;
+                sig_coeffs.push_back(aa);
+                sig_coeffs.push_back(bb);
+                sig_coeffs.push_back(cc);
             }
             if (proc_error == 0) {
                 setSig(nxc, nx, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
                        LensingConfig::sig_scale);
             }
             if (proc_error == 0) {
-                sigabc[1][0] = aa; sigabc[1][1] = bb; sigabc[1][2] = cc;
+                sig_coeffs.push_back(aa);
+                sig_coeffs.push_back(bb);
+                sig_coeffs.push_back(cc);
             }
         } else {
-            setBackground(0, nx, 0, ny, nx, ny, normap, weight, LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx, proc_error);
+            collectBackground(0, nx);
             setSig(0, nx, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
                    LensingConfig::sig_scale);
             if (proc_error == 0) {
-                sigabc[0][0] = aa; sigabc[0][1] = bb; sigabc[0][2] = cc;
+                sig_coeffs.push_back(aa);
+                sig_coeffs.push_back(bb);
+                sig_coeffs.push_back(cc);
             }
         }
 
@@ -559,15 +578,11 @@ namespace PreProcess {
             normap[0] = 1.0f;
         }
 
-        for (int i = 1; i <= lensing.ccd_split; ++i) {
-            for (int j = 1; j <= 3; ++j) {
-                normap[(j - 1) * nx + i] = static_cast<float>(sigabc[i - 1][j - 1]);
-            }
-        }
-
         std::string normFilename = OutputLayout::chipPath(
             dirOutput, "stamps/Norm", prefix, "_norm.fits");
-        if (!FitsIO::writeImageCopyHDU(imageFile, normFilename, nx, ny, normap)) {
+        if (!FitsIO::writeNormHDU(imageFile, normFilename, nx, ny, normap,
+                                  bg_coeffs, sig_coeffs, lensing.ccd_split,
+                                  LensingConfig::nct)) {
             std::cerr << "Error writing normalized image: " << normFilename << std::endl;
             proc_error = 1;
         }
@@ -587,7 +602,9 @@ namespace PreProcess {
     // ==========================================
     void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny,
                        std::vector<float>& image, const std::vector<int>& weight,
-                       int blocksize, int nct, int ncx, int& ierror) {
+                       int blocksize, int nct, int ncx, std::vector<double>& bg_coeffs,
+                       int& ierror) {
+        bg_coeffs.clear();
         if (ierror != 0) return;
 
         const size_t image_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
@@ -897,6 +914,7 @@ namespace PreProcess {
             deviations[i] = std::abs(fit_residuals[i] - final_residual_median);
         }
         final_sigma_mad = 1.4826 * medianNthElement(deviations);
+        bg_coeffs = final_coeffs;
 
         std::cout << "setBackground blocks=" << initial_block_count
                   << " valid=" << block_points.size()
@@ -1270,7 +1288,7 @@ namespace PreProcess {
 
         // Match the F77 real-coefficient inter-stage contract before mutating the image: validate
         // once in double precision, convert to the stored precision, then validate and apply that
-        // exact plane so normap and the published sigabc coefficients cannot diverge.
+        // exact plane so normap and the coefficients exported to the norm header cannot diverge.
         const SigPlane stored_plane{static_cast<double>(static_cast<float>(scaled_plane.a)),
                                     static_cast<double>(static_cast<float>(scaled_plane.b)),
                                     static_cast<double>(static_cast<float>(scaled_plane.c))};

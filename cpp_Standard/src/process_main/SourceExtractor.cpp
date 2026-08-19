@@ -15,6 +15,7 @@
 #include <string>
 #include <cmath>
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
 #include <filesystem>
 #include <sstream>
@@ -35,6 +36,66 @@ namespace SourceExtractor {
         bool catalogFileExists(const std::string& path) {
             std::error_code ec;
             return std::filesystem::exists(path, ec) && !ec;
+        }
+
+        // ==========================================
+        // Function: Subtract the Stage-1 background model from one science chip
+        // Method: Rebuild the independent normalized coordinate frame used by each Stage-1
+        //         amplifier fit and evaluate the caller-supplied coefficient block once per pixel.
+        // ==========================================
+        void subtractBackground(int nx, int ny, std::vector<float>& array,
+                                const std::vector<double>& bg_coeffs, int ccd_split,
+                                int nbg, int ncx) {
+            if (nx <= 0 || ny <= 0 || (ccd_split != 1 && ccd_split != 2)
+                || nbg <= 0 || ncx <= 0
+                || array.size() < static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)
+                || bg_coeffs.size() < static_cast<std::size_t>(ccd_split)
+                                      * static_cast<std::size_t>(nbg)) {
+                MPIFailure::abortWorld(
+                    "subtract Stage-1 background", "invalid chip geometry or coefficient contract");
+            }
+
+            const int nxc = nx / 2;
+            for (int amp = 0; amp < ccd_split; ++amp) {
+                const int x_start = ccd_split == 2 && amp == 1 ? nxc : 0;
+                const int x_end = ccd_split == 2 && amp == 0 ? nxc : nx;
+                if (x_end <= x_start) {
+                    MPIFailure::abortWorld(
+                        "subtract Stage-1 background", "invalid amplifier geometry");
+                }
+
+                const double x_mid = 0.5 * (
+                    static_cast<double>(x_start + 1) + static_cast<double>(x_end));
+                const double y_mid = 0.5 * (
+                    static_cast<double>(1) + static_cast<double>(ny));
+                const double x_half_inv = 2.0 / static_cast<double>(
+                    std::max(x_end - x_start - 1, 1));
+                const double y_half_inv = 2.0 / static_cast<double>(
+                    std::max(ny - 1, 1));
+                const std::size_t coefficient_start = static_cast<std::size_t>(amp)
+                                                     * static_cast<std::size_t>(nbg);
+                const std::vector<double> amplifier_coeffs(
+                    bg_coeffs.begin() + static_cast<std::ptrdiff_t>(coefficient_start),
+                    bg_coeffs.begin() + static_cast<std::ptrdiff_t>(coefficient_start
+                                                                     + static_cast<std::size_t>(nbg)));
+
+                for (int y = 0; y < ny; ++y) {
+                    const double yn = (static_cast<double>(y + 1) - y_mid) * y_half_inv;
+                    for (int x = x_start; x < x_end; ++x) {
+                        const double xn = (static_cast<double>(x + 1) - x_mid) * x_half_inv;
+                        const double background = UniversalUtils::funcVal(
+                            xn, yn, nbg, ncx, amplifier_coeffs);
+                        if (!std::isfinite(background)) {
+                            MPIFailure::abortWorld(
+                                "subtract Stage-1 background", "nonfinite background model");
+                        }
+                        const std::size_t index = static_cast<std::size_t>(y)
+                                                * static_cast<std::size_t>(nx)
+                                                + static_cast<std::size_t>(x);
+                        array[index] -= static_cast<float>(background);
+                    }
+                }
+            }
         }
 
     }
@@ -235,25 +296,26 @@ namespace SourceExtractor {
             dirOutput, "stamps/Norm", PREFIX, "_norm.fits");
 
         std::vector<float> normap;
+        std::vector<double> bg_coeffs;
+        std::vector<double> sig_coeffs;
         int norm_nx = 0, norm_ny = 0;
-        if (!FitsIO::readImage(filename, norm_nx, norm_ny, normap)) {
+        if (!FitsIO::readNormHDU(filename, norm_nx, norm_ny, normap,
+                                  bg_coeffs, sig_coeffs, lensing.ccd_split,
+                                  LensingConfig::nct)) {
             std::cerr << "Error reading normalized map: " << filename << std::endl;
             return;
         }
         const size_t expected_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
-        if (nx <= lensing.ccd_split || ny < 3
-            || norm_nx != nx || norm_ny != ny || normap.size() < expected_size
-            || normap.empty()) {
+        const size_t expected_bg_count = static_cast<size_t>(lensing.ccd_split)
+                                       * static_cast<size_t>(LensingConfig::nct);
+        const size_t expected_sig_count = static_cast<size_t>(lensing.ccd_split) * 3U;
+        if (nx <= lensing.ccd_split
+            || norm_nx != nx || norm_ny != ny || normap.size() != expected_size
+            || bg_coeffs.size() != expected_bg_count
+            || sig_coeffs.size() != expected_sig_count) {
             std::cerr << "Error / proc_source malformed norm chip "
                       << imageFile << std::endl;
             return;
-        }
-
-        float sigabc[2][3] = {0};
-        for (int i = 0; i < lensing.ccd_split; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                sigabc[i][j] = normap[j * nx + (i + 1)];
-            }
         }
 
         std::vector<int> weight(nx * ny, 1);
@@ -271,7 +333,19 @@ namespace SourceExtractor {
             }
         }
 
+        subtractBackground(nx, ny, array, bg_coeffs, lensing.ccd_split,
+                           LensingConfig::nct, LensingConfig::ncx);
+
         int nxc = nx / 2;
+        double sigabc[2][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+        constexpr int nsig = 3;
+        for (int amp = 0; amp < lensing.ccd_split; ++amp) {
+            for (int coefficient = 0; coefficient < nsig; ++coefficient) {
+                sigabc[amp][coefficient] = sig_coeffs[
+                    static_cast<size_t>(amp) * static_cast<size_t>(nsig)
+                    + static_cast<size_t>(coefficient)];
+            }
+        }
         std::vector<float> sigmap(nx * ny, 0.0f);
         if (lensing.ccd_split == 2) {
             for (int x = 0; x < nxc; ++x) {

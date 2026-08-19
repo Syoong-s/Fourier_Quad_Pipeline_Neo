@@ -4,10 +4,13 @@
 #include <iostream>
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <sstream>
 #include <filesystem>
+#include <iomanip>
+#include <utility>
 
 namespace FitsIO {
 
@@ -103,6 +106,90 @@ namespace FitsIO {
         return true;
     }
 
+    // ==========================================
+    // Function: Serialize one coefficient array for a FITS long-string keyword
+    // Method: Preserve every coefficient in scientific notation with double precision while
+    //         keeping one logical keyword per amplifier and coefficient family.
+    // ==========================================
+    static std::string serializeCoefficients(const std::vector<double>& coeffs,
+                                             std::size_t start,
+                                             std::size_t count) {
+        if (start > coeffs.size() || count > coeffs.size() - start) {
+            return {};
+        }
+
+        std::ostringstream stream;
+        stream << std::scientific << std::setprecision(17);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) stream << ' ';
+            stream << coeffs[start + i];
+        }
+        return stream.str();
+    }
+
+    // ==========================================
+    // Function: Parse one coefficient long-string keyword
+    // Method: Require the exact expected number of finite doubles and reject trailing tokens so
+    //         a malformed or mismatched header cannot silently enter Stage 3.
+    // ==========================================
+    static bool parseCoefficients(const std::string& serialized,
+                                  std::size_t count,
+                                  std::vector<double>& coeffs) {
+        std::istringstream stream(serialized);
+        std::vector<double> parsed;
+        parsed.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            double value = 0.0;
+            if (!(stream >> value) || !std::isfinite(value)) {
+                return false;
+            }
+            parsed.push_back(value);
+        }
+
+        std::string trailing;
+        if (stream >> trailing) {
+            return false;
+        }
+        coeffs = std::move(parsed);
+        return true;
+    }
+
+    // ==========================================
+    // Function: Read one coefficient long-string keyword
+    // Method: Use CFITSIO's allocated long-string interface, release its buffer explicitly, and
+    //         validate the complete numeric payload before returning it to the caller.
+    // ==========================================
+    static bool readCoefficientKeyword(fitsfile* fptr,
+                                       const char* keyname,
+                                       std::size_t count,
+                                       std::vector<double>& coeffs) {
+        char* value = nullptr;
+        char comment[FLEN_COMMENT] = {};
+        int status = 0;
+        fits_read_key_longstr(fptr, keyname, &value, comment, &status);
+        if (status != 0 || value == nullptr) {
+            if (status != 0) printError(status);
+            if (value != nullptr) {
+                int free_status = 0;
+                fits_free_memory(value, &free_status);
+            }
+            return false;
+        }
+
+        const std::string serialized(value);
+        int free_status = 0;
+        fits_free_memory(value, &free_status);
+        if (free_status != 0) {
+            printError(free_status);
+            return false;
+        }
+        if (!parseCoefficients(serialized, count, coeffs)) {
+            std::cerr << "Invalid coefficient payload in FITS keyword: " << keyname << std::endl;
+            return false;
+        }
+        return true;
+    }
+
     bool readCCDNUM(const std::string& filename, int& ccdNum) {
         fitsfile* fptr = nullptr;
         int status = 0;
@@ -176,6 +263,116 @@ namespace FitsIO {
         fits_close_file(fptr, &status);
         if (status != 0) {
             printError(status);
+            return false;
+        }
+        return true;
+    }
+
+    // ==========================================
+    // Function: Read normalized pixels and Stage-1 coefficient metadata
+    // Method: Keep one READONLY FITS handle open while reading dimensions, image pixels, and the
+    //         exact long-string coefficient contract for every configured amplifier.
+    // ==========================================
+    bool readNormHDU(const std::string& filename, int& nx, int& ny, std::vector<float>& data,
+                     std::vector<double>& bg_coeffs, std::vector<double>& sig_coeffs,
+                     int ccd_split, int nbg) {
+        data.clear();
+        bg_coeffs.clear();
+        sig_coeffs.clear();
+
+        if ((ccd_split != 1 && ccd_split != 2) || nbg <= 0) {
+            std::cerr << "Invalid norm FITS coefficient configuration: " << filename << std::endl;
+            return false;
+        }
+
+        std::size_t bg_count = 0;
+        std::size_t sig_count = 0;
+        LONGLONG ignored_fits_count = 0;
+        if (!stampCubeElementCount(ccd_split, nbg, 1, bg_count, ignored_fits_count)
+            || !stampCubeElementCount(ccd_split, 3, 1, sig_count, ignored_fits_count)) {
+            std::cerr << "Norm FITS coefficient count overflow: " << filename << std::endl;
+            return false;
+        }
+
+        fitsfile* fptr = nullptr;
+        int status = 0;
+        fits_open_file(&fptr, filename.c_str(), READONLY, &status);
+        if (status != 0) {
+            printError(status);
+            return false;
+        }
+
+        const auto failRead = [&]() {
+            if (status != 0) printError(status);
+            closeAfterFailure(fptr);
+            data.clear();
+            bg_coeffs.clear();
+            sig_coeffs.clear();
+            return false;
+        };
+
+        long naxes[2] = {0, 0};
+        int nfound = 0;
+        fits_read_keys_lng(fptr, "NAXIS", 1, 2, naxes, &nfound, &status);
+        if (status != 0 || nfound != 2 || naxes[0] <= 0 || naxes[1] <= 0
+            || naxes[0] > std::numeric_limits<int>::max()
+            || naxes[1] > std::numeric_limits<int>::max()) {
+            std::cerr << "Failed to read valid norm FITS dimensions: " << filename << std::endl;
+            return failRead();
+        }
+        nx = static_cast<int>(naxes[0]);
+        ny = static_cast<int>(naxes[1]);
+
+        std::size_t pixel_count = 0;
+        if (!stampCubeElementCount(nx, ny, 1, pixel_count, ignored_fits_count)
+            || pixel_count > static_cast<std::size_t>(std::numeric_limits<long>::max())) {
+            std::cerr << "Norm FITS image size overflow: " << filename << std::endl;
+            return failRead();
+        }
+        data.assign(pixel_count, 0.0f);
+        long fpixel[2] = {1, 1};
+        float nullval = 0.0f;
+        int anynull = 0;
+        fits_read_pix(fptr, TFLOAT, fpixel, static_cast<long>(pixel_count), &nullval,
+                      data.data(), &anynull, &status);
+        if (status != 0) {
+            return failRead();
+        }
+
+        if (ccd_split == 1) {
+            if (!readCoefficientKeyword(fptr, "BGCO", static_cast<std::size_t>(nbg), bg_coeffs)
+                || !readCoefficientKeyword(fptr, "SIGCO", 3, sig_coeffs)) {
+                return failRead();
+            }
+        } else {
+            std::vector<double> amplifier_bg1;
+            std::vector<double> amplifier_bg2;
+            std::vector<double> amplifier_sig1;
+            std::vector<double> amplifier_sig2;
+            if (!readCoefficientKeyword(fptr, "BG1CO", static_cast<std::size_t>(nbg), amplifier_bg1)
+                || !readCoefficientKeyword(fptr, "BG2CO", static_cast<std::size_t>(nbg), amplifier_bg2)) {
+                return failRead();
+            }
+            bg_coeffs.reserve(bg_count);
+            bg_coeffs.insert(bg_coeffs.end(), amplifier_bg1.begin(), amplifier_bg1.end());
+            bg_coeffs.insert(bg_coeffs.end(), amplifier_bg2.begin(), amplifier_bg2.end());
+
+            if (!readCoefficientKeyword(fptr, "SIG1CO", 3, amplifier_sig1)
+                || !readCoefficientKeyword(fptr, "SIG2CO", 3, amplifier_sig2)) {
+                return failRead();
+            }
+            sig_coeffs.reserve(sig_count);
+            sig_coeffs.insert(sig_coeffs.end(), amplifier_sig1.begin(), amplifier_sig1.end());
+            sig_coeffs.insert(sig_coeffs.end(), amplifier_sig2.begin(), amplifier_sig2.end());
+        }
+
+        int close_status = 0;
+        fits_close_file(fptr, &close_status);
+        if (close_status != 0) {
+            printError(close_status);
+            data.clear();
+            bg_coeffs.clear();
+            sig_coeffs.clear();
             return false;
         }
         return true;
@@ -374,6 +571,126 @@ namespace FitsIO {
         fits_close_file(infptr, &input_close_status);
         if (input_close_status != 0) {
             printError(input_close_status);
+            return false;
+        }
+
+        int output_close_status = 0;
+        fits_close_file(outfptr, &output_close_status);
+        if (output_close_status != 0) {
+            failFitsOutput("close FITS output", filename, output_close_status);
+        }
+        return true;
+    }
+
+    // ==========================================
+    // Function: Write normalized pixels and Stage-1 coefficient metadata
+    // Method: Copy the template primary HDU, write one CFITSIO long-string keyword per amplifier
+    //         and coefficient family, then write the normalized image. A non-valid norm sentinel
+    //         may be serialized without metadata so existing invalid-chip filtering is preserved;
+    //         every valid norm image requires the complete coefficient contract.
+    // ==========================================
+    bool writeNormHDU(const std::string& templateFile, const std::string& filename, int nx, int ny,
+                      const std::vector<float>& data, const std::vector<double>& bg_coeffs,
+                      const std::vector<double>& sig_coeffs, int ccd_split, int nbg) {
+        if (nx <= 0 || ny <= 0 || (ccd_split != 1 && ccd_split != 2) || nbg <= 0) {
+            std::cerr << "Invalid norm FITS output configuration: " << filename << std::endl;
+            return false;
+        }
+
+        std::size_t pixel_count = 0;
+        std::size_t bg_count = 0;
+        std::size_t sig_count = 0;
+        LONGLONG ignored_fits_count = 0;
+        if (!stampCubeElementCount(nx, ny, 1, pixel_count, ignored_fits_count)
+            || pixel_count > static_cast<std::size_t>(std::numeric_limits<long>::max())
+            || data.size() < pixel_count
+            || !stampCubeElementCount(ccd_split, nbg, 1, bg_count, ignored_fits_count)
+            || !stampCubeElementCount(ccd_split, 3, 1, sig_count, ignored_fits_count)) {
+            std::cerr << "Invalid norm FITS output size: " << filename << std::endl;
+            return false;
+        }
+
+        const bool metadata_ready = bg_coeffs.size() == bg_count
+                                 && sig_coeffs.size() == sig_count;
+        const bool invalid_norm_marker = data[0] >= 0.0f || data[0] < -99990.0f;
+        if (!metadata_ready && !invalid_norm_marker) {
+            std::cerr << "Missing norm FITS coefficient metadata: " << filename << std::endl;
+            return false;
+        }
+
+        fitsfile* infptr = nullptr;
+        fitsfile* outfptr = nullptr;
+        int status = 0;
+
+        fits_open_file(&infptr, templateFile.c_str(), READONLY, &status);
+        if (status != 0) {
+            printError(status);
+            return false;
+        }
+
+        const std::string create_name = "!" + filename;
+        fits_create_file(&outfptr, create_name.c_str(), &status);
+        if (status != 0) {
+            int close_status = 0;
+            fits_close_file(infptr, &close_status);
+            failFitsOutput("create FITS output", filename, status);
+        }
+
+        fits_copy_hdu(infptr, outfptr, 0, &status);
+        if (status != 0) {
+            failFitsOutput("copy FITS template HDU", filename, status);
+        }
+
+        int bitpix = -32;
+        fits_update_key(outfptr, TINT, "BITPIX", &bitpix, nullptr, &status);
+        if (status != 0) {
+            failFitsOutput("write FITS header", filename, status);
+        }
+
+        if (metadata_ready) {
+            if (ccd_split == 1) {
+                const std::string bg = serializeCoefficients(
+                    bg_coeffs, 0, static_cast<std::size_t>(nbg));
+                const std::string sig = serializeCoefficients(sig_coeffs, 0, 3);
+                fits_write_key_longstr(outfptr, "BGCO", bg.c_str(),
+                                       "background coefficients", &status);
+                fits_write_key_longstr(outfptr, "SIGCO", sig.c_str(),
+                                       "sigma coefficients", &status);
+            } else {
+                const std::string bg1 = serializeCoefficients(
+                    bg_coeffs, 0, static_cast<std::size_t>(nbg));
+                const std::string bg2 = serializeCoefficients(
+                    bg_coeffs, static_cast<std::size_t>(nbg),
+                    static_cast<std::size_t>(nbg));
+                const std::string sig1 = serializeCoefficients(sig_coeffs, 0, 3);
+                const std::string sig2 = serializeCoefficients(sig_coeffs, 3, 3);
+                fits_write_key_longstr(outfptr, "BG1CO", bg1.c_str(),
+                                       "background amp1 coefficients", &status);
+                fits_write_key_longstr(outfptr, "BG2CO", bg2.c_str(),
+                                       "background amp2 coefficients", &status);
+                fits_write_key_longstr(outfptr, "SIG1CO", sig1.c_str(),
+                                       "sigma amp1 coefficients", &status);
+                fits_write_key_longstr(outfptr, "SIG2CO", sig2.c_str(),
+                                       "sigma amp2 coefficients", &status);
+            }
+            if (status != 0) {
+                failFitsOutput("write FITS coefficient header", filename, status);
+            }
+        }
+
+        long fpixel[2] = {1, 1};
+        fits_write_pix(outfptr, TFLOAT, fpixel, static_cast<long>(pixel_count),
+                       const_cast<float*>(data.data()), &status);
+        if (status != 0) {
+            failFitsOutput("write FITS output", filename, status);
+        }
+
+        int input_close_status = 0;
+        fits_close_file(infptr, &input_close_status);
+        if (input_close_status != 0) {
+            printError(input_close_status);
+            int output_close_status = 0;
+            fits_close_file(outfptr, &output_close_status);
             return false;
         }
 

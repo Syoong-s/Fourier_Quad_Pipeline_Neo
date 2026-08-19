@@ -55,6 +55,15 @@ namespace FitsIO {
     bool readImage(const std::string& filename, int& nx, int& ny, std::vector<float>& data);
 
     // ==========================================
+    // Function: Read normalized pixels and Stage-1 coefficient metadata
+    // Method: Open one norm FITS once and recover the image, background coefficients, and
+    //         sigma-plane coefficients from its primary HDU.
+    // ==========================================
+    bool readNormHDU(const std::string& filename, int& nx, int& ny, std::vector<float>& data,
+                     std::vector<double>& bg_coeffs, std::vector<double>& sig_coeffs,
+                     int ccd_split, int nbg);
+
+    // ==========================================
     // Function: Read the first pixel of one two-dimensional FITS image
     // Method: Validate the image shape and transfer a single float without loading the CCD.
     // ==========================================
@@ -68,6 +77,15 @@ namespace FitsIO {
 
     // Create a new FITS file, copy headers from file1, and write array
     bool writeImageCopyHDU(const std::string& templateFile, const std::string& filename, int nx, int ny, const std::vector<float>& data);
+
+    // ==========================================
+    // Function: Write normalized pixels and Stage-1 coefficient metadata
+    // Method: Copy the template primary HDU, add one long-string keyword per amplifier and
+    //         coefficient family, then write the normalized image pixels.
+    // ==========================================
+    bool writeNormHDU(const std::string& templateFile, const std::string& filename, int nx, int ny,
+                      const std::vector<float>& data, const std::vector<double>& bg_coeffs,
+                      const std::vector<double>& sig_coeffs, int ccd_split, int nbg);
 
     // Write a standard 2D float image
     bool writeImage(const std::string& filename, int nx, int ny, const std::vector<float>& data);

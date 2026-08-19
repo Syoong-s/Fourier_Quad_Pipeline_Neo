@@ -47,6 +47,20 @@ This is an intentional format break. Products written as legacy two-dimensional
 stamp mosaics are rejected, and Standard PCA products generated before this
 row-major cleanup must be regenerated from Stage 3 onward.
 
+## Norm FITS background and sigma metadata
+
+Stage 1 writes the final background and sigma-plane coefficients into the
+existing `*_norm.fits` primary header together with the normalized pixels. For
+`ccd_split=1`, the logical long-string keywords are `BGCO` and `SIGCO`; for
+`ccd_split=2`, they are `BG1CO`, `BG2CO`, `SIG1CO`, and `SIG2CO`. Coefficients
+are serialized with scientific precision 17, and Stage 3 reads the image and
+all coefficient keywords through one FITS handle.
+
+Stage 3 reconstructs the sigma plane from the header and subtracts the Stage-1
+background model once per amplifier after the existing optional flat correction.
+The old sigma metadata pixels are no longer read or written; missing or
+malformed header metadata is a chip failure with no legacy-pixel fallback.
+
 ## Build and focused verification
 
 Use the portable Makefile inputs described in the main guide. For example, when

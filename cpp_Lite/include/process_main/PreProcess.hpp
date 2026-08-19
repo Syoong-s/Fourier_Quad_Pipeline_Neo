@@ -14,9 +14,15 @@ namespace PreProcess {
     void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid);
 
     // Helper functions for preprocessing
+    // ==========================================
+    // Function: Estimate and subtract one amplifier's background model
+    // Method: Fit the final validated polynomial and return the exact coefficients used for
+    //         subtraction through bg_coeffs.
+    // ==========================================
     void setBackground(int x_start, int x_end, int y_start, int y_end, int nx, int ny,
                        std::vector<float>& image, const std::vector<int>& weight,
-                       int blocksize, int nct, int ncx, int& ierror);
+                       int blocksize, int nct, int ncx, std::vector<double>& bg_coeffs,
+                       int& ierror);
 
     void flattenChip(int x_start, int x_end, int y_start, int y_end, int nx, int ny, std::vector<float>& array,
                      int nct, int ncx, int& ierror);
