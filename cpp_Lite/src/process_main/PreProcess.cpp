@@ -410,6 +410,21 @@ namespace PreProcess {
             return;
         }
 
+        std::vector<float> dqmask;
+        if (proc_error == 0) {
+            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
+            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
+                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
+            int dnx = 0, dny = 0;
+            if (!FitsIO::readImage(local_mask_file, dnx, dny, dqmask)) {
+                std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
+                proc_error = 1;
+            } else if (dnx != nx || dny != ny) {
+                std::cerr << "Error / wrong size of DQ file!" << std::endl;
+                proc_error = 1;
+            }
+        }
+
         std::vector<int> weight(nx * ny, 1);
         std::vector<float> normap(nx * ny);
 
@@ -417,6 +432,10 @@ namespace PreProcess {
             for (int x = 0; x < nx; ++x) {
                 int idx = y * nx + x;
                 if (array[idx] > LensingConfig::saturation_thresh) {
+                    weight[idx] = 0;
+                }
+                if (proc_error == 0
+                    && std::abs(dqmask[static_cast<size_t>(idx)]) > 1e-7f) {
                     weight[idx] = 0;
                 }
                 normap[idx] = array[idx];
@@ -468,33 +487,6 @@ namespace PreProcess {
                 sig_coeffs.push_back(aa);
                 sig_coeffs.push_back(bb);
                 sig_coeffs.push_back(cc);
-            }
-        }
-
-        // ==========================================
-        // Function: Apply the DQ mask before astrometry and defect merging
-        // Method: Keep setSig independent of DQ, then reject every nonzero DQ pixel from all
-        //         later preprocessing stages.
-        // ==========================================
-        if (proc_error == 0) {
-            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
-            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
-                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
-            int nxx = 0, nyy = 0;
-            std::vector<float> flat_weight;
-            if (!FitsIO::readImage(local_mask_file, nxx, nyy, flat_weight)) {
-                std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
-                proc_error = 1;
-            } else if (nxx != nx || nyy != ny) {
-                std::cerr << "Error / wrong size of DQ file!" << std::endl;
-                proc_error = 1;
-            } else {
-                for (int i = 0; i < nx * ny; ++i) {
-                    if (std::abs(flat_weight[static_cast<size_t>(i)]) > 1e-7f) {
-                        weight[static_cast<size_t>(i)] = 0;
-                        normap[static_cast<size_t>(i)] = -1000.0f;
-                    }
-                }
             }
         }
 

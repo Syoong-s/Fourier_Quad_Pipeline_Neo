@@ -112,143 +112,8 @@ namespace SourceExtractor {
         
         int nchip = static_cast<int>(image_files.size());
         for (int ichip = 1; ichip <= nchip; ++ichip) {
-            std::string flat_file;
-            getFlatName(image_files[ichip - 1], flat_file);
-            chipProcessSource(image_files, ichip, dir_output, flat_file);
+            chipProcessSource(image_files, ichip, dir_output);
         }
-    }
-
-    void getFlatName(const std::string& imageFile, std::string& flatFile) {
-        int id = UniversalUtils::getChipId(imageFile);
-        std::ostringstream oss_id;
-        oss_id << std::setw(2) << std::setfill('0') << id;
-        std::string cc = oss_id.str();
-
-        size_t slash_pos = imageFile.find_last_of('/');
-        if (slash_pos == std::string::npos) {
-            slash_pos = 0;
-        }
-
-        char b = ' ';
-        if (slash_pos + 23 < imageFile.length()) {
-            b = imageFile[slash_pos + 23];
-        }
-
-        std::string time = "";
-        if (slash_pos + 5 + 4 <= imageFile.length()) {
-            time = imageFile.substr(slash_pos + 5, 4);
-        }
-
-        int ym = 0;
-        if (!time.empty()) {
-            std::istringstream(time) >> ym;
-        }
-
-        std::string tttt = "1901";
-        if (b == 'z') {
-            if (ym < 1308) tttt = "1303";
-            else if (ym < 1403) tttt = "1308";
-            else if (ym < 1408) tttt = "1403";
-            else if (ym < 1411) tttt = "1408";
-            else if (ym < 1412) tttt = "1411";
-            else if (ym < 1501) tttt = "1412";
-            else if (ym < 1502) tttt = "1501";
-            else if (ym < 1508) tttt = "1502";
-            else if (ym < 1511) tttt = "1508";
-            else if (ym < 1512) tttt = "1511";
-            else if (ym < 1601) tttt = "1512";
-            else if (ym < 1606) tttt = "1601";
-            else if (ym < 1608) tttt = "1606";
-            else if (ym < 1609) tttt = "1608";
-            else if (ym < 1610) tttt = "1609";
-            else if (ym < 1611) tttt = "1610";
-            else if (ym < 1612) tttt = "1611";
-            else if (ym < 1701) tttt = "1612";
-            else if (ym < 1703) tttt = "1701";
-            else if (ym < 1704) tttt = "1703";
-            else if (ym < 1707) tttt = "1704";
-            else if (ym < 1709) tttt = "1707";
-            else if (ym < 1711) tttt = "1709";
-            else if (ym < 1801) tttt = "1711";
-            else if (ym < 1805) tttt = "1801";
-            else if (ym < 1809) tttt = "1805";
-            else if (ym < 1810) tttt = "1809";
-            else if (ym < 1811) tttt = "1810";
-            else if (ym < 1901) tttt = "1811";
-            else tttt = "1901";
-        } else if (b == 'r') {
-            if (ym < 1403) tttt = "1304";
-            else if (ym < 1409) tttt = "1403";
-            else if (ym < 1410) tttt = "1409";
-            else if (ym < 1411) tttt = "1410";
-            else if (ym < 1412) tttt = "1411";
-            else if (ym < 1501) tttt = "1412";
-            else if (ym < 1503) tttt = "1501";
-            else if (ym < 1506) tttt = "1503";
-            else if (ym < 1511) tttt = "1506";
-            else if (ym < 1512) tttt = "1511";
-            else if (ym < 1601) tttt = "1512";
-            else if (ym < 1602) tttt = "1601";
-            else if (ym < 1606) tttt = "1602";
-            else if (ym < 1609) tttt = "1606";
-            else if (ym < 1610) tttt = "1609";
-            else if (ym < 1611) tttt = "1610";
-            else if (ym < 1612) tttt = "1611";
-            else if (ym < 1701) tttt = "1612";
-            else if (ym < 1703) tttt = "1701";
-            else if (ym < 1704) tttt = "1703";
-            else if (ym < 1707) tttt = "1704";
-            else if (ym < 1708) tttt = "1707";
-            else if (ym < 1709) tttt = "1708";
-            else if (ym < 1710) tttt = "1709";
-            else if (ym < 1801) tttt = "1710";
-            else if (ym < 1803) tttt = "1801";
-            else if (ym < 1805) tttt = "1803";
-            else if (ym < 1808) tttt = "1805";
-            else if (ym < 1809) tttt = "1808";
-            else if (ym < 1810) tttt = "1809";
-            else if (ym < 1811) tttt = "1810";
-            else if (ym < 1901) tttt = "1811";
-            else tttt = "1901";
-        } else if (b == 'g') {
-            if (ym < 1310) tttt = "1308";
-            else if (ym < 1401) tttt = "1310";
-            else if (ym < 1409) tttt = "1401";
-            else if (ym < 1410) tttt = "1409";
-            else if (ym < 1412) tttt = "1410";
-            else if (ym < 1501) tttt = "1412";
-            else if (ym < 1502) tttt = "1501";
-            else if (ym < 1506) tttt = "1502";
-            else if (ym < 1511) tttt = "1506";
-            else if (ym < 1601) tttt = "1511";
-            else if (ym < 1602) tttt = "1601";
-            else if (ym < 1606) tttt = "1602";
-            else if (ym < 1609) tttt = "1606";
-            else if (ym < 1610) tttt = "1609";
-            else if (ym < 1611) tttt = "1610";
-            else if (ym < 1612) tttt = "1611";
-            else if (ym < 1701) tttt = "1612";
-            else if (ym < 1703) tttt = "1701";
-            else if (ym < 1704) tttt = "1703";
-            else if (ym < 1707) tttt = "1704";
-            else if (ym < 1708) tttt = "1707";
-            else if (ym < 1709) tttt = "1708";
-            else if (ym < 1710) tttt = "1709";
-            else if (ym < 1801) tttt = "1710";
-            else if (ym < 1803) tttt = "1801";
-            else if (ym < 1805) tttt = "1803";
-            else if (ym < 1808) tttt = "1805";
-            else if (ym < 1809) tttt = "1808";
-            else if (ym < 1810) tttt = "1809";
-            else if (ym < 1811) tttt = "1810";
-            else if (ym < 1901) tttt = "1811";
-            else tttt = "1901";
-        }
-
-        std::string filter_str(1, b);
-        flatFile = RuntimeConfigStore::get().lensing.flat_path + "/expo_"
-                   + filter_str + "/" + filter_str + tttt + "/flat_" + cc
-                   + "_smooth.fits";
     }
 
     // ==========================================
@@ -256,7 +121,7 @@ namespace SourceExtractor {
     // Method: Apply the shared norm gate before any chip input, then read the full valid norm map
     //         for coefficients and source extraction through the configured catalog branch.
     // ==========================================
-    void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput, const std::string& flatFile) {
+    void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput) {
         const RuntimeConfig& runtime_config = RuntimeConfigStore::get();
         const LensingRuntimeConfig& lensing = runtime_config.lensing;
         const std::string& imageFile = imageFiles[ichip - 1];
@@ -276,14 +141,6 @@ namespace SourceExtractor {
 
         int nx = 0, ny = 0;
         std::vector<float> array;
-
-        std::vector<float> flat;
-        if (lensing.include_flat == 1) {
-            int fnx = 0, fny = 0;
-            if (!FitsIO::readImage(flatFile, fnx, fny, flat)) {
-                std::cerr << "Warning: flat file could not be read: " << flatFile << std::endl;
-            }
-        }
 
         if (!FitsIO::readImage(imageFile, nx, ny, array)) {
             std::cerr << "Error reading image: " << imageFile << std::endl;
@@ -318,6 +175,24 @@ namespace SourceExtractor {
             return;
         }
 
+        std::vector<float> flat;
+        if (lensing.include_flat == 1) {
+            const int cid = UniversalUtils::getChipId(imageFile);
+            std::ostringstream oss;
+            oss << std::setw(2) << std::setfill('0') << cid;
+            const std::string flat_file = lensing.flat_path + "/flat_"
+                                        + oss.str() + "_weight.fits";
+            int fnx = 0;
+            int fny = 0;
+            if (!FitsIO::readImage(flat_file, fnx, fny, flat)) {
+                MPIFailure::abortWorld("read source-extraction flat", flat_file);
+            }
+            if (fnx != nx || fny != ny) {
+                MPIFailure::abortWorld(
+                    "validate source-extraction flat dimensions", flat_file);
+            }
+        }
+
         std::vector<int> weight(nx * ny, 1);
         for (int y = 0; y < ny; ++y) {
             for (int x = 0; x < nx; ++x) {
@@ -326,15 +201,19 @@ namespace SourceExtractor {
                     weight[idx] = 0;
                 }
                 if (lensing.include_flat == 1) {
-                    if (!flat.empty()) {
+                    if (flat[idx] < 0.5f) {
+                        weight[idx] = 0;
+                    } else {
                         array[idx] *= flat[idx];
                     }
                 }
             }
         }
 
-        subtractBackground(nx, ny, array, bg_coeffs, lensing.ccd_split,
-                           LensingConfig::nct, LensingConfig::ncx);
+        if (LensingConfig::include_BGsub == 1) {
+            subtractBackground(nx, ny, array, bg_coeffs, lensing.ccd_split,
+                               LensingConfig::nct, LensingConfig::ncx);
+        }
 
         int nxc = nx / 2;
         double sigabc[2][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};

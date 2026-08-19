@@ -186,8 +186,10 @@ namespace SourceExtractor {
             }
         }
 
-        subtractBackground(nx, ny, array, bg_coeffs, lensing.ccd_split,
-                           LensingConfig::nct, LensingConfig::ncx);
+        if (LensingConfig::include_BGsub == 1) {
+            subtractBackground(nx, ny, array, bg_coeffs, lensing.ccd_split,
+                               LensingConfig::nct, LensingConfig::ncx);
+        }
 
         int nxc = nx / 2;
         double sigabc[2][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};

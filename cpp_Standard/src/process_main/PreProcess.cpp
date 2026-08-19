@@ -419,6 +419,22 @@ namespace PreProcess {
             return;
         }
 
+        std::vector<float> dqmask;
+        if (proc_error == 0
+            && (lensing.include_mask == 2 || lensing.include_mask == 3)) {
+            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
+            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
+                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
+            int dnx = 0, dny = 0;
+            if (!FitsIO::readImage(local_mask_file, dnx, dny, dqmask)) {
+                std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
+                proc_error = 1;
+            } else if (dnx != nx || dny != ny) {
+                std::cerr << "Error / wrong size of DQ file!" << std::endl;
+                proc_error = 1;
+            }
+        }
+
         std::vector<float> flat;
         if (lensing.include_flat == 1) {
             int fnx = 0, fny = 0;
@@ -445,6 +461,11 @@ namespace PreProcess {
                     }
                 }
                 if (array[idx] > LensingConfig::saturation_thresh) {
+                    weight[idx] = 0;
+                }
+                if ((lensing.include_mask == 2 || lensing.include_mask == 3)
+                    && proc_error == 0
+                    && std::abs(dqmask[static_cast<size_t>(idx)]) > 1e-7f) {
                     weight[idx] = 0;
                 }
                 normap[idx] = array[idx];
@@ -499,34 +520,6 @@ namespace PreProcess {
             }
         }
 
-        // ==========================================
-        // Function: Apply the DQ mask before astrometry and defect merging
-        // Method: Keep setSig independent of DQ, then reject every nonzero DQ pixel from all
-        //         later preprocessing stages.
-        // ==========================================
-        if (proc_error == 0
-            && (lensing.include_mask == 2 || lensing.include_mask == 3)) {
-            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
-            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
-                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
-            int nxx = 0, nyy = 0;
-            std::vector<float> flat_weight;
-            if (!FitsIO::readImage(local_mask_file, nxx, nyy, flat_weight)) {
-                std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
-                proc_error = 1;
-            } else if (nxx != nx || nyy != ny) {
-                std::cerr << "Error / wrong size of DQ file!" << std::endl;
-                proc_error = 1;
-            } else {
-                for (int i = 0; i < nx * ny; ++i) {
-                    if (std::abs(flat_weight[static_cast<size_t>(i)]) > 1e-7f) {
-                        weight[static_cast<size_t>(i)] = 0;
-                        normap[static_cast<size_t>(i)] = -1000.0f;
-                    }
-                }
-            }
-        }
-
         std::string astroFilename = OutputLayout::chipPath(
             dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
@@ -557,9 +550,6 @@ namespace PreProcess {
                 for (int i = 0; i < nx * ny; ++i) {
                     if (flat_weight[i] < -900.0f) {
                         weight[i] = 0;
-                    }
-                    if (weight[i] == 0) {
-                        normap[i] = -1000.0f;
                     }
                 }
             } 

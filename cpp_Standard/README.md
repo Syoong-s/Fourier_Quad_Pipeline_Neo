@@ -61,6 +61,13 @@ background model once per amplifier after the existing optional flat correction.
 The old sigma metadata pixels are no longer read or written; missing or
 malformed header metadata is a chip failure with no legacy-pixel fallback.
 
+When `include_flat=1`, Standard Stage 3 reuses the Stage-1 flat filename
+`<flat_path>/flat_<two-digit-chip>_weight.fits` from the runtime lensing
+configuration. Flat read failures and dimension mismatches are fatal chip
+errors. For each pixel, `flat < 0.5` masks the weight; otherwise the science
+array is multiplied by the flat before the recorded background model is
+subtracted.
+
 ## Build and focused verification
 
 Use the portable Makefile inputs described in the main guide. For example, when

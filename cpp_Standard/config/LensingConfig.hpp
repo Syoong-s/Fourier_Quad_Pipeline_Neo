@@ -14,6 +14,7 @@ namespace LensingConfig {
     constexpr int PROCESS_stage = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23;
     constexpr int include_FLAT = 0;
     constexpr int include_Mask = 2;
+    constexpr int include_BGsub = 1;
 
     // Catalog/flat paths (originally from para.inc).
     const std::string ASTROMETRY_CAT = "/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted";

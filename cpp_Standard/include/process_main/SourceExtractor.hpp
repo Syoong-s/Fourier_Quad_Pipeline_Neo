@@ -8,8 +8,7 @@
 
 namespace SourceExtractor {
     void procSource(int iexpo);
-    void getFlatName(const std::string& imageFile, std::string& flatFile);
-    void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput, const std::string& flatFile);
+    void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput);
     
     void deBlending(const std::vector<std::string>& sortFile, int sortNum, int nx, int ny, std::vector<int>& weight,
                     const double cRPIX[2], const double cD[2][2], const double cRVAL[2],
