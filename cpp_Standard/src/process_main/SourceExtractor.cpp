@@ -10,6 +10,7 @@
 #include "Astrometry.hpp"
 #include "ExternalCatalogReader.hpp"
 #include "ImageProcessing.hpp"
+#include "NumericalRecipes.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
+#include <utility>
 #include <system_error>
 
 // Global/extern variables representing exposure filenames list (defined in main.cpp)
@@ -36,6 +38,23 @@ namespace SourceExtractor {
         bool catalogFileExists(const std::string& path) {
             std::error_code ec;
             return std::filesystem::exists(path, ec) && !ec;
+        }
+
+        // ==========================================
+        // Function: Compute a robust sample median for noise-candidate quality control
+        // Method: Partition a private value copy around its midpoint and average the two central
+        //         order statistics for even-sized samples.
+        // ==========================================
+        double sampleMedian(std::vector<double> values) {
+            const std::size_t count = values.size();
+            const std::size_t midpoint = count / 2U;
+            std::nth_element(values.begin(), values.begin() + midpoint, values.end());
+            const double upper = values[midpoint];
+            if (count % 2U != 0U) {
+                return upper;
+            }
+            const double lower = *std::max_element(values.begin(), values.begin() + midpoint);
+            return 0.5 * (lower + upper);
         }
 
         // ==========================================
@@ -249,7 +268,7 @@ namespace SourceExtractor {
         getExpoCatalog(dirOutput, PREFIX, nx, ny, sigmap, weight, normap, proc_error);
 
         if (lensing.ext_cat == 0) {
-            genSourceCatalog(dirOutput, PREFIX, nx, ny, array, weight, ngal, proc_error);
+            genSourceCatalog(dirOutput, PREFIX, nx, ny, array, weight, sigmap, ngal, proc_error);
             if (lensing.ext_psf == 0) {
                 genStarCandidate(dirOutput, PREFIX, nstar, proc_error);
             }
@@ -279,7 +298,7 @@ namespace SourceExtractor {
             genSourceExtCatalog(dirOutput, sortfile, sortnum, PREFIX, nx, ny, array, weight, sigmap, cRPIX, cD, cRVAL, PU, ngal, proc_error);
 
             if (lensing.ext_psf == 0) {
-                genStarCandidateDirect(dirOutput, PREFIX, nx, ny, array, weight, nstar, proc_error);
+                genStarCandidateDirect(dirOutput, PREFIX, nx, ny, array, weight, sigmap, nstar, proc_error);
             }
         }
 
@@ -542,11 +561,11 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Publish detected source stamps and chip source metadata
-    // Method: Consume the temporary detection catalog and route all text/FITS
-    //         products through checked main-process writers.
+    // Method: Consume the temporary detection catalog, use the Stage-1 local-sigma map for noise
+    //         candidates, and route all text/FITS products through checked main-process writers.
     // ==========================================
     void genSourceCatalog(const std::string& dirOutput, const std::string& prefix, int nx, int ny, const std::vector<float>& array,
-                          std::vector<int>& weight, int& ngal, int& procError) {
+                          std::vector<int>& weight, const std::vector<float>& sigmap, int& ngal, int& procError) {
         ngal = 0;
 
         std::vector<float> source_collect;
@@ -575,7 +594,7 @@ namespace SourceExtractor {
                 std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
                 int imax = 0, jmax = 0;
                 
-                findNoise(flag, noise, nx, ny, array, weight, xp, yp, sig, imax, jmax);
+                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
                 if (flag < 0) continue;
 
                 std::vector<float> source(LensingConfig::ns * LensingConfig::ns, 0.0f);
@@ -710,7 +729,7 @@ namespace SourceExtractor {
                 std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
                 int imax = 0, jmax = 0;
 
-                findNoise(flag, noise, nx, ny, array, weight, xp, yp, sig, imax, jmax);
+                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
                 if (flag < 0) continue;
 
                 double peak = 0.0, half_light_flux = 0.0;
@@ -780,90 +799,229 @@ namespace SourceExtractor {
         fout_orig.close();
     }
 
+    // ==========================================
+    // Function: Select an unbiased local-noise stamp for a detected source
+    // Method: Apply fixed geometry, runtime amplifier, mask, local-sigma, MAD, and positive-tail
+    //         gates; shuffle candidates with the existing rank-local ran1 stream and accept the
+    //         first candidate that passes complete post-flatten quality control.
+    // ==========================================
     void findNoise(int& flag, std::vector<float>& stamps, int nx, int ny, const std::vector<float>& array,
-                   const std::vector<int>& weight, double xp, double yp, double sig, int& imax, int& jmax) {
+                   const std::vector<int>& weight, const std::vector<float>& sigmap,
+                   double xp, double yp, double sourceSig, int& imax, int& jmax) {
         flag = 0;
 
-        int cx_0 = static_cast<int>(xp + 0.5) - 1;
-        int cy_0 = static_cast<int>(yp + 0.5) - 1;
-        int x1_0 = cx_0 - LensingConfig::nl_2 - 1;
-        int y1_0 = cy_0 - LensingConfig::nl_2 - 1;
-
-        double temp = 100000.0;
-        double pmax = temp;
-        int jx = -1, jy = -1;
-
-        int nsteph = 5;
-        for (int i = 0; i < nsteph; ++i) {
-            for (int j = 0; j < nsteph; ++j) {
-                if (i == 0 || i == nsteph - 1 || j == 0 || j == nsteph - 1) {
-                    int ix1_0 = x1_0 + LensingConfig::nl * (i - 2);
-                    int iy1_0 = y1_0 + LensingConfig::nl * (j - 2);
-                    int ix2_0 = ix1_0 + LensingConfig::nl - 1;
-                    int iy2_0 = iy1_0 + LensingConfig::nl - 1;
-
-                    if (ix1_0 < LensingConfig::chip_edge_margin - 1 || ix2_0 > nx - 1 - LensingConfig::chip_edge_margin ||
-                        iy1_0 < LensingConfig::chip_edge_margin - 1 || iy2_0 > ny - 1 - LensingConfig::chip_edge_margin) {
-                        continue;
-                    }
-
-                    double npeak = -temp;
-                    int nd = 0;
-                    for (int u = ix1_0; u <= ix2_0; ++u) {
-                        for (int v = iy1_0; v <= iy2_0; ++v) {
-                            int idx = v * nx + u;
-                            if (array[idx] > npeak) {
-                                npeak = array[idx];
-                            }
-                            if (weight[idx] == 0) {
-                                nd++;
-                            }
-                        }
-                    }
-
-                    if (nd <= LensingConfig::nl && npeak < pmax) {
-                        pmax = npeak;
-                        jx = ix1_0;
-                        jy = iy1_0;
-                    }
-                }
-            }
-        }
-
-        if (pmax == temp) {
+        const std::size_t expectedSize = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
+        if (nx <= 0 || ny <= 0 || sigmap.size() != expectedSize
+            || !std::isfinite(sourceSig) || sourceSig <= 0.0) {
             flag = -1;
             return;
         }
 
-        std::vector<float> stampl(LensingConfig::nl * LensingConfig::nl, 0.0f);
-        std::vector<int> weightl(LensingConfig::nl * LensingConfig::nl, 0);
+        struct NoiseCandidate {
+            int x0 = 0;
+            int y0 = 0;
+            double sigma = 0.0;
+        };
 
-        for (int v_idx = 0; v_idx < LensingConfig::nl; ++v_idx) {
-            int j = jy + v_idx;
-            for (int u_idx = 0; u_idx < LensingConfig::nl; ++u_idx) {
-                int i = jx + u_idx;
-                int idx_src = j * nx + i;
-                int idx_dest = v_idx * LensingConfig::nl + u_idx;
-                stampl[idx_dest] = array[idx_src];
-                weightl[idx_dest] = weight[idx_src];
+        const int cx_0 = static_cast<int>(xp + 0.5) - 1;
+        const int cy_0 = static_cast<int>(yp + 0.5) - 1;
+        const int x1_0 = cx_0 - LensingConfig::nl_2 - 1;
+        const int y1_0 = cy_0 - LensingConfig::nl_2 - 1;
+        const int nxc = nx / 2;
+        const int ccdSplit = RuntimeConfigStore::get().lensing.ccd_split;
+        const int sourceAmp = (cx_0 < nxc) ? 0 : 1;
+        const int offset_xy = LensingConfig::nl_2 - LensingConfig::ns_2;
+
+        std::vector<NoiseCandidate> candidates;
+        candidates.reserve(16U);
+
+        constexpr int nsteph = 5;
+        for (int i = 0; i < nsteph; ++i) {
+            for (int j = 0; j < nsteph; ++j) {
+                if (i != 0 && i != nsteph - 1 && j != 0 && j != nsteph - 1) {
+                    continue;
+                }
+
+                const int ix1_0 = x1_0 + LensingConfig::nl * (i - 2);
+                const int iy1_0 = y1_0 + LensingConfig::nl * (j - 2);
+                const int ix2_0 = ix1_0 + LensingConfig::nl - 1;
+                const int iy2_0 = iy1_0 + LensingConfig::nl - 1;
+
+                if (ix1_0 < LensingConfig::chip_edge_margin - 1
+                    || ix2_0 > nx - 1 - LensingConfig::chip_edge_margin
+                    || iy1_0 < LensingConfig::chip_edge_margin - 1
+                    || iy2_0 > ny - 1 - LensingConfig::chip_edge_margin) {
+                    continue;
+                }
+
+                if (ccdSplit == 2) {
+                    int candidateAmp = -1;
+                    if (ix1_0 >= 0 && ix2_0 < nxc) {
+                        candidateAmp = 0;
+                    } else if (ix1_0 >= nxc && ix2_0 < nx) {
+                        candidateAmp = 1;
+                    }
+                    if (candidateAmp < 0 || candidateAmp != sourceAmp) {
+                        continue;
+                    }
+                }
+
+                int nbad = 0;
+                for (int y = iy1_0; y <= iy2_0; ++y) {
+                    for (int x = ix1_0; x <= ix2_0; ++x) {
+                        if (weight[static_cast<std::size_t>(y) * nx + x] == 0) {
+                            ++nbad;
+                        }
+                    }
+                }
+                if (nbad > LensingConfig::nl) {
+                    continue;
+                }
+
+                int nsourceCentral = 0;
+                for (int y = 0; y < LensingConfig::ns; ++y) {
+                    for (int x = 0; x < LensingConfig::ns; ++x) {
+                        const int sourceX = ix1_0 + offset_xy + x;
+                        const int sourceY = iy1_0 + offset_xy + y;
+                        if (weight[static_cast<std::size_t>(sourceY) * nx + sourceX] > 1) {
+                            ++nsourceCentral;
+                        }
+                    }
+                }
+                if (nsourceCentral > 0) {
+                    continue;
+                }
+
+                const int candidateCx = (ix1_0 + ix2_0) / 2;
+                const int candidateCy = (iy1_0 + iy2_0) / 2;
+                const double noiseSig = sigmap[
+                    static_cast<std::size_t>(candidateCy) * nx + candidateCx];
+                if (!std::isfinite(noiseSig) || noiseSig <= 0.0) {
+                    continue;
+                }
+
+                const double sigmaRatio = noiseSig / sourceSig;
+                if (sigmaRatio <= LensingConfig::noise_sigma_ratio_min
+                    || sigmaRatio >= LensingConfig::noise_sigma_ratio_max) {
+                    continue;
+                }
+
+                candidates.push_back({ix1_0, iy1_0, noiseSig});
             }
         }
 
-        ImageProcessing::flattenStamp2D(LensingConfig::ns, LensingConfig::nl, stampl, weightl, flag);
-        if (flag < 0) return;
-
-        ImageProcessing::markNoise(LensingConfig::nl, stampl, weightl, sig, LensingConfig::source_thresh, LensingConfig::core_thresh);
-
-        std::vector<int> weights(LensingConfig::ns * LensingConfig::ns, 0);
-        int offset_xy = LensingConfig::nl_2 - LensingConfig::ns_2;
-        for (int y = 0; y < LensingConfig::ns; ++y) {
-            for (int x = 0; x < LensingConfig::ns; ++x) {
-                stamps[y * LensingConfig::ns + x] = stampl[(y + offset_xy) * LensingConfig::nl + (x + offset_xy)];
-                weights[y * LensingConfig::ns + x] = weightl[(y + offset_xy) * LensingConfig::nl + (x + offset_xy)];
-            }
+        if (candidates.empty()) {
+            flag = -1;
+            return;
         }
 
-        ImageProcessing::decorateStamp(LensingConfig::ns, sig, weights, stamps);
+        for (int i = static_cast<int>(candidates.size()) - 1; i > 0; --i) {
+            const double u = NumericalRecipes::ran1();
+            const int j = static_cast<int>(u * static_cast<double>(i + 1));
+            std::swap(candidates[static_cast<std::size_t>(i)],
+                      candidates[static_cast<std::size_t>(j)]);
+        }
+
+        for (const NoiseCandidate& candidate : candidates) {
+            std::vector<float> stampl(LensingConfig::nl * LensingConfig::nl, 0.0f);
+            std::vector<int> weightl(LensingConfig::nl * LensingConfig::nl, 0);
+
+            for (int y = 0; y < LensingConfig::nl; ++y) {
+                for (int x = 0; x < LensingConfig::nl; ++x) {
+                    const std::size_t sourceIndex =
+                        static_cast<std::size_t>(candidate.y0 + y) * nx + candidate.x0 + x;
+                    const int destinationIndex = y * LensingConfig::nl + x;
+                    stampl[destinationIndex] = array[sourceIndex];
+                    weightl[destinationIndex] = weight[sourceIndex];
+                }
+            }
+
+            int candidateFlag = 0;
+            ImageProcessing::flattenStamp2D(
+                LensingConfig::ns, LensingConfig::nl, stampl, weightl, candidateFlag);
+            if (candidateFlag < 0) {
+                continue;
+            }
+
+            std::vector<double> validPixels;
+            validPixels.reserve(static_cast<std::size_t>(LensingConfig::nsns));
+            for (int y = 0; y < LensingConfig::ns; ++y) {
+                for (int x = 0; x < LensingConfig::ns; ++x) {
+                    const int index = (y + offset_xy) * LensingConfig::nl + x + offset_xy;
+                    if (weightl[index] == 1) {
+                        validPixels.push_back(stampl[index]);
+                    }
+                }
+            }
+            if (validPixels.empty()) {
+                continue;
+            }
+
+            const double median = sampleMedian(validPixels);
+            std::vector<double> deviations;
+            deviations.reserve(validPixels.size());
+            for (const double pixel : validPixels) {
+                deviations.push_back(std::abs(pixel - median));
+            }
+            const double sigmaMad = 1.4826 * sampleMedian(std::move(deviations));
+            if (!std::isfinite(sigmaMad) || sigmaMad <= 0.0) {
+                continue;
+            }
+
+            const double madRatio = sigmaMad / candidate.sigma;
+            if (madRatio <= LensingConfig::noise_mad_ratio_min
+                || madRatio >= LensingConfig::noise_mad_ratio_max) {
+                continue;
+            }
+
+            int positiveTailCount = 0;
+            const double positiveTailThreshold = LensingConfig::noise_tail_sigma * sigmaMad;
+            for (const double pixel : validPixels) {
+                if (pixel - median > positiveTailThreshold) {
+                    ++positiveTailCount;
+                }
+            }
+            const double tailFraction = static_cast<double>(positiveTailCount)
+                                      / static_cast<double>(validPixels.size());
+            if (tailFraction >= LensingConfig::noise_max_tail_fraction) {
+                continue;
+            }
+
+            ImageProcessing::markNoise(
+                LensingConfig::nl, stampl, weightl, candidate.sigma,
+                LensingConfig::source_thresh, LensingConfig::core_thresh);
+
+            int maskedCentral = 0;
+            for (int y = 0; y < LensingConfig::ns; ++y) {
+                for (int x = 0; x < LensingConfig::ns; ++x) {
+                    const int index = (y + offset_xy) * LensingConfig::nl + x + offset_xy;
+                    if (weightl[index] == 0) {
+                        ++maskedCentral;
+                    }
+                }
+            }
+            const double maskFraction = static_cast<double>(maskedCentral)
+                                      / static_cast<double>(LensingConfig::nsns);
+            if (maskFraction > LensingConfig::noise_max_mask_fraction) {
+                continue;
+            }
+
+            std::vector<int> weights(LensingConfig::nsns, 0);
+            for (int y = 0; y < LensingConfig::ns; ++y) {
+                for (int x = 0; x < LensingConfig::ns; ++x) {
+                    const int outputIndex = y * LensingConfig::ns + x;
+                    const int inputIndex = (y + offset_xy) * LensingConfig::nl + x + offset_xy;
+                    stamps[outputIndex] = stampl[inputIndex];
+                    weights[outputIndex] = weightl[inputIndex];
+                }
+            }
+
+            ImageProcessing::decorateStamp(
+                LensingConfig::ns, candidate.sigma, weights, stamps);
+            return;
+        }
+
+        flag = -1;
     }
 
     // ==========================================
@@ -1104,11 +1262,12 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Publish star candidates selected directly from detections
-    // Method: Re-extract qualifying detection stamps and route candidate text
-    //         and FITS products through checked main-process writers.
+    // Method: Re-extract qualifying detection stamps, use the Stage-1 local-sigma map for noise
+    //         candidates, and route candidate text/FITS products through checked writers.
     // ==========================================
     void genStarCandidateDirect(const std::string& dirOutput, const std::string& prefix, int nx, int ny, const std::vector<float>& array,
-                                const std::vector<int>& weight, int& nstar, int& procError) {
+                                const std::vector<int>& weight, const std::vector<float>& sigmap,
+                                int& nstar, int& procError) {
         nstar = 0;
 
         std::vector<float> star_source_collect;
@@ -1140,7 +1299,7 @@ namespace SourceExtractor {
                 std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
                 int imax = 0, jmax = 0;
 
-                findNoise(flag, noise, nx, ny, array, weight, xp, yp, sig, imax, jmax);
+                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
                 if (flag < 0) continue;
 
                 std::vector<float> source(LensingConfig::ns * LensingConfig::ns, 0.0f);

@@ -92,6 +92,19 @@ namespace LensingConfig {
     constexpr double core_thresh = 4.0;
 
     // ==========================================
+    // Configuration: Stage-3 unbiased noise-stamp quality gates
+    // Method: Accept physically compatible candidates with fixed pass/fail cuts before random
+    //         selection; never rank candidates by peak, MAD, RMS, or mask fraction.
+    // ==========================================
+    constexpr double noise_sigma_ratio_min = 0.80;
+    constexpr double noise_sigma_ratio_max = 1.25;
+    constexpr double noise_mad_ratio_min = 0.70;
+    constexpr double noise_mad_ratio_max = 1.30;
+    constexpr double noise_tail_sigma = 2.5;
+    constexpr double noise_max_tail_fraction = 0.05;
+    constexpr double noise_max_mask_fraction = 0.02;
+
+    // ==========================================
     // Configuration: numerical_fix F6 mode-bar noise-plane estimator
     // Method: Keep these constants identical to f77/sig_para.inc. The estimator obtains robust
     //         block seeds, finds the sky mode and lower-side width, performs two symmetric clipped
