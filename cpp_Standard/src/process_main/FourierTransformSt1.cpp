@@ -7,6 +7,7 @@
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
+#include "NoiseCovariance.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -119,22 +120,27 @@ namespace FourierTransformSt1 {
             std::vector<float> power_coll(
                 static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
             std::vector<float> source(stamp_size);
-            std::vector<float> noise(stamp_size);
             std::vector<float> source_p(stamp_size);
             std::vector<float> noise_p(stamp_size);
 
             for (int i = 0; i < nsource; ++i) {
                 const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
                 std::copy_n(source_coll.data() + offset, stamp_size, source.data());
-                std::copy_n(noise_coll.data() + offset, stamp_size, noise.data());
                 double source_pc = 0.0;
-                double noise_pc = 0.0;
 
-                ImageProcessing::getPower(ns, ns, source, source_p,
-                                          lensing.star_smooth, source_pc);
-                ImageProcessing::getPower(ns, ns, noise, noise_p,
-                                          lensing.star_smooth, noise_pc);
-                ImageProcessing::processPowers(ns, source_p, noise_p);
+                if (!NoiseCovariance::copyStoredNoisePower(
+                        noise_coll, offset, ns, noise_p)) {
+                    MPIFailure::abortWorld(
+                        "load stored star-candidate noise power",
+                        filename_star_can_noise);
+                }
+                if (!ImageProcessing::buildCorrectedPower(
+                        ns, ns, source, noise_p, lensing.star_smooth,
+                        source_p, source_pc)) {
+                    MPIFailure::abortWorld(
+                        "build corrected star-candidate power",
+                        filename_star_can_noise);
+                }
                 ImageProcessing::regularizePower(ns, ns, source_p,
                                                  lensing.star_smooth);
 

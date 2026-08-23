@@ -195,6 +195,9 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
         if (shear_probe.status == ShearCatalogStatus::ReadError) {
             MPIFailure::abortWorld("parse Stage 7 shear catalog", filename_shear);
         }
+        if (shear_probe.status == ShearCatalogStatus::Empty) {
+            continue;
+        }
 
         std::string filename_orig;
         if (use_external_catalog) {
@@ -202,9 +205,6 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                 dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
             Internal::requireMatchingCatalogDataRows(
                 filename_shear, filename_orig);
-        }
-        if (shear_probe.status == ShearCatalogStatus::Empty) {
-            continue;
         }
         if (chi2 > LensingConfig::chi2_thresh) {
             std::cout << prefix << " contains no valid sources!" << std::endl;

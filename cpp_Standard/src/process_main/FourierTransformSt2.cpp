@@ -8,6 +8,7 @@
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
+#include "NoiseCovariance.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -114,31 +115,30 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
     std::vector<float> power_coll(
         static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
     std::vector<float> source(stamp_size);
-    std::vector<float> noise(stamp_size);
     std::vector<float> source_p(stamp_size);
     std::vector<float> noise_p(stamp_size);
 
     for (int i = 0; i < nsource; ++i) {
         const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
         std::copy_n(source_coll.data() + offset, stamp_size, source.data());
-        std::copy_n(noise_coll.data() + offset, stamp_size, noise.data());
         double pc = 0.0;
 
-        // SNR calculation uses star_smooth (2)
-        ImageProcessing::getPower(ns, ns, source, source_p,
-                                  lensing.star_smooth, pc);
+        // SNR uses raw source power; smoothing is reserved for corrected measurement power.
+        ImageProcessing::getPower(ns, ns, source, source_p, 0, pc);
 
         int ns_2 = LensingConfig::ns_2;
         float cen_val = source_p[ns_2 * ns + ns_2];
         source_para[i][10] = std::sqrt(std::max(static_cast<float>(pc), cen_val));
         source_para[i][11] = source_para[i][10] / source_para[i][3] * ns;
 
-        // Main power spectrum computation uses gal_smooth
-        ImageProcessing::getPower(ns, ns, source, source_p,
-                                  lensing.gal_smooth, pc);
-        ImageProcessing::getPower(ns, ns, noise, noise_p,
-                                  lensing.gal_smooth, pc);
-        ImageProcessing::processPowers(ns, source_p, noise_p);
+        if (!NoiseCovariance::copyStoredNoisePower(
+                noise_coll, offset, ns, noise_p)) {
+            MPIFailure::abortWorld("load stored source noise power", noise_fits);
+        }
+        if (!ImageProcessing::buildCorrectedPower(
+                ns, ns, source, noise_p, lensing.gal_smooth, source_p, pc)) {
+            MPIFailure::abortWorld("build corrected source power", noise_fits);
+        }
 
         std::copy_n(source_p.data(), stamp_size, power_coll.data() + offset);
     }

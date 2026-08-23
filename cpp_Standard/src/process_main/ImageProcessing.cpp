@@ -1,10 +1,10 @@
 #include "ImageProcessing.hpp"
 #include "NumericalRecipes.hpp"
-#include "UniversalUtils.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
 #include <complex>
+#include <memory>
 #include <vector>
 #include <array>
 #include <Eigen/Dense>
@@ -19,6 +19,94 @@ namespace ImageProcessing {
     namespace {
         inline std::size_t stampIndex(int x, int y, int n) {
             return static_cast<std::size_t>(y) * n + x;
+        }
+
+        // ==========================================
+        // Class: Reusable correlated-fill inverse FFT workspace
+        // Method: Bind one backward FFTW plan to a fixed synthesis grid and copy each Hermitian
+        //         realization into the persistent buffer before execution.
+        // ==========================================
+        class SynthesisInverseWorkspace {
+        public:
+            // ==========================================
+            // Function: Construct one fixed-side correlated-fill inverse transform
+            // Method: Allocate persistent complex storage and bind an in-place backward FFTW plan.
+            // ==========================================
+            explicit SynthesisInverseWorkspace(int size)
+                : size_(size),
+                  buffer_(static_cast<std::size_t>(size) * static_cast<std::size_t>(size)) {
+                backward_ = fftwf_plan_dft_2d(
+                    size_, size_, data(), data(), FFTW_BACKWARD, FFTW_ESTIMATE);
+            }
+
+            // ==========================================
+            // Function: Destroy the correlated-fill inverse transform
+            // Method: Release the plan while its bound vector storage is still alive.
+            // ==========================================
+            ~SynthesisInverseWorkspace() {
+                if (backward_ != nullptr) fftwf_destroy_plan(backward_);
+            }
+
+            SynthesisInverseWorkspace(const SynthesisInverseWorkspace&) = delete;
+            SynthesisInverseWorkspace& operator=(const SynthesisInverseWorkspace&) = delete;
+
+            // ==========================================
+            // Function: Report whether the inverse plan was created
+            // Method: Validate the sole FFTW handle required by execution.
+            // ==========================================
+            bool valid() const {
+                return backward_ != nullptr;
+            }
+
+            // ==========================================
+            // Function: Return the synthesis-grid side used as the cache key
+            // Method: Expose the immutable constructor size.
+            // ==========================================
+            int size() const {
+                return size_;
+            }
+
+            // ==========================================
+            // Function: Inverse-transform one normalized Hermitian spectrum
+            // Method: Copy into bound storage and execute the unnormalized backward plan.
+            // ==========================================
+            void execute(const std::vector<std::complex<float>>& fourierNoise) {
+                std::copy(fourierNoise.begin(), fourierNoise.end(), buffer_.begin());
+                fftwf_execute(backward_);
+            }
+
+            // ==========================================
+            // Function: Read one synthesized real-space complex sample
+            // Method: Return the immutable post-transform buffer value for validation/cropping.
+            // ==========================================
+            const std::complex<float>& value(std::size_t index) const {
+                return buffer_[index];
+            }
+
+        private:
+            // ==========================================
+            // Function: Access persistent storage through FFTW's complex ABI
+            // Method: Reinterpret the std::complex buffer used throughout ImageProcessing.
+            // ==========================================
+            fftwf_complex* data() {
+                return reinterpret_cast<fftwf_complex*>(buffer_.data());
+            }
+
+            int size_ = 0;
+            std::vector<std::complex<float>> buffer_;
+            fftwf_plan backward_ = nullptr;
+        };
+
+        // ==========================================
+        // Function: Reuse the current thread's correlated-fill inverse FFT plan
+        // Method: Rebuild only when the derived synthesis side changes, never once per source.
+        // ==========================================
+        SynthesisInverseWorkspace& synthesisInverseWorkspace(int size) {
+            thread_local std::unique_ptr<SynthesisInverseWorkspace> workspace;
+            if (!workspace || workspace->size() != size) {
+                workspace = std::make_unique<SynthesisInverseWorkspace>(size);
+            }
+            return *workspace;
         }
     }
 
@@ -218,150 +306,6 @@ namespace ImageProcessing {
     }
 
     // ==========================================
-    // Function: Mask detected sources in a noise stamp
-    // Method: Mirror F77 mark_noise with x-major loop order and row-major vector storage.
-    // ==========================================
-    void markNoise(int n, const std::vector<float>& stamp, std::vector<int>& weight, double sig, 
-                   double source_thresh, double core_thresh) {
-        double thresh1 = core_thresh * sig;
-        double thresh2 = source_thresh * sig;
-
-        std::vector<int> mark(n * n, 0);
-
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                std::size_t idx = stampIndex(i, j, n);
-                if (stamp[idx] >= thresh1 && weight[idx] > 0) {
-                    mark[idx] = 1;
-                } else if (weight[idx] == 0) {
-                    mark[idx] = 1;
-                } else {
-                    mark[idx] = 0;
-                }
-            }
-        }
-
-        int changed = 1;
-        while (changed == 1) {
-            changed = 0;
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j < n; ++j) {
-                    std::size_t idx = stampIndex(i, j, n);
-                    if (mark[idx] != 1) continue;
-                    mark[idx] = -1;
-                    for (int u = std::max(i - 1, 0); u <= std::min(i + 1, n - 1); ++u) {
-                        for (int v = std::max(j - 1, 0); v <= std::min(j + 1, n - 1); ++v) {
-                            std::size_t uidx = stampIndex(u, v, n);
-                            if (mark[uidx] == 0 && stamp[uidx] >= thresh2) {
-                                mark[uidx] = 1;
-                            }
-                        }
-                    }
-                    changed = 1;
-                }
-            }
-        }
-
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                std::size_t idx = stampIndex(i, j, n);
-                if (mark[idx] != -1) continue;
-                mark[idx] = 1;
-                for (int u = std::max(i - 2, 0); u <= std::min(i + 2, n - 1); ++u) {
-                    for (int v = std::max(j - 2, 0); v <= std::min(j + 2, n - 1); ++v) {
-                        std::size_t uidx = stampIndex(u, v, n);
-                        if (mark[uidx] == 0) {
-                            mark[uidx] = 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                std::size_t idx = stampIndex(i, j, n);
-                if (mark[idx] == 1) {
-                    weight[idx] = 0;
-                }
-            }
-        }
-    }
-
-    // ==========================================
-    // Function: Subtract a fitted 2D background plane from a stamp
-    // Method: Mirror F77 flatten_stamp_2D coordinates while using row-major storage.
-    // ==========================================
-    void flattenStamp2D(int ns, int nl, std::vector<float>& stamp, const std::vector<int>& weight, int& ierror) {
-        ierror = 0;
-        int d1 = (nl - ns) / 2;
-        std::vector<Point3D> points;
-        points.reserve(nl * nl);
-
-        for (int i = 0; i < nl; ++i) {
-            for (int j = 0; j < nl; ++j) {
-                std::size_t idx = stampIndex(i, j, nl);
-                if ((i < d1 || i >= nl - d1 || j < d1 || j >= nl - d1) && weight[idx] == 1) {
-                    points.push_back({static_cast<double>(i + 1), static_cast<double>(j + 1), static_cast<double>(stamp[idx])});
-                }
-            }
-        }
-
-        int max_np = nl * nl - ns * ns;
-        if (points.size() <= max_np * 0.3) {
-            ierror = -1;
-            return;
-        }
-
-        double aa = 0.0, bb = 0.0, cc = 0.0;
-        UniversalUtils::findSlope2D(points, aa, bb, cc);
-
-        for (int i = 0; i < nl; ++i) {
-            for (int j = 0; j < nl; ++j) {
-                std::size_t idx = stampIndex(i, j, nl);
-                stamp[idx] -= static_cast<float>(aa + bb * (i + 1) + cc * (j + 1));
-            }
-        }
-    }
-
-    void flattenStampNew(int ns, int nl, std::vector<float>& stamp, const std::vector<int>& weight, int& ierror) {
-        ierror = 0;
-        int d1 = (nl - ns) / 2;
-        std::vector<float> border_vals;
-        border_vals.reserve(nl * nl - ns * ns);
-
-        for (int i = 0; i < nl; ++i) {
-            for (int j = 0; j < nl; ++j) {
-                int idx = i * nl + j;
-                if ((i < d1 || i >= nl - d1 || j < d1 || j >= nl - d1) && weight[idx] == 1) {
-                    border_vals.push_back(stamp[idx]);
-                }
-            }
-        }
-
-        int max_np = nl * nl - ns * ns;
-        if (border_vals.size() <= max_np * 0.3) {
-            ierror = -1;
-            return;
-        }
-
-        std::sort(border_vals.begin(), border_vals.end());
-        int np = border_vals.size();
-        double bg_median = 0.0;
-        if (np % 2 == 0) {
-            bg_median = (border_vals[np / 2 - 1] + border_vals[np / 2]) / 2.0;
-        } else {
-            bg_median = border_vals[np / 2];
-        }
-
-        for (int i = 0; i < nl; ++i) {
-            for (int j = 0; j < nl; ++j) {
-                stamp[i * nl + j] -= static_cast<float>(bg_median);
-            }
-        }
-    }
-
-    // ==========================================
     // Function: Fill masked pixels with Gaussian noise
     // Method: Preserve F77 decorate_stamp x-major traversal and row-major storage.
     // ==========================================
@@ -374,6 +318,140 @@ namespace ImageProcessing {
                 }
             }
         }
+    }
+
+    // ==========================================
+    // Function: Fill masked stamp pixels with one local correlated-noise realization
+    // Method: Clip only a temporary dynamic-grid PSD, renormalize it to C(0,0), ifftshift it,
+    //         generate a cached Hermitian realization, centrally crop the source footprint, and
+    //         copy only masked coordinates while preserving every valid stamp pixel.
+    // ==========================================
+    bool decorateStampCorrelated(int stampSize,
+                                 int synthesisSize,
+                                 const std::vector<float>& synthesisPower,
+                                 double zeroLagCovariance,
+                                 const std::vector<int>& weights,
+                                 std::vector<float>& stamp) {
+        if (stampSize <= 0) return false;
+        const std::size_t stampElements = static_cast<std::size_t>(stampSize)
+                                        * static_cast<std::size_t>(stampSize);
+        if (weights.size() != stampElements || stamp.size() != stampElements) {
+            return false;
+        }
+        for (float value : stamp) {
+            if (!std::isfinite(value)) return false;
+        }
+
+        const bool hasMaskedPixel = std::any_of(
+            weights.begin(), weights.end(), [](int value) { return value == 0; });
+        if (!hasMaskedPixel) return true;
+        if (synthesisSize < stampSize || synthesisSize % 2 != 0
+            || !std::isfinite(zeroLagCovariance) || zeroLagCovariance <= 0.0) {
+            return false;
+        }
+        const std::size_t synthesisElements = static_cast<std::size_t>(synthesisSize)
+                                            * static_cast<std::size_t>(synthesisSize);
+        if (synthesisPower.size() != synthesisElements) return false;
+
+        double positivePowerSum = 0.0;
+        for (float value : synthesisPower) {
+            if (!std::isfinite(value)) return false;
+            positivePowerSum += std::max(0.0, static_cast<double>(value));
+        }
+        if (!std::isfinite(positivePowerSum) || positivePowerSum <= 0.0) {
+            return false;
+        }
+
+        const double powerScale = zeroLagCovariance / positivePowerSum;
+        if (!std::isfinite(powerScale) || powerScale <= 0.0) return false;
+
+        const int half = synthesisSize / 2;
+        std::vector<double> fillPower(synthesisElements, 0.0);
+        for (int y = 0; y < synthesisSize; ++y) {
+            const int shiftedY = (y + half) % synthesisSize;
+            for (int x = 0; x < synthesisSize; ++x) {
+                const int shiftedX = (x + half) % synthesisSize;
+                const std::size_t unshiftedIndex = static_cast<std::size_t>(y)
+                                                 * synthesisSize + x;
+                const std::size_t shiftedIndex = static_cast<std::size_t>(shiftedY)
+                                               * synthesisSize
+                                               + shiftedX;
+                fillPower[unshiftedIndex] = std::max(
+                    0.0, static_cast<double>(synthesisPower[shiftedIndex])) * powerScale;
+            }
+        }
+
+        SynthesisInverseWorkspace& inverseWorkspace = synthesisInverseWorkspace(synthesisSize);
+        if (!inverseWorkspace.valid()) return false;
+
+        std::vector<std::complex<float>> fourierNoise(
+            synthesisElements, {0.0f, 0.0f});
+        for (int y = 0; y < synthesisSize; ++y) {
+            const int conjugateY = (synthesisSize - y) % synthesisSize;
+            for (int x = 0; x < synthesisSize; ++x) {
+                const int conjugateX = (synthesisSize - x) % synthesisSize;
+                const std::size_t index = static_cast<std::size_t>(y) * synthesisSize + x;
+                const std::size_t conjugateIndex = static_cast<std::size_t>(conjugateY)
+                                                 * synthesisSize
+                                                 + conjugateX;
+                if (index > conjugateIndex) continue;
+
+                if (index == conjugateIndex) {
+                    const double coefficient = std::sqrt(fillPower[index])
+                                             * NumericalRecipes::gasdev();
+                    if (!std::isfinite(coefficient)) return false;
+                    fourierNoise[index] = std::complex<float>(
+                        static_cast<float>(coefficient), 0.0f);
+                    continue;
+                }
+
+                const double pairPower = 0.5 * (
+                    fillPower[index] + fillPower[conjugateIndex]);
+                const double coefficientScale = std::sqrt(0.5 * pairPower);
+                double gaussianReal = 0.0;
+                double gaussianImaginary = 0.0;
+                NumericalRecipes::gasdev2(gaussianReal, gaussianImaginary);
+                const std::complex<float> coefficient(
+                    static_cast<float>(coefficientScale * gaussianReal),
+                    static_cast<float>(coefficientScale * gaussianImaginary));
+                if (!std::isfinite(coefficient.real())
+                    || !std::isfinite(coefficient.imag())) {
+                    return false;
+                }
+                fourierNoise[index] = coefficient;
+                fourierNoise[conjugateIndex] = std::conj(coefficient);
+            }
+        }
+
+        inverseWorkspace.execute(fourierNoise);
+        double maximumRealMagnitude = 0.0;
+        double maximumImaginaryMagnitude = 0.0;
+        for (std::size_t index = 0; index < synthesisElements; ++index) {
+            const std::complex<float>& value = inverseWorkspace.value(index);
+            if (!std::isfinite(value.real()) || !std::isfinite(value.imag())) return false;
+            maximumRealMagnitude = std::max(
+                maximumRealMagnitude, std::abs(static_cast<double>(value.real())));
+            maximumImaginaryMagnitude = std::max(
+                maximumImaginaryMagnitude, std::abs(static_cast<double>(value.imag())));
+        }
+        if (maximumImaginaryMagnitude
+            > 1.0e-5 * std::max(1.0, maximumRealMagnitude)) {
+            return false;
+        }
+
+        const int cropStart = (synthesisSize - stampSize) / 2;
+        for (int y = 0; y < stampSize; ++y) {
+            for (int x = 0; x < stampSize; ++x) {
+                const std::size_t stampPosition = static_cast<std::size_t>(y)
+                                                * stampSize + x;
+                if (weights[stampPosition] != 0) continue;
+                const std::size_t realizationPosition =
+                    static_cast<std::size_t>(cropStart + y) * synthesisSize
+                    + static_cast<std::size_t>(cropStart + x);
+                stamp[stampPosition] = inverseWorkspace.value(realizationPosition).real();
+            }
+        }
+        return true;
     }
 
     void smoothGrid33(std::vector<float>& f) {
@@ -690,42 +768,125 @@ namespace ImageProcessing {
         map = std::move(temp);
     }
 
+    // ==========================================
+    // Function: Smooth a signed power map in logarithmic space
+    // Method: Add the smallest scale-aware offset that makes every log argument positive, smooth
+    //         a temporary log map, and commit only a fully finite inverse transform.
+    // ==========================================
     void smoothImage55HoleLn(int nx, int ny, std::vector<float>& map) {
-        if (map.empty()) return;
-        float mapmin = map[0];
-        float mapmax = map[0];
-        for (float val : map) {
-            if (val < mapmin) mapmin = val;
-            if (val > mapmax) mapmax = val;
+        if (nx <= 0 || ny <= 0
+            || map.size() != static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)
+            || map.empty()) {
+            return;
         }
 
-        float delta = 0.0001f * (mapmax - mapmin);
-        for (float& val : map) {
-            val = std::log(val + delta);
+        double minimum = static_cast<double>(map.front());
+        double maximum = minimum;
+        for (float value : map) {
+            if (!std::isfinite(value)) return;
+            minimum = std::min(minimum, static_cast<double>(value));
+            maximum = std::max(maximum, static_cast<double>(value));
         }
 
-        smoothImage55Hole(nx, ny, map);
+        const double span = maximum - minimum;
+        const double scale = std::max({std::abs(minimum), std::abs(maximum),
+                                       span, 1.0e-20});
+        const double legacyOffset = 1.0e-4 * span;
+        const double epsilon = 1.0e-4 * scale;
+        const double offset = std::max(legacyOffset, -minimum + epsilon);
 
-        for (float& val : map) {
-            val = std::exp(val) - delta;
+        std::vector<float> transformed(map.size(), 0.0f);
+        for (std::size_t i = 0; i < map.size(); ++i) {
+            const double argument = static_cast<double>(map[i]) + offset;
+            if (!(argument > 0.0) || !std::isfinite(argument)) return;
+            const double logged = std::log(argument);
+            if (!std::isfinite(logged)) return;
+            transformed[i] = static_cast<float>(logged);
+        }
+
+        smoothImage55Hole(nx, ny, transformed);
+
+        for (float& value : transformed) {
+            const double restored = std::exp(static_cast<double>(value)) - offset;
+            if (!std::isfinite(restored)) return;
+            value = static_cast<float>(restored);
+        }
+        map = std::move(transformed);
+    }
+
+    // ==========================================
+    // Function: Subtract stored noise power from raw source power
+    // Method: Apply one element-wise linear subtraction after validating matching square grids.
+    // ==========================================
+    void subtractNoisePower(int n, std::vector<float>& sourcePower,
+                            const std::vector<float>& noisePower) {
+        if (n <= 0) return;
+        const std::size_t elements = static_cast<std::size_t>(n)
+                                   * static_cast<std::size_t>(n);
+        if (sourcePower.size() != elements || noisePower.size() != elements) return;
+        for (std::size_t i = 0; i < elements; ++i) {
+            sourcePower[i] -= noisePower[i];
         }
     }
 
-    void processPowers(int n, std::vector<float>& sourcep, const std::vector<float>& noisep) {
-        for (int i = 0; i < n * n; ++i) {
-            sourcep[i] -= noisep[i];
+    // ==========================================
+    // Function: Apply configured smoothing to corrected power
+    // Method: Dispatch mode 1 to linear hole smoothing, mode 2 to signed-safe log smoothing, and
+    //         leave mode 0 or unsupported values unchanged.
+    // ==========================================
+    void smoothPower(int nx, int ny, std::vector<float>& power, int smoothMode) {
+        if (smoothMode == 1) {
+            smoothImage55Hole(nx, ny, power);
+        } else if (smoothMode == 2) {
+            smoothImage55HoleLn(nx, ny, power);
         }
+    }
 
-        double temp = 0.0;
+    // ==========================================
+    // Function: Remove the outer-edge mean from corrected power
+    // Method: Average the four boundary sides without double-counting corners and subtract the
+    //         resulting floor from every Fourier pixel.
+    // ==========================================
+    void subtractPowerEdgeMean(int n, std::vector<float>& power) {
+        if (n < 3 || power.size() != static_cast<std::size_t>(n) * n) return;
+        double edgeMean = 0.0;
         for (int i = 1; i < n - 1; ++i) {
-            temp += sourcep[i * n + 0] + sourcep[i * n + (n - 1)] + sourcep[0 * n + i] + sourcep[(n - 1) * n + i];
+            edgeMean += power[static_cast<std::size_t>(i) * n]
+                      + power[static_cast<std::size_t>(i) * n + (n - 1)]
+                      + power[i]
+                      + power[static_cast<std::size_t>(n - 1) * n + i];
         }
-
-        temp /= (4.0 * (n - 2));
-
-        for (int i = 0; i < n * n; ++i) {
-            sourcep[i] -= static_cast<float>(temp);
+        edgeMean /= 4.0 * static_cast<double>(n - 2);
+        for (float& value : power) {
+            value -= static_cast<float>(edgeMean);
         }
+    }
+
+    // ==========================================
+    // Function: Build one noise-corrected source power spectrum
+    // Method: Compute raw source power with literal smooth mode 0, subtract stored noise, apply
+    //         configured corrected-power smoothing, then remove the smoothed outer-edge mean.
+    // ==========================================
+    bool buildCorrectedPower(int nx, int ny,
+                             const std::vector<float>& sourceStamp,
+                             const std::vector<float>& storedNoisePower,
+                             int smoothMode,
+                             std::vector<float>& correctedPower,
+                             double& pc) {
+        if (nx <= 0 || ny <= 0 || nx != ny || smoothMode < 0 || smoothMode > 2) {
+            return false;
+        }
+        const std::size_t elements = static_cast<std::size_t>(nx)
+                                   * static_cast<std::size_t>(ny);
+        if (sourceStamp.size() != elements || storedNoisePower.size() != elements) {
+            return false;
+        }
+        getPower(nx, ny, sourceStamp, correctedPower, 0, pc);
+        subtractNoisePower(nx, correctedPower, storedNoisePower);
+        smoothPower(nx, ny, correctedPower, smoothMode);
+        subtractPowerEdgeMean(nx, correctedPower);
+        return std::all_of(correctedPower.begin(), correctedPower.end(),
+                           [](float value) { return std::isfinite(value); });
     }
 
     // ==========================================
