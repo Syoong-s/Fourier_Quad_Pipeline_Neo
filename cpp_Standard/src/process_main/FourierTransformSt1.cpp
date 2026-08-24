@@ -7,7 +7,6 @@
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
-#include "NoiseCovariance.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -39,8 +38,8 @@ namespace FourierTransformSt1 {
 
     // ==========================================
     // Function: Transform one chip's star-candidate stamps to Fourier power
-    // Method: Apply the shared norm gate before chip-product reads, then reuse fixed-size scratch
-    //         vectors while preserving the existing FFT, subtraction, and regularization.
+    // Method: Prepare the configured noise product, build one shared corrected-power path,
+    //         regularize it, and reuse fixed-size scratch vectors.
     // ==========================================
     void chipProcessFourierTSt1(const std::string& imageFile,
                                 const std::string& dirOutput) {
@@ -120,18 +119,21 @@ namespace FourierTransformSt1 {
             std::vector<float> power_coll(
                 static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
             std::vector<float> source(stamp_size);
+            std::vector<float> noise_product(stamp_size);
             std::vector<float> source_p(stamp_size);
             std::vector<float> noise_p(stamp_size);
 
             for (int i = 0; i < nsource; ++i) {
                 const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
                 std::copy_n(source_coll.data() + offset, stamp_size, source.data());
+                std::copy_n(
+                    noise_coll.data() + offset, stamp_size, noise_product.data());
                 double source_pc = 0.0;
 
-                if (!NoiseCovariance::copyStoredNoisePower(
-                        noise_coll, offset, ns, noise_p)) {
+                if (!ImageProcessing::prepareNoisePower(
+                        ns, noise_product, LensingConfig::NstampType, noise_p)) {
                     MPIFailure::abortWorld(
-                        "load stored star-candidate noise power",
+                        "prepare star-candidate noise power",
                         filename_star_can_noise);
                 }
                 if (!ImageProcessing::buildCorrectedPower(

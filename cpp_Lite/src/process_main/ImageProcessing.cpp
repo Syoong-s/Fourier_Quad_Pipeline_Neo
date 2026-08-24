@@ -1,5 +1,6 @@
 #include "ImageProcessing.hpp"
 #include "NumericalRecipes.hpp"
+#include "UniversalUtils.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
@@ -302,6 +303,150 @@ namespace ImageProcessing {
                 }
             }
             s++;
+        }
+    }
+
+    // ==========================================
+    // Function: Mask detected sources in a noise stamp
+    // Method: Mirror F77 mark_noise with x-major loop order and row-major vector storage.
+    // ==========================================
+    void markNoise(int n, const std::vector<float>& stamp, std::vector<int>& weight, double sig,
+                   double source_thresh, double core_thresh) {
+        double thresh1 = core_thresh * sig;
+        double thresh2 = source_thresh * sig;
+
+        std::vector<int> mark(n * n, 0);
+
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                std::size_t idx = stampIndex(i, j, n);
+                if (stamp[idx] >= thresh1 && weight[idx] > 0) {
+                    mark[idx] = 1;
+                } else if (weight[idx] == 0) {
+                    mark[idx] = 1;
+                } else {
+                    mark[idx] = 0;
+                }
+            }
+        }
+
+        int changed = 1;
+        while (changed == 1) {
+            changed = 0;
+            for (int i = 0; i < n; ++i) {
+                for (int j = 0; j < n; ++j) {
+                    std::size_t idx = stampIndex(i, j, n);
+                    if (mark[idx] != 1) continue;
+                    mark[idx] = -1;
+                    for (int u = std::max(i - 1, 0); u <= std::min(i + 1, n - 1); ++u) {
+                        for (int v = std::max(j - 1, 0); v <= std::min(j + 1, n - 1); ++v) {
+                            std::size_t uidx = stampIndex(u, v, n);
+                            if (mark[uidx] == 0 && stamp[uidx] >= thresh2) {
+                                mark[uidx] = 1;
+                            }
+                        }
+                    }
+                    changed = 1;
+                }
+            }
+        }
+
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                std::size_t idx = stampIndex(i, j, n);
+                if (mark[idx] != -1) continue;
+                mark[idx] = 1;
+                for (int u = std::max(i - 2, 0); u <= std::min(i + 2, n - 1); ++u) {
+                    for (int v = std::max(j - 2, 0); v <= std::min(j + 2, n - 1); ++v) {
+                        std::size_t uidx = stampIndex(u, v, n);
+                        if (mark[uidx] == 0) {
+                            mark[uidx] = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                std::size_t idx = stampIndex(i, j, n);
+                if (mark[idx] == 1) {
+                    weight[idx] = 0;
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // Function: Subtract a fitted 2D background plane from a stamp
+    // Method: Mirror F77 flatten_stamp_2D coordinates while using row-major storage.
+    // ==========================================
+    void flattenStamp2D(int ns, int nl, std::vector<float>& stamp, const std::vector<int>& weight, int& ierror) {
+        ierror = 0;
+        int d1 = (nl - ns) / 2;
+        std::vector<Point3D> points;
+        points.reserve(nl * nl);
+
+        for (int i = 0; i < nl; ++i) {
+            for (int j = 0; j < nl; ++j) {
+                std::size_t idx = stampIndex(i, j, nl);
+                if ((i < d1 || i >= nl - d1 || j < d1 || j >= nl - d1) && weight[idx] == 1) {
+                    points.push_back({static_cast<double>(i + 1), static_cast<double>(j + 1), static_cast<double>(stamp[idx])});
+                }
+            }
+        }
+
+        int max_np = nl * nl - ns * ns;
+        if (points.size() <= max_np * 0.3) {
+            ierror = -1;
+            return;
+        }
+
+        double aa = 0.0, bb = 0.0, cc = 0.0;
+        UniversalUtils::findSlope2D(points, aa, bb, cc);
+
+        for (int i = 0; i < nl; ++i) {
+            for (int j = 0; j < nl; ++j) {
+                std::size_t idx = stampIndex(i, j, nl);
+                stamp[idx] -= static_cast<float>(aa + bb * (i + 1) + cc * (j + 1));
+            }
+        }
+    }
+
+    void flattenStampNew(int ns, int nl, std::vector<float>& stamp, const std::vector<int>& weight, int& ierror) {
+        ierror = 0;
+        int d1 = (nl - ns) / 2;
+        std::vector<float> border_vals;
+        border_vals.reserve(nl * nl - ns * ns);
+
+        for (int i = 0; i < nl; ++i) {
+            for (int j = 0; j < nl; ++j) {
+                int idx = i * nl + j;
+                if ((i < d1 || i >= nl - d1 || j < d1 || j >= nl - d1) && weight[idx] == 1) {
+                    border_vals.push_back(stamp[idx]);
+                }
+            }
+        }
+
+        int max_np = nl * nl - ns * ns;
+        if (border_vals.size() <= max_np * 0.3) {
+            ierror = -1;
+            return;
+        }
+
+        std::sort(border_vals.begin(), border_vals.end());
+        int np = border_vals.size();
+        double bg_median = 0.0;
+        if (np % 2 == 0) {
+            bg_median = (border_vals[np / 2 - 1] + border_vals[np / 2]) / 2.0;
+        } else {
+            bg_median = border_vals[np / 2];
+        }
+
+        for (int i = 0; i < nl; ++i) {
+            for (int j = 0; j < nl; ++j) {
+                stamp[i * nl + j] -= static_cast<float>(bg_median);
+            }
         }
     }
 
@@ -863,26 +1008,53 @@ namespace ImageProcessing {
     }
 
     // ==========================================
+    // Function: Convert the configured Stage-3 noise product to Fourier power
+    // Method: Transform Type 1 real-space stamps and validate/copy Type 2 stored power.
+    // ==========================================
+    bool prepareNoisePower(int n,
+                           const std::vector<float>& noiseProduct,
+                           int nstampType,
+                           std::vector<float>& noisePower) {
+        if (n <= 0
+            || noiseProduct.size() != static_cast<std::size_t>(n) * n) {
+            return false;
+        }
+
+        if (nstampType == 1) {
+            double noisePc = 0.0;
+            getPower(n, n, noiseProduct, noisePower, 0, noisePc);
+        } else if (nstampType == 2) {
+            noisePower = noiseProduct;
+        } else {
+            return false;
+        }
+
+        return std::all_of(
+            noisePower.begin(), noisePower.end(),
+            [](float value) { return std::isfinite(value); });
+    }
+
+    // ==========================================
     // Function: Build one noise-corrected source power spectrum
-    // Method: Compute raw source power with literal smooth mode 0, subtract stored noise, apply
+    // Method: Compute raw source power with literal smooth mode 0, subtract prepared noise, apply
     //         configured corrected-power smoothing, then remove the smoothed outer-edge mean.
     // ==========================================
     bool buildCorrectedPower(int nx, int ny,
                              const std::vector<float>& sourceStamp,
-                             const std::vector<float>& storedNoisePower,
+                             const std::vector<float>& noisePower,
                              int smoothMode,
                              std::vector<float>& correctedPower,
                              double& pc) {
-        if (nx <= 0 || ny <= 0 || nx != ny || smoothMode < 0 || smoothMode > 2) {
+        if (nx <= 0 || ny <= 0 || nx != ny || smoothMode < 0) {
             return false;
         }
         const std::size_t elements = static_cast<std::size_t>(nx)
                                    * static_cast<std::size_t>(ny);
-        if (sourceStamp.size() != elements || storedNoisePower.size() != elements) {
+        if (sourceStamp.size() != elements || noisePower.size() != elements) {
             return false;
         }
         getPower(nx, ny, sourceStamp, correctedPower, 0, pc);
-        subtractNoisePower(nx, correctedPower, storedNoisePower);
+        subtractNoisePower(nx, correctedPower, noisePower);
         smoothPower(nx, ny, correctedPower, smoothMode);
         subtractPowerEdgeMean(nx, correctedPower);
         return std::all_of(correctedPower.begin(), correctedPower.end(),

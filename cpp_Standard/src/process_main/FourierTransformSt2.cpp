@@ -8,7 +8,6 @@
 #include "Universalblock.hpp"
 #include "FitsIO.hpp"
 #include "ImageProcessing.hpp"
-#include "NoiseCovariance.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -23,8 +22,8 @@ namespace FourierTransformSt2 {
 
 // ==========================================
 // Function: Transform one chip's source stamps into Fourier-space products
-// Method: Apply the shared norm gate before Stage-3 products, update source diagnostics, and
-//         publish all text/FITS outputs through checked main-process writers.
+// Method: Keep source-only smooth-2 diagnostics, prepare the configured noise product,
+//         and publish the shared corrected-power path through checked writers.
 // ==========================================
 void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dirOutput) {
     const LensingRuntimeConfig& lensing =
@@ -115,25 +114,28 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
     std::vector<float> power_coll(
         static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
     std::vector<float> source(stamp_size);
+    std::vector<float> noise_product(stamp_size);
     std::vector<float> source_p(stamp_size);
     std::vector<float> noise_p(stamp_size);
 
     for (int i = 0; i < nsource; ++i) {
         const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
         std::copy_n(source_coll.data() + offset, stamp_size, source.data());
+        std::copy_n(
+            noise_coll.data() + offset, stamp_size, noise_product.data());
         double pc = 0.0;
 
-        // SNR uses raw source power; smoothing is reserved for corrected measurement power.
-        ImageProcessing::getPower(ns, ns, source, source_p, 0, pc);
+        // SNR retains the main-branch source-only smooth-2 definition.
+        ImageProcessing::getPower(ns, ns, source, source_p, 2, pc);
 
         int ns_2 = LensingConfig::ns_2;
         float cen_val = source_p[ns_2 * ns + ns_2];
         source_para[i][10] = std::sqrt(std::max(static_cast<float>(pc), cen_val));
         source_para[i][11] = source_para[i][10] / source_para[i][3] * ns;
 
-        if (!NoiseCovariance::copyStoredNoisePower(
-                noise_coll, offset, ns, noise_p)) {
-            MPIFailure::abortWorld("load stored source noise power", noise_fits);
+        if (!ImageProcessing::prepareNoisePower(
+                ns, noise_product, LensingConfig::NstampType, noise_p)) {
+            MPIFailure::abortWorld("prepare source noise power", noise_fits);
         }
         if (!ImageProcessing::buildCorrectedPower(
                 ns, ns, source, noise_p, lensing.gal_smooth, source_p, pc)) {

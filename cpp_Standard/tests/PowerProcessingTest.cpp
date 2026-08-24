@@ -103,7 +103,7 @@ namespace {
     // ==========================================
     // Function: Verify corrected-power construction for star and galaxy smoothing modes
     // Method: Compare the unified helper with explicit raw-FFT, subtract, smooth, edge order for
-    //         modes 0/1/2 and prove smoothing-before-subtraction gives a different result.
+    //         modes 0/1/2, preserve unsupported positive modes, and reject the former order.
     // ==========================================
     bool testCorrectedPowerOrder() {
         constexpr int n = 8;
@@ -129,7 +129,7 @@ namespace {
         }
 
         std::vector<float> starPower;
-        for (int smoothMode = 0; smoothMode <= 2; ++smoothMode) {
+        for (int smoothMode = 0; smoothMode <= 3; ++smoothMode) {
             std::vector<float> expected = rawPower;
             ImageProcessing::subtractNoisePower(n, expected, storedNoise);
             ImageProcessing::smoothPower(n, n, expected, smoothMode);
@@ -145,7 +145,7 @@ namespace {
                 return false;
             }
 
-            if (smoothMode > 0) {
+            if (smoothMode == 1 || smoothMode == 2) {
                 std::vector<float> wrong = rawPower;
                 ImageProcessing::smoothPower(n, n, wrong, smoothMode);
                 ImageProcessing::subtractNoisePower(n, wrong, storedNoise);
@@ -170,6 +170,67 @@ namespace {
             && std::abs(center - 1.0f) <= 2.0e-6f;
     }
 
+    // ==========================================
+    // Function: Verify equivalence after Type-1 and Type-2 noise-power preparation
+    // Method: FFT one fixed real-space noise stamp for Type 1, feed that explicit power to
+    //         Type 2, and compare corrected products for modes 0/1/2 plus unsupported mode 3.
+    // ==========================================
+    bool testNoiseProductModeEquivalence() {
+        constexpr int n = 8;
+        std::vector<float> sourceStamp(n * n, 0.0f);
+        std::vector<float> noiseStamp(n * n, 0.0f);
+        for (int y = 0; y < n; ++y) {
+            for (int x = 0; x < n; ++x) {
+                const std::size_t index = static_cast<std::size_t>(y) * n + x;
+                sourceStamp[index] = static_cast<float>(
+                    0.08 * x - 0.03 * y + 0.04 * std::cos(0.3 * x * y));
+                noiseStamp[index] = static_cast<float>(
+                    0.12 * std::sin(0.6 * x + 0.2 * y)
+                    - 0.07 * std::cos(0.4 * y));
+            }
+        }
+        sourceStamp[static_cast<std::size_t>(n / 2) * n + n / 2] += 4.0f;
+
+        std::vector<float> explicitNoisePower;
+        double noisePc = 0.0;
+        ImageProcessing::getPower(
+            n, n, noiseStamp, explicitNoisePower, 0, noisePc);
+
+        std::vector<float> type1NoisePower;
+        std::vector<float> type2NoisePower;
+        if (!ImageProcessing::prepareNoisePower(
+                n, noiseStamp, 1, type1NoisePower)
+            || !ImageProcessing::prepareNoisePower(
+                n, explicitNoisePower, 2, type2NoisePower)
+            || !vectorsNear(type1NoisePower, type2NoisePower, 2.0e-7,
+                            "prepared noise mode equivalence")) {
+            return false;
+        }
+
+        for (int smoothMode = 0; smoothMode <= 3; ++smoothMode) {
+            std::vector<float> type1Corrected;
+            std::vector<float> type2Corrected;
+            double type1Pc = 0.0;
+            double type2Pc = 0.0;
+            if (!ImageProcessing::buildCorrectedPower(
+                    n, n, sourceStamp, type1NoisePower, smoothMode,
+                    type1Corrected, type1Pc)
+                || !ImageProcessing::buildCorrectedPower(
+                    n, n, sourceStamp, type2NoisePower, smoothMode,
+                    type2Corrected, type2Pc)
+                || std::abs(type1Pc - type2Pc) > 1.0e-12
+                || !vectorsNear(type1Corrected, type2Corrected, 2.0e-7,
+                                "corrected noise mode equivalence")) {
+                return false;
+            }
+        }
+
+        std::vector<float> rejected;
+        return !ImageProcessing::prepareNoisePower(n, noiseStamp, 0, rejected)
+            && !ImageProcessing::prepareNoisePower(n, noiseStamp, 3, rejected)
+            && !ImageProcessing::prepareNoisePower(n + 1, noiseStamp, 1, rejected);
+    }
+
 }
 
 // ==========================================
@@ -186,7 +247,10 @@ int main() {
         std::cerr << "corrected-power order tests failed\n";
         return 1;
     }
+    if (!testNoiseProductModeEquivalence()) {
+        std::cerr << "noise-product mode equivalence tests failed\n";
+        return 1;
+    }
     std::cout << "Power processing tests passed\n";
     return 0;
 }
-
