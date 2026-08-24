@@ -1,5 +1,6 @@
 #include "PSFModel.hpp"
 #include "PSFModelState.hpp"
+#include "PSFCandidateQuality.hpp"
 #include "OutputFile.hpp"
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
@@ -34,6 +35,7 @@ extern std::vector<std::string> EXPO_FILE;
 namespace PSFModel {
 
     using Internal::ChipPSFState;
+    using Internal::CandidatePowerStatus;
     using Internal::ExposurePSFState;
 
     // Forward declarations of local helper functions
@@ -162,8 +164,8 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Load star candidates and Fourier-power stamps for one exposure
-    // Method: Apply the shared norm gate before astrometry or candidate products, then load only
-    //         valid chips and abort every rank when an expected downstream input is unavailable.
+    // Method: Preserve runtime cube I/O and chip geometry while rejecting
+    //         invalid corrected spectra before diagnostics or pairwise chi.
     // ==========================================
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
@@ -265,6 +267,13 @@ namespace PSFModel {
                         }
                     }
 
+                    double sum_power = 0.0;
+                    if (Internal::assessCandidatePower(ns, ns, source_p, sum_power)
+                        != CandidatePowerStatus::Accepted) {
+                        state.getStarPara(k, i, 4) = -1.0;
+                        continue;
+                    }
+
                     x = state.getStarPara(k, i, 1);
                     y = state.getStarPara(k, i, 2);
                     Astrometry::xyToXxyy(x, y, xx, yy, cRPIX, cD);
@@ -280,17 +289,19 @@ namespace PSFModel {
 
                     double FWHM = 0.0;
                     getPSFFWHM(source_p, FWHM);
-                    state.getStarPara(k, i, 10) = FWHM;
-
-                    double temp = 0.0;
-                    for (int idx = 0; idx < ns * ns; ++idx) {
-                        temp += source_p[idx];
+                    if (!Internal::candidateDiagnosticsAreFinite(
+                            size, ee[0], ee[1], FWHM)) {
+                        state.getStarPara(k, i, 4) = -1.0;
+                        continue;
                     }
-                    state.getStarPara(k, i, 11) = 1.0 / temp;
+                    state.getStarPara(k, i, 10) = FWHM;
+                    state.getStarPara(k, i, 11) = 1.0 / sum_power;
                 }
 
                 for (int i = 0; i < nstar - 1; ++i) {
+                    if (state.getStarPara(k, i, 4) < 0.0) continue;
                     for (int j = i + 1; j < nstar; ++j) {
+                        if (state.getStarPara(k, j, 4) < 0.0) continue;
                         std::vector<float> map1(ns * ns);
                         std::vector<float> map2(ns * ns);
                         double sp_i_12 = state.getStarPara(k, i, 11);
@@ -312,7 +323,8 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Select PSF stars from candidates
-    // Method: Follow F77 star_selection thresholding and connected chi-group selection.
+    // Method: Follow F77 thresholds and connected groups using only candidates
+    //         that passed the corrected-power validity gate.
     // ==========================================
     void starSelection(int nchip, ExposurePSFState& state) {
         int nstar_min = LensingConfig::nstar_min;
@@ -320,7 +332,9 @@ namespace PSFModel {
 
         int ntot = 0;
         for (int k = 0; k < nchip; ++k) {
-            ntot += state.getNStar(k);
+            for (int i = 0; i < state.getNStar(k); ++i) {
+                if (state.getStarPara(k, i, 4) > 0.0) ntot++;
+            }
         }
 
         if (ntot < nstar_min * 2) {
@@ -337,6 +351,7 @@ namespace PSFModel {
         tmp_size.reserve(ntot);
         for (int k = 0; k < nchip; ++k) {
             for (int i = 0; i < state.getNStar(k); ++i) {
+                if (state.getStarPara(k, i, 4) < 0.0) continue;
                 tmp_size.push_back(static_cast<float>(state.getStarPara(k, i, 7))); // F77 index 8 size
             }
         }
@@ -354,7 +369,9 @@ namespace PSFModel {
 
         for (int k = 0; k < nchip; ++k) {
             for (int i = 0; i < state.getNStar(k) - 1; ++i) {
+                if (state.getStarPara(k, i, 4) < 0.0) continue;
                 for (int j = i + 1; j < state.getNStar(k); ++j) {
+                    if (state.getStarPara(k, j, 4) < 0.0) continue;
                     float temp = state.getChiD(k, i, j);
                     chimin[k][i] = std::min(temp, chimin[k][i]);
                     chimin[k][j] = std::min(temp, chimin[k][j]);
@@ -374,6 +391,7 @@ namespace PSFModel {
         for (int k = 0; k < nchip; ++k) {
             int n_valid_local = 0;
             for (int i = 0; i < state.getNStar(k); ++i) {
+                if (state.getStarPara(k, i, 4) < 0.0) continue;
                 if (chimin[k][i] > thresh_chi) {
                     state.getStarPara(k, i, 4) = -1.0;
                     continue;

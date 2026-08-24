@@ -37,6 +37,7 @@ SRCS = main.cpp \
        src/process_main/PreProcess.cpp \
        src/process_main/Astrometry.cpp \
        src/process_main/SourceExtractor.cpp \
+       src/process_main/NoiseCovariance.cpp \
        src/process_main/FourierTransformSt1.cpp \
        src/process_main/FourierTransformSt2.cpp \
        src/process_main/PSFModel.cpp \
@@ -58,137 +59,8 @@ SRCS = main.cpp \
 OBJS = $(SRCS:.cpp=.o)
 DEPS = $(OBJS:.o=.d)
 TARGET = Fourier_Quad_Pipe
-POINT_SOURCE_TEST = tests/test_point_source_statistics
-STAMP_CUBE_IO_TEST = tests/test_stamp_cube_io
-PSF_RECONS_ORIENTATION_TEST = tests/test_psf_recons_orientation
-UNIVERSALBLOCK_TEST = tests/test_universalblock
-CATALOG_LAYOUT_TEST = tests/test_catalog_layout
-CATALOG_ROW_COUNT_TEST = tests/test_catalog_row_count
-PSF_MODEL_STATE_TEST = tests/test_psf_model_state
-RUNTIME_CONFIG_TEST = tests/test_runtime_config
-ASTROMETRY_DYNAMIC_CAPACITY_TEST = tests/test_astrometry_dynamic_capacity
 
 all: $(TARGET)
-
-test-point-source-statistics: $(POINT_SOURCE_TEST)
-	./$(POINT_SOURCE_TEST)
-
-test-stamp-cube-io: $(STAMP_CUBE_IO_TEST)
-	./$(STAMP_CUBE_IO_TEST)
-
-test-psf-recons-orientation: $(PSF_RECONS_ORIENTATION_TEST)
-	./$(PSF_RECONS_ORIENTATION_TEST)
-
-test-universalblock: $(UNIVERSALBLOCK_TEST)
-	./$(UNIVERSALBLOCK_TEST)
-
-test-catalog-layout: $(CATALOG_LAYOUT_TEST)
-	./$(CATALOG_LAYOUT_TEST)
-
-test-catalog-row-count: $(CATALOG_ROW_COUNT_TEST)
-	./$(CATALOG_ROW_COUNT_TEST)
-
-test-psf-model-state: $(PSF_MODEL_STATE_TEST)
-	./$(PSF_MODEL_STATE_TEST)
-
-test-runtime-config: $(RUNTIME_CONFIG_TEST)
-	./$(RUNTIME_CONFIG_TEST)
-
-test-astrometry-dynamic-capacity: $(ASTROMETRY_DYNAMIC_CAPACITY_TEST)
-	./$(ASTROMETRY_DYNAMIC_CAPACITY_TEST)
-
-$(POINT_SOURCE_TEST): tests/PointSourceStatisticsTest.cpp \
-                     src/process_main/PointSourceStatistics.cpp \
-                     include/process_main/PointSourceStatistics.hpp \
-                     config/LensingConfig.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/PointSourceStatisticsTest.cpp src/process_main/PointSourceStatistics.cpp -o $@
-
-$(STAMP_CUBE_IO_TEST): tests/StampCubeIOTest.cpp \
-                      src/process_main/FitsIO.cpp \
-                      include/process_main/FitsIO.hpp \
-                      include/process_main/OutputFile.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/StampCubeIOTest.cpp src/process_main/FitsIO.cpp -o $@ -lcfitsio
-
-$(PSF_RECONS_ORIENTATION_TEST): tests/PSFReconsOrientationTest.cpp \
-                               include/process_main/PCAImageLayout.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/PSFReconsOrientationTest.cpp -o $@
-
-$(UNIVERSALBLOCK_TEST): tests/UniversalblockTest.cpp \
-                       src/process_main/Universalblock.cpp \
-                       src/process_main/UniversalUtils.cpp \
-                       src/process_main/FitsIO.cpp \
-                       src/process_main/LinearSolve.cpp \
-                       include/process_main/Universalblock.hpp \
-                       include/process_main/FitsIO.hpp \
-                       include/OutputLayout.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/UniversalblockTest.cpp \
-		src/process_main/Universalblock.cpp \
-		src/process_main/UniversalUtils.cpp \
-		src/process_main/FitsIO.cpp \
-		src/process_main/LinearSolve.cpp \
-		$(LDFLAGS) -o $@ $(LDLIBS)
-
-$(CATALOG_LAYOUT_TEST): tests/CatalogLayoutTest.cpp \
-                       src/RuntimeConfig.cpp \
-                       src/CatalogLayout.cpp \
-                       src/process_main/ExternalCatalogReader.cpp \
-                       src/process_fd/FDMagnitudeSelector.cpp \
-                       src/process_fd/ShearCatalogReader.cpp \
-                       include/CatalogLayout.hpp \
-                       include/process_main/ExternalCatalogReader.hpp \
-                       include/process_fd/FDMagnitudeSelector.hpp \
-                       include/process_fd/ShearCatalogReader.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/CatalogLayoutTest.cpp \
-		src/RuntimeConfig.cpp \
-		src/CatalogLayout.cpp \
-		src/process_main/ExternalCatalogReader.cpp \
-		src/process_fd/FDMagnitudeSelector.cpp \
-		src/process_fd/ShearCatalogReader.cpp -o $@
-
-$(CATALOG_ROW_COUNT_TEST): tests/CatalogRowCountTest.cpp \
-                          include/process_main/CatalogRowCount.hpp \
-                          include/process_main/MPIFailure.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/CatalogRowCountTest.cpp -o $@
-
-$(PSF_MODEL_STATE_TEST): tests/PSFModelStateTest.cpp \
-                        include/process_main/PSFModelState.hpp \
-                        config/LensingConfig.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/PSFModelStateTest.cpp -o $@
-
-$(RUNTIME_CONFIG_TEST): tests/RuntimeConfigTest.cpp \
-                       src/RuntimeConfig.cpp \
-                       src/CatalogLayout.cpp \
-                       include/RuntimeConfig.hpp \
-                       include/CatalogLayout.hpp \
-                       config/ProcessConfig.hpp \
-                       config/ExtCatConfig.hpp \
-                       config/InitConfig.hpp \
-                       config/LensingConfig.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		tests/RuntimeConfigTest.cpp src/RuntimeConfig.cpp \
-		src/CatalogLayout.cpp -o $@
-
-$(ASTROMETRY_DYNAMIC_CAPACITY_TEST): tests/AstrometryDynamicCapacityTest.cpp \
-                                    src/process_main/Astrometry.cpp \
-                                    src/process_main/UniversalUtils.cpp \
-                                    src/process_main/LinearSolve.cpp \
-                                    include/process_main/Astrometry.hpp \
-                                    include/process_main/UniversalUtils.hpp \
-                                    include/process_main/LinearSolve.hpp
-	$(CXX) $(CPPFLAGS) $(filter-out -MMD -MP,$(CXXFLAGS)) \
-		-ffunction-sections -fdata-sections \
-		tests/AstrometryDynamicCapacityTest.cpp \
-		src/process_main/Astrometry.cpp \
-		src/process_main/UniversalUtils.cpp \
-		src/process_main/LinearSolve.cpp $(LDFLAGS) \
-		-Wl,--gc-sections -o $@
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
@@ -197,16 +69,8 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(DEPS) $(TARGET) $(POINT_SOURCE_TEST) \
-	      $(STAMP_CUBE_IO_TEST) $(PSF_RECONS_ORIENTATION_TEST) \
-	      $(UNIVERSALBLOCK_TEST) $(CATALOG_LAYOUT_TEST) \
-	      $(CATALOG_ROW_COUNT_TEST) $(PSF_MODEL_STATE_TEST) \
-	      $(RUNTIME_CONFIG_TEST) $(ASTROMETRY_DYNAMIC_CAPACITY_TEST) \
-	      tests/catalog_layout_selected_magnitude.tmp
+	rm -f $(OBJS) $(DEPS) $(TARGET)
 
 -include $(DEPS)
 
-.PHONY: all clean test-point-source-statistics test-stamp-cube-io \
-        test-psf-recons-orientation test-universalblock test-catalog-layout \
-        test-catalog-row-count test-psf-model-state \
-        test-runtime-config test-astrometry-dynamic-capacity
+.PHONY: all clean

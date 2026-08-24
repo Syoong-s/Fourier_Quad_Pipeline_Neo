@@ -10,6 +10,7 @@
 #include "Astrometry.hpp"
 #include "ExternalCatalogReader.hpp"
 #include "ImageProcessing.hpp"
+#include "NoiseCovariance.hpp"
 #include "NumericalRecipes.hpp"
 #include <iostream>
 #include <vector>
@@ -55,6 +56,57 @@ namespace SourceExtractor {
             }
             const double lower = *std::max_element(values.begin(), values.begin() + midpoint);
             return 0.5 * (lower + upper);
+        }
+
+        // ==========================================
+        // Function: Fit the retained source-local first-order background plane
+        // Method: Use exactly the valid nl-border pixels outside the central ns square, matching
+        //         the former flattenStamp2D science definition while returning reusable coefficients.
+        // ==========================================
+        bool fitSourcePlane(const std::vector<float>& localImage,
+                            const std::vector<int>& localWeight,
+                            int regionSize,
+                            int sourceOffset,
+                            double& aa,
+                            double& bb,
+                            double& cc) {
+            const std::size_t expectedSize = static_cast<std::size_t>(regionSize)
+                                           * static_cast<std::size_t>(regionSize);
+            if (regionSize <= 0 || sourceOffset < 0
+                || sourceOffset + LensingConfig::nl > regionSize
+                || localImage.size() != expectedSize || localWeight.size() != expectedSize) {
+                return false;
+            }
+
+            const int borderWidth = (LensingConfig::nl - LensingConfig::ns) / 2;
+            std::vector<Point3D> points;
+            points.reserve(LensingConfig::nl * LensingConfig::nl - LensingConfig::nsns);
+            for (int y = 0; y < LensingConfig::nl; ++y) {
+                for (int x = 0; x < LensingConfig::nl; ++x) {
+                    const bool borderPixel = x < borderWidth
+                                          || x >= LensingConfig::nl - borderWidth
+                                          || y < borderWidth
+                                          || y >= LensingConfig::nl - borderWidth;
+                    const std::size_t localIndex = static_cast<std::size_t>(sourceOffset + y)
+                                                 * static_cast<std::size_t>(regionSize)
+                                                 + static_cast<std::size_t>(sourceOffset + x);
+                    if (borderPixel && localWeight[localIndex] == 1
+                        && std::isfinite(localImage[localIndex])) {
+                        points.push_back({static_cast<double>(x + 1),
+                                          static_cast<double>(y + 1),
+                                          static_cast<double>(localImage[localIndex])});
+                    }
+                }
+            }
+
+            const int maximumPlanePixels = LensingConfig::nl * LensingConfig::nl
+                                         - LensingConfig::nsns;
+            if (points.size() <= static_cast<std::size_t>(0.3 * maximumPlanePixels)) {
+                return false;
+            }
+
+            UniversalUtils::findSlope2D(points, aa, bb, cc);
+            return std::isfinite(aa) && std::isfinite(bb) && std::isfinite(cc);
         }
 
         // ==========================================
@@ -268,7 +320,8 @@ namespace SourceExtractor {
         getExpoCatalog(dirOutput, PREFIX, nx, ny, sigmap, weight, normap, proc_error);
 
         if (lensing.ext_cat == 0) {
-            genSourceCatalog(dirOutput, PREFIX, nx, ny, array, weight, sigmap, ngal, proc_error);
+            genSourceCatalog(
+                dirOutput, PREFIX, nx, ny, array, weight, sigmap, ngal, proc_error);
             if (lensing.ext_psf == 0) {
                 genStarCandidate(dirOutput, PREFIX, nstar, proc_error);
             }
@@ -298,7 +351,9 @@ namespace SourceExtractor {
             genSourceExtCatalog(dirOutput, sortfile, sortnum, PREFIX, nx, ny, array, weight, sigmap, cRPIX, cD, cRVAL, PU, ngal, proc_error);
 
             if (lensing.ext_psf == 0) {
-                genStarCandidateDirect(dirOutput, PREFIX, nx, ny, array, weight, sigmap, nstar, proc_error);
+                genStarCandidateDirect(
+                    dirOutput, PREFIX, nx, ny, array, weight, sigmap,
+                    nstar, proc_error);
             }
         }
 
@@ -565,7 +620,8 @@ namespace SourceExtractor {
     //         candidates, and route all text/FITS products through checked main-process writers.
     // ==========================================
     void genSourceCatalog(const std::string& dirOutput, const std::string& prefix, int nx, int ny, const std::vector<float>& array,
-                          std::vector<int>& weight, const std::vector<float>& sigmap, int& ngal, int& procError) {
+                          std::vector<int>& weight, const std::vector<float>& sigmap,
+                          int& ngal, int& procError) {
         ngal = 0;
 
         std::vector<float> source_collect;
@@ -591,14 +647,12 @@ namespace SourceExtractor {
             while (fin >> xp >> yp >> total_area >> half_light_area >> sig >> total_flux >> half_light_flux >> peak >> rf) {
                 ig++;
                 int flag = 0;
-                std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
+                std::vector<float> source(LensingConfig::nsns, 0.0f);
+                std::vector<float> noise(LensingConfig::nsns, 0.0f);
                 int imax = 0, jmax = 0;
-                
-                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
-                if (flag < 0) continue;
-
-                std::vector<float> source(LensingConfig::ns * LensingConfig::ns, 0.0f);
-                checkSource(flag, source, nx, ny, array, weight, xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
+                extractSourceAndNoise(
+                    flag, source, noise, nx, ny, array, weight, sigmap, xp, yp, sig,
+                    imax, jmax, peak, half_light_flux, half_light_area);
                 if (flag < 0) continue;
 
                 source_collect.insert(source_collect.end(), source.begin(), source.end());
@@ -726,16 +780,15 @@ namespace SourceExtractor {
                 double sig = sigmap[yp_idx * nx + xp_idx];
 
                 int flag = 0;
-                std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
+                std::vector<float> source(LensingConfig::nsns, 0.0f);
+                std::vector<float> noise(LensingConfig::nsns, 0.0f);
                 int imax = 0, jmax = 0;
-
-                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
-                if (flag < 0) continue;
 
                 double peak = 0.0, half_light_flux = 0.0;
                 int half_light_area = 0;
-                std::vector<float> source(LensingConfig::ns * LensingConfig::ns, 0.0f);
-                checkSource(flag, source, nx, ny, array, weight, xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
+                extractSourceAndNoise(
+                    flag, source, noise, nx, ny, array, weight, sigmap, xp, yp, sig,
+                    imax, jmax, peak, half_light_flux, half_light_area);
                 if (flag < 0) continue;
 
                 source_collect.insert(source_collect.end(), source.begin(), source.end());
@@ -809,6 +862,9 @@ namespace SourceExtractor {
                    const std::vector<int>& weight, const std::vector<float>& sigmap,
                    double xp, double yp, double sourceSig, int& imax, int& jmax) {
         flag = 0;
+        // The legacy interface carries these outputs, but checkSource owns their final values.
+        (void)imax;
+        (void)jmax;
 
         const std::size_t expectedSize = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
         if (nx <= 0 || ny <= 0 || sigmap.size() != expectedSize
@@ -1139,6 +1195,340 @@ namespace SourceExtractor {
     }
 
     // ==========================================
+    // Function: Produce the legacy blank-noise and source-stamp pair
+    // Method: Preserve main-branch rejection and RNG order by finding noise before checking source.
+    // ==========================================
+    void BlankSrcStamp(
+        int& flag, std::vector<float>& sourceStamp, std::vector<float>& noiseStamp,
+        int nx, int ny, const std::vector<float>& array,
+        const std::vector<int>& weight, const std::vector<float>& sigmap,
+        double xp, double yp, double sig, int& imax, int& jmax,
+        double& peak, double& half_light_flux, int& half_light_area) {
+        flag = 0;
+        findNoise(flag, noiseStamp, nx, ny, array, weight, sigmap,
+                  xp, yp, sig, imax, jmax);
+        if (flag < 0) {
+            return;
+        }
+
+        checkSource(flag, sourceStamp, nx, ny, array, weight,
+                    xp, yp, sig, imax, jmax,
+                    peak, half_light_flux, half_light_area);
+    }
+
+    // ==========================================
+    // Function: Dispatch Stage-3 source and noise-product construction
+    // Method: Select the compile-time blank-stamp or covariance-power producer in one location.
+    // ==========================================
+    void extractSourceAndNoise(
+        int& flag, std::vector<float>& sourceProduct, std::vector<float>& noiseProduct,
+        int nx, int ny, const std::vector<float>& array,
+        const std::vector<int>& weight, const std::vector<float>& sigmap,
+        double xp, double yp, double sig, int& imax, int& jmax,
+        double& peak, double& half_light_flux, int& half_light_area) {
+        if (LensingConfig::NstampType == 1) {
+            BlankSrcStamp(
+                flag, sourceProduct, noiseProduct, nx, ny, array, weight, sigmap,
+                xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
+            return;
+        }
+
+        CovarSrcStamp(
+            flag, sourceProduct, noiseProduct, nx, ny, array, weight,
+            xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
+    }
+
+    // ==========================================
+    // Function: Jointly validate a source and estimate its local signed noise power
+    // Method: Extract one large local region, fit the retained source-local plane once, recenter
+    //         and decorate the source stamp, then form a same-amplifier masked covariance and its
+    //         normalized ns-by-ns Fourier transform without clipping negative modes.
+    // ==========================================
+    void CovarSrcStamp(
+        int& flag, std::vector<float>& sourceStamp, std::vector<float>& noisePower,
+        int nx, int ny, const std::vector<float>& array, const std::vector<int>& weight,
+        double xp, double yp, double sig, int& imax, int& jmax,
+        double& peak, double& half_light_flux, int& half_light_area) {
+        flag = 0;
+        const std::size_t chipElements = static_cast<std::size_t>(nx)
+                                       * static_cast<std::size_t>(ny);
+        if (nx <= 0 || ny <= 0 || array.size() != chipElements
+            || weight.size() != chipElements || !std::isfinite(sig) || sig <= 0.0) {
+            flag = -1;
+            return;
+        }
+
+        const int initialCenterX = static_cast<int>(xp + 0.5) - 1;
+        const int initialCenterY = static_cast<int>(yp + 0.5) - 1;
+        if (initialCenterX - LensingConfig::nl_2 < LensingConfig::chip_edge_margin - 1
+            || initialCenterX + LensingConfig::nl_2
+                   > nx - LensingConfig::chip_edge_margin - 1
+            || initialCenterY - LensingConfig::nl_2 < LensingConfig::chip_edge_margin - 1
+            || initialCenterY + LensingConfig::nl_2
+                   > ny - LensingConfig::chip_edge_margin - 1) {
+            flag = -1;
+            return;
+        }
+
+        const int regionSize = LensingConfig::noise_region_size;
+        const int regionHalf = regionSize / 2;
+        const int localStartX = initialCenterX - regionHalf;
+        const int localStartY = initialCenterY - regionHalf;
+        const int sourceOffset = regionHalf - LensingConfig::nl_2;
+        const std::size_t regionElements = static_cast<std::size_t>(regionSize)
+                                         * static_cast<std::size_t>(regionSize);
+        std::vector<float> localImage(regionElements, 0.0f);
+        std::vector<int> localWeight(regionElements, 0);
+
+        for (int localY = 0; localY < regionSize; ++localY) {
+            const int chipY = localStartY + localY;
+            if (chipY < 0 || chipY >= ny) continue;
+            for (int localX = 0; localX < regionSize; ++localX) {
+                const int chipX = localStartX + localX;
+                if (chipX < 0 || chipX >= nx) continue;
+                const std::size_t localIndex = static_cast<std::size_t>(localY)
+                                             * static_cast<std::size_t>(regionSize)
+                                             + static_cast<std::size_t>(localX);
+                const std::size_t chipIndex = static_cast<std::size_t>(chipY)
+                                            * static_cast<std::size_t>(nx)
+                                            + static_cast<std::size_t>(chipX);
+                localImage[localIndex] = array[chipIndex];
+                localWeight[localIndex] = weight[chipIndex];
+            }
+        }
+
+        double planeA = 0.0;
+        double planeB = 0.0;
+        double planeC = 0.0;
+        if (!fitSourcePlane(localImage, localWeight, regionSize, sourceOffset,
+                            planeA, planeB, planeC)) {
+            flag = -1;
+            return;
+        }
+
+        std::vector<double> residual(regionElements, 0.0);
+        std::vector<float> sourceLocal(LensingConfig::nl * LensingConfig::nl, 0.0f);
+        std::vector<int> sourceWeight(LensingConfig::nl * LensingConfig::nl, 0);
+        for (int localY = 0; localY < regionSize; ++localY) {
+            const double planeY = static_cast<double>(localY - sourceOffset + 1);
+            for (int localX = 0; localX < regionSize; ++localX) {
+                const double planeX = static_cast<double>(localX - sourceOffset + 1);
+                const std::size_t localIndex = static_cast<std::size_t>(localY)
+                                             * static_cast<std::size_t>(regionSize)
+                                             + static_cast<std::size_t>(localX);
+                residual[localIndex] = static_cast<double>(localImage[localIndex])
+                                     - (planeA + planeB * planeX + planeC * planeY);
+            }
+        }
+        for (int y = 0; y < LensingConfig::nl; ++y) {
+            for (int x = 0; x < LensingConfig::nl; ++x) {
+                const std::size_t localIndex = static_cast<std::size_t>(sourceOffset + y)
+                                             * static_cast<std::size_t>(regionSize)
+                                             + static_cast<std::size_t>(sourceOffset + x);
+                const std::size_t sourceIndex = static_cast<std::size_t>(y)
+                                              * static_cast<std::size_t>(LensingConfig::nl)
+                                              + static_cast<std::size_t>(x);
+                sourceLocal[sourceIndex] = static_cast<float>(residual[localIndex]);
+                sourceWeight[sourceIndex] = localWeight[localIndex];
+            }
+        }
+
+        int boundx[2] = {0, 0};
+        int boundy[2] = {0, 0};
+        double total_flux = 0.0;
+        int total_area = 0;
+        double radius = 0.0;
+        int sourceCenterX = 0;
+        int sourceCenterY = 0;
+        ImageProcessing::markSource(
+            LensingConfig::nl, sourceLocal, sourceWeight, sig,
+            LensingConfig::source_thresh, LensingConfig::core_thresh,
+            boundx, boundy, total_flux, total_area, peak,
+            half_light_flux, half_light_area, flag, radius,
+            sourceCenterX, sourceCenterY);
+        if (flag < 0) {
+            return;
+        }
+
+        if (peak > LensingConfig::saturation_thresh / sig
+            || radius >= LensingConfig::ns_2 - LensingConfig::flag_thresh) {
+            flag = -1;
+            return;
+        }
+
+        const int sourceCutX = sourceCenterX - LensingConfig::ns_2;
+        const int sourceCutY = sourceCenterY - LensingConfig::ns_2;
+        if (sourceCutX < 0 || sourceCutX + LensingConfig::ns > LensingConfig::nl
+            || sourceCutY < 0 || sourceCutY + LensingConfig::ns > LensingConfig::nl) {
+            flag = -1;
+            return;
+        }
+
+        const int finalLocalCenterX = sourceOffset + sourceCenterX;
+        const int finalLocalCenterY = sourceOffset + sourceCenterY;
+        const int finalChipCenterX = localStartX + finalLocalCenterX;
+        const int ccdSplit = RuntimeConfigStore::get().lensing.ccd_split;
+        const int sourceStampStartX = finalChipCenterX - LensingConfig::ns_2;
+        if (NoiseCovariance::sourceStampCrossesAmplifier(
+                nx, ccdSplit, sourceStampStartX, LensingConfig::ns)) {
+            flag = -1;
+            return;
+        }
+
+        sourceStamp.assign(LensingConfig::nsns, 0.0f);
+        std::vector<int> sourceStampWeight(LensingConfig::nsns, 0);
+        for (int y = 0; y < LensingConfig::ns; ++y) {
+            for (int x = 0; x < LensingConfig::ns; ++x) {
+                const std::size_t outputIndex = static_cast<std::size_t>(y)
+                                              * static_cast<std::size_t>(LensingConfig::ns)
+                                              + static_cast<std::size_t>(x);
+                const std::size_t inputIndex = static_cast<std::size_t>(sourceCutY + y)
+                                             * static_cast<std::size_t>(LensingConfig::nl)
+                                             + static_cast<std::size_t>(sourceCutX + x);
+                sourceStamp[outputIndex] = sourceLocal[inputIndex];
+                sourceStampWeight[outputIndex] = sourceWeight[inputIndex];
+            }
+        }
+
+        imax = 0;
+        for (int x = 0; x < LensingConfig::ns; ++x) {
+            int invalid = 0;
+            for (int y = 0; y < LensingConfig::ns; ++y) {
+                const std::size_t index = static_cast<std::size_t>(y)
+                                        * static_cast<std::size_t>(LensingConfig::ns)
+                                        + static_cast<std::size_t>(x);
+                if (sourceStampWeight[index] == 0) ++invalid;
+            }
+            imax = std::max(imax, invalid);
+        }
+
+        jmax = 0;
+        for (int y = 0; y < LensingConfig::ns; ++y) {
+            int invalid = 0;
+            for (int x = 0; x < LensingConfig::ns; ++x) {
+                const std::size_t index = static_cast<std::size_t>(y)
+                                        * static_cast<std::size_t>(LensingConfig::ns)
+                                        + static_cast<std::size_t>(x);
+                if (sourceStampWeight[index] == 0) ++invalid;
+            }
+            jmax = std::max(jmax, invalid);
+        }
+        const int amplifierBoundary = nx / 2;
+        const int sourceAmplifier = finalChipCenterX < amplifierBoundary ? 0 : 1;
+        const int innerStartX = finalLocalCenterX - LensingConfig::noise_inner_size / 2;
+        const int innerStartY = finalLocalCenterY - LensingConfig::noise_inner_size / 2;
+        const int innerEndX = innerStartX + LensingConfig::noise_inner_size;
+        const int innerEndY = innerStartY + LensingConfig::noise_inner_size;
+
+        std::vector<unsigned char> covarianceMask(regionElements, 0U);
+        int validPixels = 0;
+        for (int localY = 0; localY < regionSize; ++localY) {
+            const int chipY = localStartY + localY;
+            for (int localX = 0; localX < regionSize; ++localX) {
+                const int chipX = localStartX + localX;
+                const std::size_t localIndex = static_cast<std::size_t>(localY)
+                                             * static_cast<std::size_t>(regionSize)
+                                             + static_cast<std::size_t>(localX);
+                const bool insideExclusion = localX >= innerStartX && localX < innerEndX
+                                          && localY >= innerStartY && localY < innerEndY;
+                if (insideExclusion || localWeight[localIndex] != 1
+                    || chipX < 0 || chipX >= nx || chipY < 0 || chipY >= ny
+                    || !std::isfinite(residual[localIndex])) {
+                    continue;
+                }
+                if (ccdSplit == 2) {
+                    const int pixelAmplifier = chipX < amplifierBoundary ? 0 : 1;
+                    if (pixelAmplifier != sourceAmplifier) {
+                        continue;
+                    }
+                }
+                covarianceMask[localIndex] = 1U;
+                ++validPixels;
+            }
+        }
+        if (validPixels < LensingConfig::noise_cov_min_valid_pixels) {
+            flag = -1;
+            return;
+        }
+
+        std::vector<double> covariance;
+        if (!NoiseCovariance::computeMaskedCovarianceFFT(
+                regionSize, LensingConfig::noise_cov_fft_size,
+                LensingConfig::noise_cov_max_lag,
+                LensingConfig::noise_cov_min_pair_fraction,
+                residual, covarianceMask, covariance)) {
+            flag = -1;
+            return;
+        }
+
+        const int lagSide = 2 * LensingConfig::noise_cov_max_lag + 1;
+        const std::size_t zeroLagIndex =
+            static_cast<std::size_t>(LensingConfig::noise_cov_max_lag)
+                * static_cast<std::size_t>(lagSide)
+            + static_cast<std::size_t>(LensingConfig::noise_cov_max_lag);
+        const double zeroLagCovariance = covariance[zeroLagIndex];
+        if (!std::isfinite(zeroLagCovariance) || zeroLagCovariance <= 0.0) {
+            flag = -1;
+            return;
+        }
+        const double sigmaRatio = std::sqrt(zeroLagCovariance) / sig;
+        if (!std::isfinite(sigmaRatio)
+            || sigmaRatio <= LensingConfig::noise_cov_sigma_ratio_min
+            || sigmaRatio >= LensingConfig::noise_cov_sigma_ratio_max) {
+            flag = -1;
+            return;
+        }
+
+        double maxImaginary = 0.0;
+        double negativeFraction = 0.0;
+        if (!NoiseCovariance::covarianceToFiniteStampNoisePower(
+                LensingConfig::ns, LensingConfig::noise_cov_max_lag,
+                covariance, noisePower, maxImaginary, negativeFraction)) {
+            flag = -1;
+            return;
+        }
+
+        double maxPowerMagnitude = 0.0;
+        for (float value : noisePower) {
+            maxPowerMagnitude = std::max(maxPowerMagnitude, std::abs(static_cast<double>(value)));
+        }
+        if (maxImaginary > LensingConfig::noise_cov_imag_tolerance
+                               * std::max(1.0e-20, maxPowerMagnitude)
+            || negativeFraction > LensingConfig::noise_cov_max_negative_fraction) {
+            flag = -1;
+            return;
+        }
+        const bool hasMaskedSourcePixel = std::any_of(
+            sourceStampWeight.begin(), sourceStampWeight.end(),
+            [](int value) { return value == 0; });
+        if (hasMaskedSourcePixel) {
+            int synthesisSize = 0;
+            std::vector<float> synthesisPower;
+            double synthesisMaxImaginary = 0.0;
+            if (!NoiseCovariance::covarianceToSynthesisPower(
+                    LensingConfig::ns, LensingConfig::noise_cov_max_lag,
+                    covariance, synthesisSize, synthesisPower,
+                    synthesisMaxImaginary)) {
+                flag = -1;
+                return;
+            }
+            double maximumSynthesisMagnitude = 0.0;
+            for (float value : synthesisPower) {
+                maximumSynthesisMagnitude = std::max(
+                    maximumSynthesisMagnitude, std::abs(static_cast<double>(value)));
+            }
+            if (synthesisMaxImaginary > LensingConfig::noise_cov_imag_tolerance
+                                           * std::max(1.0e-20, maximumSynthesisMagnitude)
+                || !ImageProcessing::decorateStampCorrelated(
+                    LensingConfig::ns, synthesisSize, synthesisPower,
+                    zeroLagCovariance, sourceStampWeight, sourceStamp)) {
+                flag = -1;
+                return;
+            }
+        }
+    }
+
+    // ==========================================
     // Function: Publish star candidates selected from the source catalog
     // Method: Filter Stage-3 sources by SNR and route candidate metadata and
     //         stamp products through checked main-process writers.
@@ -1262,11 +1652,12 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Publish star candidates selected directly from detections
-    // Method: Re-extract qualifying detection stamps, use the Stage-1 local-sigma map for noise
-    //         candidates, and route candidate text/FITS products through checked writers.
+    // Method: Re-extract qualifying detections through the selected source/noise path and route
+    //         candidate text/FITS products through checked writers.
     // ==========================================
     void genStarCandidateDirect(const std::string& dirOutput, const std::string& prefix, int nx, int ny, const std::vector<float>& array,
-                                const std::vector<int>& weight, const std::vector<float>& sigmap,
+                                const std::vector<int>& weight,
+                                const std::vector<float>& sigmap,
                                 int& nstar, int& procError) {
         nstar = 0;
 
@@ -1296,14 +1687,12 @@ namespace SourceExtractor {
                 if (snr < LensingConfig::SNR_PSF * 0.5) continue;
 
                 int flag = 0;
-                std::vector<float> noise(LensingConfig::ns * LensingConfig::ns, 0.0f);
+                std::vector<float> source(LensingConfig::nsns, 0.0f);
+                std::vector<float> noise(LensingConfig::nsns, 0.0f);
                 int imax = 0, jmax = 0;
-
-                findNoise(flag, noise, nx, ny, array, weight, sigmap, xp, yp, sig, imax, jmax);
-                if (flag < 0) continue;
-
-                std::vector<float> source(LensingConfig::ns * LensingConfig::ns, 0.0f);
-                checkSource(flag, source, nx, ny, array, weight, xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
+                extractSourceAndNoise(
+                    flag, source, noise, nx, ny, array, weight, sigmap, xp, yp, sig,
+                    imax, jmax, peak, half_light_flux, half_light_area);
                 if (flag < 0) continue;
 
                 temp = half_light_area;

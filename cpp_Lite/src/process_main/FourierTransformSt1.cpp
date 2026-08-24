@@ -38,8 +38,8 @@ namespace FourierTransformSt1 {
 
     // ==========================================
     // Function: Transform one chip's star-candidate stamps to Fourier power
-    // Method: Apply the shared norm gate before chip-product reads, then reuse fixed-size scratch
-    //         vectors while preserving the existing FFT, subtraction, and regularization.
+    // Method: Prepare the configured noise product, build one shared corrected-power path,
+    //         regularize it, and reuse fixed-size scratch vectors.
     // ==========================================
     void chipProcessFourierTSt1(const std::string& imageFile,
                                 const std::string& dirOutput) {
@@ -115,22 +115,30 @@ namespace FourierTransformSt1 {
             std::vector<float> power_coll(
                 static_cast<std::size_t>(nsource) * stamp_size, 0.0f);
             std::vector<float> source(stamp_size);
-            std::vector<float> noise(stamp_size);
+            std::vector<float> noise_product(stamp_size);
             std::vector<float> source_p(stamp_size);
             std::vector<float> noise_p(stamp_size);
 
             for (int i = 0; i < nsource; ++i) {
                 const std::size_t offset = static_cast<std::size_t>(i) * stamp_size;
                 std::copy_n(source_coll.data() + offset, stamp_size, source.data());
-                std::copy_n(noise_coll.data() + offset, stamp_size, noise.data());
+                std::copy_n(
+                    noise_coll.data() + offset, stamp_size, noise_product.data());
                 double source_pc = 0.0;
-                double noise_pc = 0.0;
 
-                ImageProcessing::getPower(ns, ns, source, source_p,
-                                          star_smooth, source_pc);
-                ImageProcessing::getPower(ns, ns, noise, noise_p,
-                                          star_smooth, noise_pc);
-                ImageProcessing::processPowers(ns, source_p, noise_p);
+                if (!ImageProcessing::prepareNoisePower(
+                        ns, noise_product, LensingConfig::NstampType, noise_p)) {
+                    MPIFailure::abortWorld(
+                        "prepare star-candidate noise power",
+                        filename_star_can_noise);
+                }
+                if (!ImageProcessing::buildCorrectedPower(
+                        ns, ns, source, noise_p, star_smooth,
+                        source_p, source_pc)) {
+                    MPIFailure::abortWorld(
+                        "build corrected star-candidate power",
+                        filename_star_can_noise);
+                }
                 ImageProcessing::regularizePower(ns, ns, source_p, star_smooth);
 
                 std::copy_n(source_p.data(), stamp_size,
