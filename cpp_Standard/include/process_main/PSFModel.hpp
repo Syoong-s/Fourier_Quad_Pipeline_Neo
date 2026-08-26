@@ -29,7 +29,8 @@ namespace PSFModel {
         int nsam, const std::vector<float>& image,
         const std::vector<std::array<double, 2>>& posi,
         int ns, int npp, int nx, int ny, std::vector<double>& PSF_coe,
-        LinearSolve::SolveDiagnostics* diagnostics = nullptr);
+        LinearSolve::SolveDiagnostics* diagnostics = nullptr,
+        std::vector<double>* leverage = nullptr);
     void getPSFModel(int ns, int npp, const std::vector<double>& PSF_coe, double xx, double yy, std::vector<float>& modelp, std::vector<float>& model0);
     void getPSFModelVeryLocal(const std::vector<float>& psfmap, double x,
                               double y, std::vector<float>& model,

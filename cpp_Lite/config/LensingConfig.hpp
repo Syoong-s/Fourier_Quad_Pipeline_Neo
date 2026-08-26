@@ -50,6 +50,34 @@ namespace LensingConfig {
     constexpr int npl = 10;
     constexpr int nstar_min_local = 16;
 
+    // ==========================================
+    // Configuration: Stage-5 stellar-locus, grouping, and PRESS selection
+    // Method: Keep the shared scientific cuts compile-time selectable while
+    //         Lite's sole Gaia/local branch remains structurally fixed.
+    // ==========================================
+    constexpr int psf_exposure_min_candidates = 192;
+    constexpr int psf_fwhm_hist_bins = 128;
+    constexpr double psf_fwhm_locus_sigma = 4.0;
+    constexpr int psf_fwhm_locus_min_samples = 30;
+    constexpr int PsfGroupingType = 2;
+    constexpr double psf_minchi_sigma_cut = 4.0;
+    constexpr int psf_knn_k = 8;
+    constexpr double psf_group_merge_ratio = 0.30;
+    constexpr int psf_group_merge_min_gaia = 2;
+    constexpr double psf_gaia_match_radius_pix = 2.5;
+    constexpr int psf_gaia_locus_min_matches = 10;
+    constexpr double psf_press_sigma_cut = 4.0;
+    constexpr double psf_loo_min_denom = 1.0e-6;
+    static_assert(PsfGroupingType == 1 || PsfGroupingType == 2,
+                  "PsfGroupingType must be 1 or 2");
+    static_assert(psf_exposure_min_candidates > 0,
+                  "PSF exposure minimum must be positive");
+    static_assert(psf_fwhm_hist_bins >= 3,
+                  "PSF FWHM histogram requires at least three bins");
+    static_assert(psf_knn_k > 0, "PSF KNN count must be positive");
+    static_assert(psf_loo_min_denom > 0.0 && psf_loo_min_denom < 1.0,
+                  "PSF LOO denominator floor must lie in (0,1)");
+
     // Stamp dimensions
     constexpr int ns = 64;
     constexpr int nsns = ns * ns;
@@ -114,11 +142,12 @@ namespace LensingConfig {
 
     // ==========================================
     // Configuration: Stage-3 local masked-covariance noise-power estimator
-    // Method: Use one large local cutout, exclude the source/neighbor region, retain short
-    //         two-dimensional lags, and reject only globally unstable covariance estimates.
+    // Method: Fit one plane on the same-amplifier outer square shell, exclude the central
+    //         source/neighbor region, retain short lags, and reject unstable estimates.
     // ==========================================
     constexpr int noise_region_size = 192;
     constexpr int noise_inner_size = 96;
+    constexpr double noise_plane_min_valid_fraction = 0.30;
     constexpr double noise_cov_padding_factor = 2.0;
     constexpr int noise_cov_fft_size = static_cast<int>(
         noise_region_size * noise_cov_padding_factor + 0.999999);
@@ -132,9 +161,14 @@ namespace LensingConfig {
     static_assert(noise_region_size > noise_inner_size,
                   "noise region must exceed the central exclusion");
     static_assert(noise_inner_size >= nl,
-                  "noise exclusion must cover the source plane-fit region");
+                  "noise inner exclusion must cover the full source extraction region");
     static_assert(noise_region_size % 2 == 0 && noise_inner_size % 2 == 0,
                   "noise region and exclusion sizes must be even");
+    static_assert((noise_region_size - noise_inner_size) % 2 == 0,
+                  "noise inner exclusion must be centered on the local noise region");
+    static_assert(noise_plane_min_valid_fraction > 0.0
+                      && noise_plane_min_valid_fraction <= 1.0,
+                  "noise plane minimum valid fraction must lie in (0,1]");
     static_assert(noise_cov_padding_factor > 0.0,
                   "noise covariance padding factor must be positive");
     static_assert(noise_cov_fft_size >= 2 * noise_region_size - 1,

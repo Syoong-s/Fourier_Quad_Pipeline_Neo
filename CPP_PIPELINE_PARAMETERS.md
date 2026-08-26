@@ -158,7 +158,20 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
 | `npo` | — | `64*` | Reserved legacy PSF selection size; currently used only to derive `nstar_min`. |
-| `nstar_min` | — | `npo·3/2 = 96*` | Base exposure-wide star threshold. PSF star selection rejects an exposure when total candidate count is below `2·nstar_min` (192 by default). |
+| `nstar_min` | — | `npo·3/2 = 96*` | Reserved legacy threshold; the redesigned selector uses the explicit exposure and per-chip minima below. |
+| `psf_exposure_min_candidates` | — | `192*` | Minimum quality-valid candidate count required before exposure-wide locus/group selection. |
+| `psf_fwhm_hist_bins` | — | `128*` | Exposure FWHM histogram bin count used for the optional Gaia peak seed. |
+| `psf_fwhm_locus_sigma` | — | `4.0*` | Robust sigma half-width of the exposure stellar FWHM locus. |
+| `psf_fwhm_locus_min_samples` | — | `30*` | Minimum quality-valid FWHM sample count for locus estimation. |
+| `PsfGroupingType` | — | `1`, `2*` | Compile-time graph choice: legacy private-threshold graph or survivor-only exact mutual-KNN after the shared minChi cut. |
+| `psf_minchi_sigma_cut` | — | `4.0*` | Exposure-pooled upper-tail cut on each candidate's nearest same-chip Fourier distance. |
+| `psf_knn_k` | — | `8*` | Top-K neighbour count rebuilt only among shared minChi survivors for Type-2 mutual-KNN grouping. |
+| `psf_group_merge_ratio` | — | `0.30*` | Minimum secondary-component size relative to the largest component. |
+| `psf_group_merge_min_gaia` | — | `2*` | Minimum Gaia matches also required in an eligible secondary component. |
+| `psf_gaia_match_radius_pix` | — | `2.5*` | Nearest same-chip image-position radius for Gaia labeling, in pixels. |
+| `psf_gaia_locus_min_matches` | — | `10*` | Minimum Gaia-labeled candidates required to seed the FWHM histogram peak. |
+| `psf_press_sigma_cut` | — | `4.0*` | Exposure-pooled upper-tail cut on raw central-window analytic-LOO RMS. |
+| `psf_loo_min_denom` | — | `1e-6*` | Numerical floor on `1 - leverage` for analytic LOO evaluation. |
 | `npl` | — | `10*` | Number of ordered 2D polynomial terms fitted per PSF Fourier pixel; `10` includes terms through total degree 3. |
 | `nstar_min_local` | — | `16*` | Minimum finite stars required for one local chip PSF fit. |
 | `step_psf` | — | `100*` (Std only) | Standard very-local PSF map grid spacing in pixels; used only with `PSF_type=2`. Absent in Lite. |
@@ -185,7 +198,36 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 | `area_max` | — | `ns·ns = 4096*` | Derived maximum connected-region workspace/area. |
 | `area_thresh` | — | `6*` | Minimum connected-region pixel count. |
 
-### 3g. Smoothing and detection limits (compile-time)
+### 3g. Stage-3 noise-product construction (compile-time geometry)
+
+When `NstampType=2`, `CovarSrcStamp` fits one first-order background plane from
+the square shell inside `noise_region_size` and outside the centered
+`noise_inner_size`. The fit shell is centered on the initial catalog/detection
+position; its samples must be in-chip, finite, `weight==1`, and on the initial
+source amplifier when runtime `INI [lensing] ccd_split=2`. One runtime split
+value is shared by the plane fit, source-stamp boundary check, and covariance
+mask. The same fitted coefficients are applied to the source and covariance
+residuals, while the covariance exclusion remains centered on the final
+recentered source. The numeric defaults below define the current 192-by-192 /
+central-96-by-96 geometry; the implementation reads the symbols and does not
+hard-code those dimensions.
+
+| Parameter file name | CLI parameter | Options | Function description |
+|:---|:---|:---|:---|
+| `NstampType` | — | `1*`, `2` | `1` produces a physical blank-noise stamp; `2` produces local signed covariance noise power. |
+| `noise_region_size` | — | `192*` | Outer square side used for the plane-fit shell and local covariance region. |
+| `noise_inner_size` | — | `96*` | Centered square excluded from the plane fit; the same size is recentered for covariance source/neighbor exclusion. Must cover `nl`. |
+| `noise_plane_min_valid_fraction` | — | `0.30*` | Required fraction of in-chip, same-amplifier geometric shell candidates that must remain finite with `weight==1`. |
+| `noise_cov_padding_factor` | — | `2.0*` | Multiplier used to derive the linear-autocorrelation FFT side. |
+| `noise_cov_fft_size` | — | `384*` | Derived covariance FFT side, at least `2*noise_region_size-1`. |
+| `noise_cov_max_lag` | — | `8*` | Maximum retained signed covariance lag; unchanged by the outer-shell plane-fit update. |
+| `noise_cov_min_valid_pixels` | — | `4096*` | Minimum valid pixels in the final-recentered covariance mask. |
+| `noise_cov_min_pair_fraction` | — | `0.50*` | Minimum lag-pair count relative to the zero-lag valid count. |
+| `noise_cov_sigma_ratio_min` / `noise_cov_sigma_ratio_max` | — | `0.80*` / `1.25*` | Accepted local covariance sigma divided by the Stage-1 source sigma. |
+| `noise_cov_max_negative_fraction` | — | `0.25*` | Maximum accepted fraction of negative finite-stamp noise-power modes. |
+| `noise_cov_imag_tolerance` | — | `1.0e-10*` | Relative imaginary-residual tolerance for covariance-to-power transforms. |
+
+### 3h. Smoothing and detection limits (compile-time)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -200,7 +242,7 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 | `saturation_thresh` | — | `25000.0*` | Raw-pixel saturation cutoff and normalized peak rejection reference. |
 | `pixel_size` | `INI [lensing] pixel_size` | Finite positive double (`0.2628` arcsec*) | Detector pixel scale used to convert PSF sizes to angular units. |
 
-### 3h. Catalog and memory dimensions (compile-time)
+### 3i. Catalog and memory dimensions (compile-time)
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -216,7 +258,7 @@ nominal image; physical PSF geometry uses runtime `chipnx`/`chipny`.
 `NMAX_EXPO` was removed. Exposure lists and FD per-exposure arrays use checked
 runtime sizes; large MPI vectors are transferred in `INT_MAX`-bounded chunks.
 
-### 3i. Mode-bar noise-plane estimator (compile-time)
+### 3j. Mode-bar noise-plane estimator (compile-time)
 
 These parameters act together and should normally remain synchronized with the
 validated estimator convention rather than be tuned independently.
@@ -247,7 +289,7 @@ validated estimator convention rather than be tuned independently.
 | `sig_scale_s2` | — | `1.027786*` | Stage-2 calibration candidate used by the current pipeline. |
 | `sig_scale` | — | `sig_scale_s2 = 1.027786*` | Active derived selector converting the fitted plane to the published `2·sigma²` convention. |
 
-### 3j. Standard-only multi-scale/PCA PSF parameters (compile-time)
+### 3k. Standard-only multi-scale/PCA PSF parameters (compile-time)
 
 These values are compiled only by `cpp_Standard` and are active only when
 `PSF_Ms=1`. `cpp_Lite` removes the PCA implementation and all of these
@@ -263,7 +305,7 @@ parameters.
 | `npp6th` | — | `28*` | Number of ordered 2D sixth-degree polynomial terms used for PCA coefficient surfaces. |
 | `pca_negative_eigenvalue_threshold` | — | `-1.0e-5*` | Eigenvalue below which a PCA covariance result is classified as invalid. |
 
-### 3k. File-system paths
+### 3l. File-system paths
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|
@@ -272,7 +314,7 @@ parameters.
 | `FLAT_PATH` | `INI [lensing] flat_path` | Path string (Standard only) | Super-flat directory used when `include_flat=1`; absent from Lite config. |
 | `PSF_PATH` | `INI [lensing] psf_path` | Path string (Standard only) | External PSF directory used when `ext_psf=1`; absent from Lite config. |
 
-### 3l. Internal catalog column indices (compile-time, 0-based)
+### 3m. Internal catalog column indices (compile-time, 0-based)
 
 These are zero-based positions in the C++ per-source result rows. They are not
 the 18 raw external-catalog projection indices. Changing them changes the
@@ -308,7 +350,7 @@ internal/output layout and requires coordinated reader/writer changes.
 | `iorth_ext` | — | `27*` | Source projection along the PSF-orthogonal extension direction; larger positive values are more extended. |
 | `ichi2` | — | `shear_cat_ncols = 28*` | Zero-based index of the appended exposure chi2, immediately after the 28-field shear catalog. |
 
-### 3m. Calibration and runtime camera geometry
+### 3n. Calibration and runtime camera geometry
 
 | Parameter file name | CLI parameter | Options | Function description |
 |:---|:---|:---|:---|

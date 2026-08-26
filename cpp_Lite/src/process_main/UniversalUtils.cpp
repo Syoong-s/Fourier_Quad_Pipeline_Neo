@@ -1,4 +1,5 @@
 #include "UniversalUtils.hpp"
+#include "PSFStarSelection.hpp"
 #include "FitsIO.hpp"
 #include "LinearSolve.hpp"
 #include "MPIFailure.hpp"
@@ -139,10 +140,10 @@ namespace UniversalUtils {
     }
 
     void anaChi2(int n, const std::vector<float>& map1, const std::vector<float>& map2, double& p) {
-        int n1 = n / 4 - 1;
-        int n2 = (n / 4) * 3 - 1;
-        if (n1 < 0) n1 = 0;
-        if (n2 >= n) n2 = n - 1;
+        const PSFModel::Internal::PSFChiWindow window =
+            PSFModel::Internal::getPSFChiWindow(n);
+        const int n1 = window.first;
+        const int n2 = window.last;
         
         double flux = 0.0;
         double p_sum = 0.0;

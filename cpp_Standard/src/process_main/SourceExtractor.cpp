@@ -11,6 +11,7 @@
 #include "ExternalCatalogReader.hpp"
 #include "ImageProcessing.hpp"
 #include "NoiseCovariance.hpp"
+#include "NoisePlaneFit.hpp"
 #include "NumericalRecipes.hpp"
 #include <iostream>
 #include <vector>
@@ -56,57 +57,6 @@ namespace SourceExtractor {
             }
             const double lower = *std::max_element(values.begin(), values.begin() + midpoint);
             return 0.5 * (lower + upper);
-        }
-
-        // ==========================================
-        // Function: Fit the retained source-local first-order background plane
-        // Method: Use exactly the valid nl-border pixels outside the central ns square, matching
-        //         the former flattenStamp2D science definition while returning reusable coefficients.
-        // ==========================================
-        bool fitSourcePlane(const std::vector<float>& localImage,
-                            const std::vector<int>& localWeight,
-                            int regionSize,
-                            int sourceOffset,
-                            double& aa,
-                            double& bb,
-                            double& cc) {
-            const std::size_t expectedSize = static_cast<std::size_t>(regionSize)
-                                           * static_cast<std::size_t>(regionSize);
-            if (regionSize <= 0 || sourceOffset < 0
-                || sourceOffset + LensingConfig::nl > regionSize
-                || localImage.size() != expectedSize || localWeight.size() != expectedSize) {
-                return false;
-            }
-
-            const int borderWidth = (LensingConfig::nl - LensingConfig::ns) / 2;
-            std::vector<Point3D> points;
-            points.reserve(LensingConfig::nl * LensingConfig::nl - LensingConfig::nsns);
-            for (int y = 0; y < LensingConfig::nl; ++y) {
-                for (int x = 0; x < LensingConfig::nl; ++x) {
-                    const bool borderPixel = x < borderWidth
-                                          || x >= LensingConfig::nl - borderWidth
-                                          || y < borderWidth
-                                          || y >= LensingConfig::nl - borderWidth;
-                    const std::size_t localIndex = static_cast<std::size_t>(sourceOffset + y)
-                                                 * static_cast<std::size_t>(regionSize)
-                                                 + static_cast<std::size_t>(sourceOffset + x);
-                    if (borderPixel && localWeight[localIndex] == 1
-                        && std::isfinite(localImage[localIndex])) {
-                        points.push_back({static_cast<double>(x + 1),
-                                          static_cast<double>(y + 1),
-                                          static_cast<double>(localImage[localIndex])});
-                    }
-                }
-            }
-
-            const int maximumPlanePixels = LensingConfig::nl * LensingConfig::nl
-                                         - LensingConfig::nsns;
-            if (points.size() <= static_cast<std::size_t>(0.3 * maximumPlanePixels)) {
-                return false;
-            }
-
-            UniversalUtils::findSlope2D(points, aa, bb, cc);
-            return std::isfinite(aa) && std::isfinite(bb) && std::isfinite(cc);
         }
 
         // ==========================================
@@ -1240,8 +1190,8 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Jointly validate a source and estimate its local signed noise power
-    // Method: Extract one large local region, fit the retained source-local plane once, recenter
-    //         and decorate the source stamp, then form a same-amplifier masked covariance and its
+    // Method: Extract one large local region, fit its same-amplifier outer-shell plane once,
+    //         recenter and decorate the source stamp, then form a masked covariance and its
     //         normalized ns-by-ns Fourier transform without clipping negative modes.
     // ==========================================
     void CovarSrcStamp(
@@ -1260,6 +1210,7 @@ namespace SourceExtractor {
 
         const int initialCenterX = static_cast<int>(xp + 0.5) - 1;
         const int initialCenterY = static_cast<int>(yp + 0.5) - 1;
+        const int ccdSplit = RuntimeConfigStore::get().lensing.ccd_split;
         if (initialCenterX - LensingConfig::nl_2 < LensingConfig::chip_edge_margin - 1
             || initialCenterX + LensingConfig::nl_2
                    > nx - LensingConfig::chip_edge_margin - 1
@@ -1300,8 +1251,10 @@ namespace SourceExtractor {
         double planeA = 0.0;
         double planeB = 0.0;
         double planeC = 0.0;
-        if (!fitSourcePlane(localImage, localWeight, regionSize, sourceOffset,
-                            planeA, planeB, planeC)) {
+        if (!NoisePlaneFit::fitNoiseRegionPlane(
+                localImage, localWeight, regionSize, LensingConfig::noise_inner_size,
+                sourceOffset, localStartX, localStartY, nx, ny, ccdSplit, initialCenterX,
+                planeA, planeB, planeC)) {
             flag = -1;
             return;
         }
@@ -1367,7 +1320,6 @@ namespace SourceExtractor {
         const int finalLocalCenterX = sourceOffset + sourceCenterX;
         const int finalLocalCenterY = sourceOffset + sourceCenterY;
         const int finalChipCenterX = localStartX + finalLocalCenterX;
-        const int ccdSplit = RuntimeConfigStore::get().lensing.ccd_split;
         const int sourceStampStartX = finalChipCenterX - LensingConfig::ns_2;
         if (NoiseCovariance::sourceStampCrossesAmplifier(
                 nx, ccdSplit, sourceStampStartX, LensingConfig::ns)) {

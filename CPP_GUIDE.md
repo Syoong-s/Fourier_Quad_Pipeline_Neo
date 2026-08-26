@@ -36,7 +36,7 @@ frozen-branch simplified build with `PSFRecons` removed. See
 | `src/process_main/Astrometry.cpp`, `include/process_main/Astrometry.hpp` | **Stage 2**: astrometric calibration. |
 | `src/process_main/SourceExtractor.cpp`, `include/process_main/SourceExtractor.hpp` | **Stage 3**: source detection and extraction. |
 | `src/process_main/FourierTransformSt1.cpp`, `include/process_main/FourierTransformSt1.hpp` | **Stage 4**: first-stage Fourier transform. |
-| `src/process_main/PSFModel.cpp`, `include/process_main/PSFModel.hpp` | **Stage 5**: PSF modeling. |
+| `src/process_main/PSFModel.cpp`, `PSFStarSelection.cpp`, and matching headers | **Stage 5**: Gaia/FWHM star selection, grouping, PRESS rejection, and PSF modeling. |
 | `src/process_main/PSFRecons.cpp`, `include/process_main/PSFRecons.hpp` | PSF PCA reconstruction (`PSF_Ms=1` only). |
 | `src/process_main/FourierTransformSt2.cpp`, `include/process_main/FourierTransformSt2.hpp` | **Stage 6**: second-stage Fourier transform. |
 | `src/process_main/ShearMeasurement.cpp`, `include/process_main/ShearMeasurement.hpp` | **Stage 7**: Fourier\_Quad shear estimation and point-source statistic integration. |
@@ -95,7 +95,7 @@ stages.
 | 2 | 3 | `proc_astrometry` / `Astrometry` | Astrometric calibration using Gaia reference catalog; WCS fitting. |
 | 3 | 5 | `proc_source` / `SourceExtractor` | Source detection, deblending, and stamp extraction. |
 | 4 | 7 | `proc_FFT_st1` / `FourierTransformSt1` | First-stage Fourier transform of galaxy stamps. |
-| 5 | 11 | `proc_PSF` / `PSFModel` | PSF modeling from stellar stamps via local polynomial fitting. Optional PCA reconstruction (`PSF_Ms=1`). |
+| 5 | 11 | `proc_PSF` / `PSFModel` | Same-chip Gaia/FWHM and selectable graph star selection, analytic PRESS/LOO, local polynomial PSF fitting, and optional Standard PCA reconstruction (`PSF_Ms=1`). |
 | 6 | 13 | `proc_FFT_st2` / `FourierTransformSt2` | Second-stage Fourier transform. |
 | 7 | 17 | `proc_shear` / `ShearMeasurement` | Fourier\_Quad shear estimation plus `delta_chi2` and `orth_ext` point-source statistics. |
 | 8 | 19 | `proc_info` / `ExposureInfo` | Collect per-exposure statistics (PSF FWHM, star count, etc.). |
@@ -244,6 +244,13 @@ make CXX="${MPI_PREFIX}/bin/mpicxx" \
 
 No Windows-native compiler or wrapper is required. Cluster builds use the same
 Makefile after loading the site's compiler, MPI, and scientific-library modules.
+
+Run the focused Stage-5 selection, quality, compact-state, and analytic-LOO
+regressions in either C++ variant with:
+
+```bash
+make test-psf-star-selection
+```
 
 The current Makefiles do not expose dedicated `test-extcat-reader` or
 `test-rearr` targets. Validate rearr changes with a representative

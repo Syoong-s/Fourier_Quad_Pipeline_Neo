@@ -2,6 +2,7 @@
 #define PSF_MODEL_STATE_HPP
 
 #include "LensingConfig.hpp"
+#include "PSFStarSelection.hpp"
 
 #include <array>
 #include <cstddef>
@@ -11,64 +12,81 @@ namespace PSFModel {
 namespace Internal {
 
 // ==========================================
-// Structure: Store one chip's dynamically sized PSF candidates and chi grid
-// Method: Reserve only metadata initially, then index a full row-major
-//         chi matrix allocated from the actual candidate count.
+// Structure: Store one candidate's explicit star-selection metadata
+// Method: Keep scientific flags, cached Fourier window, nearest neighbours,
+//         and PRESS diagnostics outside the legacy StarRow column layout.
+// ==========================================
+struct StarSelectionState {
+    bool gaia_matched = false;
+    bool in_fwhm_locus = false;
+    bool selected_group = false;
+    bool selected_press = false;
+    double full_power_sum = 0.0;
+    double chi_window_sum = 0.0;
+    float min_chi = 0.0f;
+    double press_score = 0.0;
+    double leverage = 0.0;
+    std::vector<float> chi_window;
+    std::vector<NeighborEdge> knn;
+};
+
+// ==========================================
+// Structure: Cache one chip's final Stage-5 polynomial fit
+// Method: Preserve the selected original indices, coefficients, and leverage so
+//         output generation never repeats an unchanged fit.
+// ==========================================
+struct ChipPSFFitState {
+    bool valid = false;
+    bool press_removed_any = false;
+    int initial_star_count = 0;
+    std::vector<int> star_indices;
+    std::vector<double> coefficients;
+    std::vector<double> leverage;
+
+    // ==========================================
+    // Function: Reset cached PSF fitting products
+    // Method: Clear all flags and vectors before processing a new chip state.
+    // ==========================================
+    void clear() {
+        valid = false;
+        press_removed_any = false;
+        initial_star_count = 0;
+        star_indices.clear();
+        coefficients.clear();
+        leverage.clear();
+    }
+};
+
+// ==========================================
+// Structure: Store one chip's dynamically sized PSF candidates and selection
+// Method: Align explicit selection metadata with legacy parameter rows and keep
+//         only O(N*window + N*K) grouping storage rather than a square matrix.
 // ==========================================
 struct ChipPSFState {
     using StarRow = std::array<double, LensingConfig::src_npara>;
 
     std::vector<StarRow> stars;
-    std::vector<float> chi_d;
-
-    // ==========================================
-    // Function: Allocate the full pairwise chi matrix for loaded candidates
-    // Method: Zero one row-major n-by-n matrix using the live star count.
-    // ==========================================
-    void allocateChiD() {
-        const std::size_t nstar = stars.size();
-        chi_d.assign(nstar * nstar, 0.0f);
-    }
-
-    // ==========================================
-    // Function: Access one mutable pairwise chi value
-    // Method: Use the live star count as the row-major matrix stride.
-    // ==========================================
-    float& getChiD(int star1, int star2) {
-        const std::size_t nstar = stars.size();
-        return chi_d[static_cast<std::size_t>(star1) * nstar
-                     + static_cast<std::size_t>(star2)];
-    }
-
-    // ==========================================
-    // Function: Access one immutable pairwise chi value
-    // Method: Use the live star count as the row-major matrix stride.
-    // ==========================================
-    const float& getChiD(int star1, int star2) const {
-        const std::size_t nstar = stars.size();
-        return chi_d[static_cast<std::size_t>(star1) * nstar
-                     + static_cast<std::size_t>(star2)];
-    }
+    std::vector<StarSelectionState> selection;
+    ChipPSFFitState fit;
 };
 
 // ==========================================
 // Structure: Own all per-chip PSF state for one exposure
-// Method: Create empty chip containers and preserve the legacy accessor
-//         shape while deriving every star count from dynamic storage.
+// Method: Size only the live outer chip vector and derive star counts from dynamic storage.
 // ==========================================
 struct ExposurePSFState {
     std::vector<ChipPSFState> chips;
 
     // ==========================================
     // Function: Create empty dynamic state for the exposure's live chip count
-    // Method: Size only the outer chip vector without allocating star matrices.
+    // Method: Avoid allocating any fixed per-chip candidate or chi matrix storage.
     // ==========================================
     explicit ExposurePSFState(int nchip)
         : chips(static_cast<std::size_t>(nchip)) {}
 
     // ==========================================
     // Function: Access one mutable star parameter
-    // Method: Delegate to the selected chip's actual-size star row.
+    // Method: Index the requested row in the chip's live candidate vector.
     // ==========================================
     double& getStarPara(int chip, int star, int para) {
         return chips[chip].stars[star][para];
@@ -76,31 +94,15 @@ struct ExposurePSFState {
 
     // ==========================================
     // Function: Access one immutable star parameter
-    // Method: Delegate to the selected chip's actual-size star row.
+    // Method: Index the requested row in the chip's live candidate vector.
     // ==========================================
     const double& getStarPara(int chip, int star, int para) const {
         return chips[chip].stars[star][para];
     }
 
     // ==========================================
-    // Function: Access one mutable chip chi value
-    // Method: Delegate to the chip's live-stride row-major matrix.
-    // ==========================================
-    float& getChiD(int chip, int star1, int star2) {
-        return chips[chip].getChiD(star1, star2);
-    }
-
-    // ==========================================
-    // Function: Access one immutable chip chi value
-    // Method: Delegate to the chip's live-stride row-major matrix.
-    // ==========================================
-    const float& getChiD(int chip, int star1, int star2) const {
-        return chips[chip].getChiD(star1, star2);
-    }
-
-    // ==========================================
-    // Function: Return one chip's actual candidate count
-    // Method: Derive the count from star-vector size to prevent divergence.
+    // Function: Return one chip's live candidate count
+    // Method: Derive the integer count from dynamic row storage.
     // ==========================================
     int getNStar(int chip) const {
         return static_cast<int>(chips[chip].stars.size());

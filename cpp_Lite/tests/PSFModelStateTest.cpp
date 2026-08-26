@@ -18,62 +18,52 @@ void require(bool condition, const std::string& message) {
 }
 
 // ==========================================
-// Function: Populate one chip and allocate its production chi matrix
-// Method: Reserve the configured hint, append the requested actual star count,
-//         and allocate the full actual-size row-major matrix.
+// Function: Verify one actual candidate count and linear selection-state dimension
+// Method: Append all rows, align explicit metadata, and cache bounded window/KNN data.
 // ==========================================
-void populateChip(PSFModel::Internal::ExposurePSFState& state,
-                  int chip_index, int star_count) {
-    auto& chip = state.chips[chip_index];
+void testChipSize(int star_count) {
+    PSFModel::Internal::ExposurePSFState state(1);
+    auto& chip = state.chips[0];
     chip.stars.reserve(LensingConfig::nstar_max);
     for (int star = 0; star < star_count; ++star) {
         PSFModel::Internal::ChipPSFState::StarRow row{};
         row[0] = star;
         chip.stars.push_back(row);
     }
-    chip.allocateChiD();
+    chip.selection.resize(static_cast<std::size_t>(star_count));
+    for (int star = 0; star < star_count; ++star) {
+        chip.selection[star].chi_window.push_back(static_cast<float>(star));
+        chip.selection[star].knn.push_back({star, 0.0f});
+    }
+
+    require(state.getNStar(0) == star_count,
+            "candidate count must follow dynamic storage");
+    require(chip.selection.size() == static_cast<std::size_t>(star_count),
+            "selection metadata must align one-to-one with candidate rows");
+    if (star_count > 0) {
+        require(chip.selection.back().chi_window.size() == 1
+                    && chip.selection.back().knn.size() == 1,
+                "last candidate must own bounded non-square cache vectors");
+    }
 }
 
 // ==========================================
-// Function: Verify dynamic candidate counts and full chi-matrix dimensions
-// Method: Exercise empty, small, ordinary, and above-reservation chips while
-//         checking wrapper access at the last above-2000 element.
+// Function: Run focused Stage-5 dynamic-state regression cases
+// Method: Exercise zero, ordinary, boundary, and above-reservation star counts
+//         without allocating any candidate-count-squared matrix.
 // ==========================================
 void testDynamicChipSizes() {
-    PSFModel::Internal::ExposurePSFState state(4);
-    require(state.chips.size() == 4, "outer state must match live chip count");
-    for (const auto& chip : state.chips) {
-        require(chip.stars.empty() && chip.chi_d.empty(),
-                "construction must not preallocate per-chip matrices");
+    const int counts[] = {0, 10, 1999, 2000, 2001, 2301};
+    for (int count : counts) {
+        testChipSize(count);
     }
-
-    const int counts[4] = {0, 10, 300, 2301};
-    for (int chip = 0; chip < 4; ++chip) {
-        populateChip(state, chip, counts[chip]);
-        const std::size_t expected =
-            static_cast<std::size_t>(counts[chip]) * counts[chip];
-        require(state.getNStar(chip) == counts[chip],
-                "candidate count must follow dynamic star storage");
-        require(state.chips[chip].chi_d.size() == expected,
-                "chi matrix must use actual nstar squared");
-    }
-
-    state.getStarPara(3, 2300, 4) = 1.0;
-    state.getChiD(3, 2300, 2299) = 7.5f;
-    state.getChiD(3, 2299, 2300) = 7.5f;
-    const auto& const_state = state;
-    require(const_state.getStarPara(3, 2300, 4) == 1.0,
-            "star access must extend beyond the reservation hint");
-    require(const_state.getChiD(3, 2300, 2299) == 7.5f
-                && const_state.getChiD(3, 2299, 2300) == 7.5f,
-            "full chi matrix must preserve symmetric live-stride access");
 }
 
 }  // namespace
 
 // ==========================================
-// Function: Run focused Stage-5 dynamic-state regression cases
-// Method: Execute all chip-size cases and report one success line.
+// Function: Run the PSF-state test suite
+// Method: Execute all live-size cases and report one success line.
 // ==========================================
 int main() {
     testDynamicChipSizes();

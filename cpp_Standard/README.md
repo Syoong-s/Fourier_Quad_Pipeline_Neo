@@ -7,6 +7,67 @@ configuration, building, run modes, initializer output layout, Docker, and HPC -
 now lives in [`../CPP_GUIDE.md`](../CPP_GUIDE.md). The full parameter reference
 is [`../CPP_PIPELINE_PARAMETERS.md`](../CPP_PIPELINE_PARAMETERS.md).
 
+## Stage-3 outer-noise plane fitting
+
+For covariance noise products (`NstampType=2`), Stage 3 fits the source and
+noise residual plane from the configurable square shell between
+`noise_region_size` and `noise_inner_size`. It rejects masked, non-finite,
+out-of-chip, and opposite-amplifier samples using the same runtime `ccd_split`
+value as the downstream stamp and covariance checks. The synthetic regression
+is independent of the Makefile and can be compiled with the production solver:
+
+```bash
+"${MPI_PREFIX}/bin/mpicxx" -O2 -std=c++17 -Wall -Wextra \
+  -ffunction-sections -fdata-sections \
+  -Iinclude -Iconfig -Iinclude/process_main -Isrc/process_main \
+  -I"${STACK_PREFIX}/include" -I"${EIGEN_INCLUDE}" \
+  tests/NoisePlaneFitTest.cpp src/process_main/UniversalUtils.cpp \
+  src/process_main/LinearSolve.cpp -Wl,--gc-sections \
+  -L"${STACK_PREFIX}/lib" -Wl,-rpath,"${STACK_PREFIX}/lib" \
+  -llapack -lblas -lm -o /tmp/NoisePlaneFitTest
+/tmp/NoisePlaneFitTest
+```
+
+## Stage-5 PSF star-selection redesign
+
+Stage 5 now applies a positive signed central-chi-window quality gate, reads the
+matched image positions already stored in each chip's `_astro.dat`, estimates a
+Gaia-assisted exposure-wide FWHM stellar locus, and performs only same-chip
+Fourier comparisons. Compile-time `LensingConfig::PsfGroupingType` selects the
+legacy chi-threshold graph (`1`) or exact mutual-KNN graph (`2`); both paths
+share the same exposure-pooled per-star `minChi` cut and
+main/eligible-secondary component selection. Type 2 rebuilds its exact top-K
+lists only among candidates that survive that shared `minChi` cut, so rejected
+neighbours cannot occupy stale KNN slots; Type 1 retains its existing private
+threshold sample and graph behavior. Secondary components require both the
+configured relative size and Gaia support. The candidate-count-squared chi
+matrix is gone.
+
+The retained stars receive one analytic leave-one-out PRESS pass. The
+repository's runtime `psf_type`, `psf_ms`, `chipnx`, and `chipny` settings remain
+authoritative: local mode caches the normalized polynomial fit, hybrid mode
+caches the native-coordinate fit, and a chip refits only when PRESS removes a
+star. Local `msshape_*` and optional PCA residual cubes use the final analytic
+LOO model/residual. Hybrid retains its separately audited very-local diagnostic
+because polynomial hat diagonals alone do not define exact LOO residual
+interpolation.
+
+The new selection thresholds are compile-time constants in
+`config/LensingConfig.hpp`; changing them requires rebuilding. Focused tests are
+available with:
+
+```bash
+make test-psf-star-selection CXX=mpicxx \
+     STACK_PREFIX=/path/to/dependency-prefix \
+     EIGEN_INCLUDE=/path/to/eigen3
+```
+
+Synthetic coverage includes the shared chi window/quality gate, FWHM/Gaia
+locus, `_astro.dat` parser and matching, exact mutual-KNN/groups, survivor-only
+KNN slot refill after `minChi`, non-square state, and analytic LOO equivalence
+to explicit refits. Representative real exposures are still required to inspect
+PRESS versus brightness/SNR/FWHM and to benchmark Stage-5 wall time.
+
 ## Runtime configuration
 
 `RuntimeConfig` now owns every run-selectable Process, ExtCat, Init, and
@@ -114,8 +175,8 @@ transactional diagnostics, file/CLI precedence, list behavior, stage and FD
 dependencies, non-default geometry, internal rearr schema, and the write-once
 store. The catalog-row-count test covers equal 100-row catalogs, both mismatch
 directions, and paired header-only catalogs. The PSF-state test covers actual
-candidate counts of 0, 10, 300, and 2301, including full live-stride matrix
-access beyond the 2000-row reservation hint.
+candidate counts from zero through 2301 with aligned linear selection metadata
+and no pairwise square-matrix allocation.
 
 The current local WSL2 verification stack is GCC/G++ 15.2.0, Open MPI 5.0.10,
 CFITSIO 4.6.3, FFTW 3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33. The portable
@@ -130,12 +191,12 @@ initial metadata-vector reservation capacities, not hard catalog limits. Stage
 buffers continue to grow on demand rather than reserving the full hint size.
 
 Stage 5 creates empty state for the exposure's live chips, loads each chip's
-complete candidate catalog, and then allocates a full
-`actual_nstar x actual_nstar` pairwise chi matrix. The pairwise calculation,
-star selection, and local/hybrid PSF fitting algorithms are unchanged. In the
-external-catalog Stage-9 branch, the physical data-row counts after the two
-headers must match before combination; a mismatch aborts the MPI world, while
-the existing row parsing, cuts, calibration, and pairing order remain unchanged.
+complete candidate catalog, retains one central window per quality-valid
+candidate, and keeps at most bounded top-K neighbors instead of an
+`actual_nstar x actual_nstar` matrix. In the external-catalog Stage-9 branch,
+the physical data-row counts after the two headers must match before
+combination; a mismatch aborts the MPI world, while the existing row parsing,
+cuts, calibration, and pairing order remain unchanged.
 
 ## Runtime catalog layout
 

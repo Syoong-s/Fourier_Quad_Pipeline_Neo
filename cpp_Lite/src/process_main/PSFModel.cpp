@@ -1,6 +1,7 @@
 #include "PSFModel.hpp"
 #include "PSFModelState.hpp"
 #include "PSFCandidateQuality.hpp"
+#include "PSFStarSelection.hpp"
 #include "OutputFile.hpp"
 #include "MPIFailure.hpp"
 #include "OutputLayout.hpp"
@@ -26,8 +27,8 @@
 #include <cstddef>
 #include <complex>
 #include <initializer_list>
-#include <limits>
 #include <memory>
+#include <limits>
 
 // Extern variables defined elsewhere (e.g. main.cpp)
 extern std::vector<std::string> EXPO_FILE;
@@ -40,7 +41,8 @@ namespace PSFModel {
 
     // Forward declarations of local helper functions
     void readInCandidates(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int& nc, std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state);
-    void starSelection(int nchip, ExposurePSFState& state);
+    void starSelection(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state);
+    void applyPressSelection(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state);
     void plotStarExpo(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state);
     void plotStars(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int nc, const std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state);
     void makePSFLocalFit(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state);
@@ -49,7 +51,8 @@ namespace PSFModel {
         int nsam, const std::vector<float>& image,
         const std::vector<std::array<double, 2>>& posi,
         int ns, int npp, int nx, int ny, std::vector<double>& PSF_coe,
-        LinearSolve::SolveDiagnostics* diagnostics);
+        LinearSolve::SolveDiagnostics* diagnostics,
+        std::vector<double>* leverage);
     void getPSFModel(int ns, int npp, const std::vector<double>& PSF_coe, double xx, double yy, std::vector<float>& modelp, std::vector<float>& model0);
 
     void getPowerArea(int nx, int ny, const std::vector<float>& power, int& area, float thresh_ratio);
@@ -79,17 +82,16 @@ namespace PSFModel {
     // ==========================================
     // Function: Compute a checked runtime allocation size
     // Method: Multiply dimensions in size_t and abort coherently before an
-    //         overflow could under-allocate a PSF buffer.
+    //         overflow could under-allocate a shared PSF buffer.
     // ==========================================
     static std::size_t checkedElementCount(
         std::initializer_list<std::size_t> dimensions,
         const std::string& operation) {
         std::size_t count = 1;
         for (const std::size_t dimension : dimensions) {
-            if (dimension != 0
-                && count > std::numeric_limits<std::size_t>::max() / dimension) {
-                MPIFailure::abortWorld(
-                    operation, "runtime dimensions overflow size_t");
+            if (dimension != 0 &&
+                count > std::numeric_limits<std::size_t>::max() / dimension) {
+                MPIFailure::abortWorld(operation, "runtime dimensions overflow size_t");
             }
             count *= dimension;
         }
@@ -118,9 +120,9 @@ namespace PSFModel {
     }
 
     // ==========================================
-    // Function: Run Stage-5 local PSF modeling for one exposure
-    // Method: Execute candidate loading, selection, diagnostics, and the
-    //         Lite local-polynomial fit with MPI-wide fatal-input handling.
+    // Function: Run Stage-5 Lite PSF modeling for one exposure
+    // Method: Execute Gaia/local candidate selection, analytic PRESS, diagnostics,
+    //         and the sole normalized polynomial fit with runtime geometry.
     // ==========================================
     void procPSF(int iexpo) {
         if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
@@ -132,7 +134,7 @@ namespace PSFModel {
         std::string dirOutput;
         UniversalUtils::getImageList(expo_file_path, imageFiles, dirOutput);
 
-        int nchip = static_cast<int>(imageFiles.size());
+        const int nchip = static_cast<int>(imageFiles.size());
         const LensingRuntimeConfig& lensing =
             RuntimeConfigStore::get().lensing;
         if (nchip > lensing.nmax_chip) {
@@ -152,15 +154,14 @@ namespace PSFModel {
             {0.0, 0.0, 0.0, 0.0});
 
         readInCandidates(nchip, imageFiles, dirOutput, nc, p_chip, state);
-
-        starSelection(nchip, state);
-
+        starSelection(nchip, imageFiles, dirOutput, state);
+        applyPressSelection(nchip, imageFiles, dirOutput, state);
         plotStarExpo(nchip, imageFiles, dirOutput, state);
-
         plotStars(nchip, imageFiles, dirOutput, nc, p_chip, state);
-
         makePSFLocalFit(nchip, imageFiles, dirOutput, state);
     }
+
+    // Local Helper Routines
 
     // ==========================================
     // Function: Load star candidates and Fourier-power stamps for one exposure
@@ -181,7 +182,8 @@ namespace PSFModel {
             ChipPSFState& chip = state.chips[k];
             chip.stars.clear();
             chip.stars.reserve(LensingConfig::nstar_max);
-            chip.chi_d.clear();
+            chip.selection.clear();
+            chip.fit.clear();
 
             const Universalblock::NormStatus normStatus =
                 Universalblock::checkNorm(imageFiles[k], dirOutput);
@@ -247,7 +249,8 @@ namespace PSFModel {
             infile.close();
 
             const int nstar = state.getNStar(k);
-            chip.allocateChiD();
+            chip.selection.assign(
+                static_cast<std::size_t>(nstar), Internal::StarSelectionState{});
 
             if (nstar > 0) {
                 std::string stampPath = OutputLayout::chipPath(
@@ -268,7 +271,9 @@ namespace PSFModel {
                     }
 
                     double sum_power = 0.0;
-                    if (Internal::assessCandidatePower(ns, ns, source_p, sum_power)
+                    double chi_window_sum = 0.0;
+                    if (Internal::assessCandidatePower(
+                            ns, ns, source_p, sum_power, chi_window_sum)
                         != CandidatePowerStatus::Accepted) {
                         state.getStarPara(k, i, 4) = -1.0;
                         continue;
@@ -296,194 +301,708 @@ namespace PSFModel {
                     }
                     state.getStarPara(k, i, 10) = FWHM;
                     state.getStarPara(k, i, 11) = 1.0 / sum_power;
+
+                    Internal::StarSelectionState& selection = chip.selection[i];
+                    selection.full_power_sum = sum_power;
+                    selection.chi_window_sum = chi_window_sum;
+                    const Internal::PSFChiWindow window =
+                        Internal::getPSFChiWindow(ns);
+                    selection.chi_window.reserve(
+                        static_cast<std::size_t>(window.pixelCount()));
+                    for (int row = window.first; row <= window.last; ++row) {
+                        for (int column = window.first;
+                             column <= window.last; ++column) {
+                            selection.chi_window.push_back(
+                                source_p[row * ns + column]);
+                        }
+                    }
                 }
 
-                for (int i = 0; i < nstar - 1; ++i) {
-                    if (state.getStarPara(k, i, 4) < 0.0) continue;
-                    for (int j = i + 1; j < nstar; ++j) {
-                        if (state.getStarPara(k, j, 4) < 0.0) continue;
-                        std::vector<float> map1(ns * ns);
-                        std::vector<float> map2(ns * ns);
-                        double sp_i_12 = state.getStarPara(k, i, 11);
-                        double sp_j_12 = state.getStarPara(k, j, 11);
-                        for (int idx = 0; idx < ns * ns; ++idx) {
-                            map1[idx] = static_cast<float>(star[static_cast<size_t>(i) * ns * ns + idx] * sp_i_12);
-                            map2[idx] = static_cast<float>(star[static_cast<size_t>(j) * ns * ns + idx] * sp_j_12);
-                        }
-                        double temp_chi = 0.0;
-                        UniversalUtils::anaChi2(ns, map1, map2, temp_chi);
-                        float temp_val = static_cast<float>(std::sqrt(temp_chi));
-                        state.getChiD(k, i, j) = temp_val;
-                        state.getChiD(k, j, i) = temp_val;
+
+            }
+        }
+    }
+
+    // ==========================================
+    // Function: Reject every PSF candidate in an exposure
+    // Method: Clear all scientific selection flags and release cached windows.
+    // ==========================================
+    static void rejectExposureCandidates(ExposurePSFState& state) {
+        for (ChipPSFState& chip : state.chips) {
+            chip.fit.clear();
+            for (std::size_t index = 0; index < chip.stars.size(); ++index) {
+                chip.stars[index][4] = -1.0;
+                if (index >= chip.selection.size()) continue;
+                Internal::StarSelectionState& selection = chip.selection[index];
+                selection.in_fwhm_locus = false;
+                selection.selected_group = false;
+                selection.selected_press = false;
+                std::vector<float>().swap(selection.chi_window);
+                std::vector<Internal::NeighborEdge>().swap(selection.knn);
+            }
+        }
+    }
+
+    // ==========================================
+    // Function: Estimate a project-compatible upper-tail threshold
+    // Method: Use the legacy low-side peak/width estimator when finite, fall
+    //         back to robust quantiles, and keep all values when width vanishes.
+    // ==========================================
+    static float estimateUpperTailThreshold(
+        const std::vector<float>& input,
+        double sigma_cut) {
+        std::vector<float> values;
+        values.reserve(input.size());
+        for (float value : input) {
+            if (std::isfinite(value)) values.push_back(value);
+        }
+        if (values.size() <= 4 || sigma_cut <= 0.0) {
+            return std::numeric_limits<float>::infinity();
+        }
+
+        float peak = 0.0f;
+        float width = 0.0f;
+        NumericalRecipes::getPeakWidthLowSide(values, peak, width);
+        if (std::isfinite(peak) && std::isfinite(width) && width > 0.0f) {
+            return peak + static_cast<float>(sigma_cut) * width;
+        }
+
+        UniversalUtils::getMedSig(values, peak, width);
+        if (std::isfinite(peak) && std::isfinite(width) && width > 0.0f) {
+            return peak + static_cast<float>(sigma_cut) * width;
+        }
+        return *std::max_element(values.begin(), values.end());
+    }
+
+    // ==========================================
+    // Function: Read one chip's matched Gaia image positions
+    // Method: Open the existing astro product once, accept zero matches, and
+    //         abort on missing or malformed Gaia-mode Stage-2 data.
+    // ==========================================
+    static std::vector<std::array<double, 2>> readAstrometryGaiaPositions(
+        const std::string& imageFile,
+        const std::string& dirOutput) {
+        std::vector<std::array<double, 2>> gaia_xy;
+        const std::string prefix = UniversalUtils::getPrefix(imageFile);
+        const std::string filename = OutputLayout::chipPath(
+            dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
+        std::ifstream input(filename);
+        if (!input.is_open()) {
+            MPIFailure::abortWorld("read PSF Gaia astrometry matches", filename);
+        }
+        std::string error;
+        const Internal::AstrometryGaiaReadStatus status =
+            Internal::parseAstrometryGaiaPositions(input, gaia_xy, error);
+        if (status == Internal::AstrometryGaiaReadStatus::Malformed) {
+            MPIFailure::abortWorld(
+                "parse PSF Gaia astrometry matches", filename + " " + error);
+        }
+        return gaia_xy;
+    }
+
+    // ==========================================
+    // Structure: Store the shared minChi survivors for every exposure chip
+    // Method: Address candidates by their original per-chip indices.
+    // ==========================================
+    using ActiveIndicesByChip = std::vector<std::vector<int>>;
+
+    // ==========================================
+    // Structure: Store one connected-group collection for every exposure chip
+    // Method: Give legacy and KNN grouping one identical dispatch result type.
+    // ==========================================
+    using ExposureGroups = std::vector<std::vector<Internal::StarGroup>>;
+
+    // ==========================================
+    // Function: Build exposure-thresholded same-chip minChi survivor lists
+    // Method: Compute exact pair distances only for FWHM-locus candidates,
+    //         pool finite nearest distances, and apply one shared upper cut.
+    // ==========================================
+    static ActiveIndicesByChip buildMinChiActiveIndices(
+        int nchip,
+        ExposurePSFState& state) {
+        std::vector<float> pooled_min_chi;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            for (int first = 0; first < state.getNStar(chip_index) - 1; ++first) {
+                if (!chip.selection[first].in_fwhm_locus) continue;
+                for (int second = first + 1;
+                     second < state.getNStar(chip_index); ++second) {
+                    if (!chip.selection[second].in_fwhm_locus) continue;
+                    const float chi = Internal::normalizedChiDistance(
+                        chip.selection[first].chi_window,
+                        chip.selection[second].chi_window);
+                    if (!std::isfinite(chi)) continue;
+                    chip.selection[first].min_chi =
+                        std::min(chip.selection[first].min_chi, chi);
+                    chip.selection[second].min_chi =
+                        std::min(chip.selection[second].min_chi, chi);
+                }
+            }
+            for (const Internal::StarSelectionState& selection : chip.selection) {
+                if (selection.in_fwhm_locus && std::isfinite(selection.min_chi)) {
+                    pooled_min_chi.push_back(selection.min_chi);
+                }
+            }
+        }
+
+        const float min_chi_threshold = estimateUpperTailThreshold(
+            pooled_min_chi, LensingConfig::psf_minchi_sigma_cut);
+        ActiveIndicesByChip active_indices(static_cast<std::size_t>(nchip));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                const Internal::StarSelectionState& selection =
+                    chip.selection[star_index];
+                if (selection.in_fwhm_locus && std::isfinite(selection.min_chi)
+                    && selection.min_chi <= min_chi_threshold) {
+                    active_indices[chip_index].push_back(star_index);
+                }
+            }
+        }
+        return active_indices;
+    }
+
+    // ==========================================
+    // Function: Construct legacy threshold groups for every exposure chip
+    // Method: Preserve the existing all-FWHM-pair threshold sample exactly,
+    //         then apply its threshold graph only to shared minChi survivors.
+    // ==========================================
+    [[maybe_unused]] static ExposureGroups groupStarsLegacy(
+        int nchip,
+        ExposurePSFState& state,
+        const ActiveIndicesByChip& active_indices) {
+        std::vector<float> legacy_pair_chi;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const ChipPSFState& chip = state.chips[chip_index];
+            for (int first = 0; first < state.getNStar(chip_index) - 1; ++first) {
+                if (!chip.selection[first].in_fwhm_locus) continue;
+                for (int second = first + 1;
+                     second < state.getNStar(chip_index); ++second) {
+                    if (!chip.selection[second].in_fwhm_locus) continue;
+                    const float chi = Internal::normalizedChiDistance(
+                        chip.selection[first].chi_window,
+                        chip.selection[second].chi_window);
+                    if (std::isfinite(chi)) legacy_pair_chi.push_back(chi);
+                }
+            }
+        }
+        const float legacy_chi_threshold = estimateUpperTailThreshold(
+            legacy_pair_chi, 4.0);
+
+        ExposureGroups groups_by_chip(static_cast<std::size_t>(nchip));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const ChipPSFState& chip = state.chips[chip_index];
+            const std::vector<int>& active = active_indices[chip_index];
+            std::vector<Internal::GraphEdge> graph_edges;
+            for (std::size_t first = 0; first + 1 < active.size(); ++first) {
+                for (std::size_t second = first + 1;
+                     second < active.size(); ++second) {
+                    const int first_index = active[first];
+                    const int second_index = active[second];
+                    const float chi = Internal::normalizedChiDistance(
+                        chip.selection[first_index].chi_window,
+                        chip.selection[second_index].chi_window);
+                    if (std::isfinite(chi) && chi <= legacy_chi_threshold) {
+                        graph_edges.push_back({first_index, second_index});
                     }
+                }
+            }
+            std::vector<bool> gaia_matched(
+                static_cast<std::size_t>(state.getNStar(chip_index)), false);
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                gaia_matched[star_index] =
+                    chip.selection[star_index].gaia_matched;
+            }
+            groups_by_chip[chip_index] = Internal::buildConnectedGroups(
+                active, graph_edges, gaia_matched);
+        }
+        return groups_by_chip;
+    }
+
+    // ==========================================
+    // Function: Construct exact survivor-only mutual-KNN groups per chip
+    // Method: Rebuild top-K after the shared minChi cut, then form mutual edges
+    //         and connected components without any legacy chi threshold.
+    // ==========================================
+    [[maybe_unused]] static ExposureGroups groupStarsKNN(
+        int nchip,
+        ExposurePSFState& state,
+        const ActiveIndicesByChip& active_indices) {
+        ExposureGroups groups_by_chip(static_cast<std::size_t>(nchip));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            const std::vector<int>& active = active_indices[chip_index];
+            Internal::rebuildActiveKNN(
+                active, chip.selection, LensingConfig::psf_knn_k);
+
+            std::vector<std::vector<Internal::NeighborEdge>> neighbours(
+                static_cast<std::size_t>(state.getNStar(chip_index)));
+            std::vector<bool> gaia_matched(
+                static_cast<std::size_t>(state.getNStar(chip_index)), false);
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                neighbours[star_index] = chip.selection[star_index].knn;
+                gaia_matched[star_index] =
+                    chip.selection[star_index].gaia_matched;
+            }
+            const std::vector<Internal::GraphEdge> graph_edges =
+                Internal::buildMutualKNNEdges(active, neighbours);
+            groups_by_chip[chip_index] = Internal::buildConnectedGroups(
+                active, graph_edges, gaia_matched);
+        }
+        return groups_by_chip;
+    }
+
+    // ==========================================
+    // Function: Apply the shared main/secondary group policy to every chip
+    // Method: Reject all candidates first, retain selected components only when
+    //         the local minimum passes, and release temporary grouping caches.
+    // ==========================================
+    static void applySharedGroupSelection(
+        int nchip,
+        const ExposureGroups& groups_by_chip,
+        ExposurePSFState& state) {
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                chip.selection[star_index].selected_group = false;
+                state.getStarPara(chip_index, star_index, 4) = -1.0;
+            }
+
+            std::vector<int> selected =
+                Internal::selectMainAndSecondaryGroups(
+                    groups_by_chip[chip_index],
+                    LensingConfig::psf_group_merge_ratio,
+                    LensingConfig::psf_group_merge_min_gaia);
+            if (static_cast<int>(selected.size())
+                < LensingConfig::nstar_min_local) {
+                selected.clear();
+            }
+            for (int star_index : selected) {
+                if (star_index < 0
+                    || star_index >= state.getNStar(chip_index)) {
+                    continue;
+                }
+                chip.selection[star_index].selected_group = true;
+                state.getStarPara(chip_index, star_index, 4) = 1.0;
+            }
+            for (Internal::StarSelectionState& selection : chip.selection) {
+                std::vector<Internal::NeighborEdge>().swap(selection.knn);
+                if (!selection.selected_group) {
+                    std::vector<float>().swap(selection.chi_window);
                 }
             }
         }
     }
 
     // ==========================================
-    // Function: Select PSF stars from candidates
-    // Method: Follow F77 thresholds and connected groups using only candidates
-    //         that passed the corrected-power validity gate.
+    // Function: Select PSF stars from quality-valid candidates
+    // Method: Apply common Gaia/FWHM/minChi selection, dispatch isolated legacy
+    //         or survivor-only KNN grouping, then apply one shared group policy.
     // ==========================================
-    void starSelection(int nchip, ExposurePSFState& state) {
-        int nstar_min = LensingConfig::nstar_min;
-        int nstar_min_local = LensingConfig::nstar_min_local;
-
-        int ntot = 0;
-        for (int k = 0; k < nchip; ++k) {
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) > 0.0) ntot++;
-            }
-        }
-
-        if (ntot < nstar_min * 2) {
-            for (int k = 0; k < nchip; ++k) {
-                for (int i = 0; i < state.getNStar(k); ++i) {
-                    state.getStarPara(k, i, 4) = -1.0;
+    void starSelection(
+        int nchip,
+        const std::vector<std::string>& imageFiles,
+        const std::string& dirOutput,
+        ExposurePSFState& state) {
+        int quality_valid_count = 0;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
+                if (state.getStarPara(chip_index, star_index, 4) > 0.0) {
+                    quality_valid_count++;
                 }
             }
+        }
+        if (quality_valid_count < LensingConfig::psf_exposure_min_candidates) {
+            rejectExposureCandidates(state);
             return;
         }
 
-        // Determine size threshold
-        std::vector<float> tmp_size;
-        tmp_size.reserve(ntot);
-        for (int k = 0; k < nchip; ++k) {
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
-                tmp_size.push_back(static_cast<float>(state.getStarPara(k, i, 7))); // F77 index 8 size
-            }
-        }
-        NumericalRecipes::sort(tmp_size);
-        int thresh_size_idx = static_cast<int>((tmp_size.size() * 2) / 3) - 1;
-        thresh_size_idx = std::max(0, std::min(thresh_size_idx, static_cast<int>(tmp_size.size()) - 1));
-        float thresh_size = tmp_size[thresh_size_idx];
-
-        // Determine chi^2 threshold
-        std::vector<std::vector<float>> chimin(nchip);
-        for (int k = 0; k < nchip; ++k) {
-            chimin[k].assign(state.chips[k].stars.size(), 1000.0f);
-        }
-        std::vector<float> tmp_chi;
-
-        for (int k = 0; k < nchip; ++k) {
-            for (int i = 0; i < state.getNStar(k) - 1; ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
-                for (int j = i + 1; j < state.getNStar(k); ++j) {
-                    if (state.getStarPara(k, j, 4) < 0.0) continue;
-                    float temp = state.getChiD(k, i, j);
-                    chimin[k][i] = std::min(temp, chimin[k][i]);
-                    chimin[k][j] = std::min(temp, chimin[k][j]);
-
-                    if (state.getStarPara(k, i, 7) < thresh_size) continue;
-                    if (state.getStarPara(k, j, 7) < thresh_size) continue;
-
-                    tmp_chi.push_back(temp);
-                }
+        std::vector<Internal::FWHMSample> fwhm_samples;
+        fwhm_samples.reserve(static_cast<std::size_t>(quality_valid_count));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            const std::vector<std::array<double, 2>> gaia_xy =
+                readAstrometryGaiaPositions(imageFiles[chip_index], dirOutput);
+            for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
+                if (state.getStarPara(chip_index, star_index, 4) <= 0.0) continue;
+                Internal::StarSelectionState& selection = chip.selection[star_index];
+                selection.gaia_matched = Internal::hasNearestGaiaMatch(
+                    state.getStarPara(chip_index, star_index, 1),
+                    state.getStarPara(chip_index, star_index, 2),
+                    gaia_xy,
+                    LensingConfig::psf_gaia_match_radius_pix);
+                fwhm_samples.push_back({
+                    state.getStarPara(chip_index, star_index, 10),
+                    selection.gaia_matched});
             }
         }
 
-        float peak = 0.0f, sig = 0.0f;
-        NumericalRecipes::getPeakWidthLowSide(tmp_chi, peak, sig);
-        float thresh_chi = peak + 4.0f * sig;
+        Internal::FWHMLocus locus;
+        if (!Internal::estimateFWHMLocus(
+                fwhm_samples,
+                LensingConfig::psf_fwhm_hist_bins,
+                LensingConfig::psf_fwhm_locus_sigma,
+                LensingConfig::psf_fwhm_locus_min_samples,
+                LensingConfig::psf_gaia_locus_min_matches,
+                locus)) {
+            rejectExposureCandidates(state);
+            return;
+        }
 
-        for (int k = 0; k < nchip; ++k) {
-            int n_valid_local = 0;
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
-                if (chimin[k][i] > thresh_chi) {
-                    state.getStarPara(k, i, 4) = -1.0;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
+                Internal::StarSelectionState& selection = chip.selection[star_index];
+                selection.selected_group = false;
+                selection.selected_press = false;
+                selection.knn.clear();
+                selection.min_chi = std::numeric_limits<float>::infinity();
+                if (state.getStarPara(chip_index, star_index, 4) <= 0.0) continue;
+
+                const double fwhm = state.getStarPara(chip_index, star_index, 10);
+                selection.in_fwhm_locus = fwhm > locus.lower && fwhm < locus.upper;
+                if (!selection.in_fwhm_locus
+                    || selection.full_power_sum <= 0.0
+                    || selection.chi_window.empty()) {
+                    state.getStarPara(chip_index, star_index, 4) = -1.0;
+                    std::vector<float>().swap(selection.chi_window);
                     continue;
                 }
-                n_valid_local++;
-            }
-
-            if (n_valid_local < nstar_min_local) {
-                for (int i = 0; i < state.getNStar(k); ++i) {
-                    state.getStarPara(k, i, 4) = -1.0;
+                const double inverse_sum = 1.0 / selection.full_power_sum;
+                for (float& value : selection.chi_window) {
+                    value = static_cast<float>(static_cast<double>(value) * inverse_sum);
                 }
+            }
+        }
+
+        const ActiveIndicesByChip active_indices =
+            buildMinChiActiveIndices(nchip, state);
+        ExposureGroups groups_by_chip;
+        if constexpr (LensingConfig::PsfGroupingType == 1) {
+            groups_by_chip = groupStarsLegacy(nchip, state, active_indices);
+        } else {
+            groups_by_chip = groupStarsKNN(nchip, state, active_indices);
+        }
+        applySharedGroupSelection(nchip, groups_by_chip, state);
+    }
+
+    // ==========================================
+    // Structure: Hold one chip's ordered polynomial fitting samples
+    // Method: Preserve original candidate indices alongside positions and
+    //         contiguous row-major power stamps.
+    // ==========================================
+    struct ChipFitSamples {
+        std::vector<int> star_indices;
+        std::vector<std::array<double, 2>> positions;
+        std::vector<float> power;
+    };
+
+    // ==========================================
+    // Function: Read all candidate power stamps for one chip
+    // Method: Validate and return the direct catalog-shaped Stage-4 stamp cube.
+    // ==========================================
+    static std::vector<float> readChipCandidatePower(
+        int chip_index,
+        const std::vector<std::string>& imageFiles,
+        const std::string& dirOutput,
+        const ExposurePSFState& state) {
+        const int nstar = state.getNStar(chip_index);
+        if (nstar <= 0) return {};
+        const int ns = LensingConfig::ns;
+        const std::string prefix =
+            UniversalUtils::getPrefix(imageFiles[chip_index]);
+        const std::string filename = OutputLayout::chipPath(
+            dirOutput, "stamps/fits_StarCanP", prefix,
+            "_star_can_power.fits");
+        std::vector<float> power;
+        readExpectedStampCube(
+            filename, ns, ns, nstar, power,
+            "read PRESS PSF star-power cube");
+        return power;
+    }
+
+    // ==========================================
+    // Function: Gather an ordered subset of one chip's fitting samples
+    // Method: Validate each requested original candidate and copy its position
+    //         and full power stamp into a compact fitting buffer.
+    // ==========================================
+    static bool buildChipFitSamples(
+        int chip_index,
+        const std::vector<int>& selected_indices,
+        const std::vector<float>& all_power,
+        const ExposurePSFState& state,
+        ChipFitSamples& samples) {
+        samples = {};
+        const int ns = LensingConfig::ns;
+        const int pixel_count = ns * ns;
+        samples.star_indices.reserve(selected_indices.size());
+        samples.positions.reserve(selected_indices.size());
+        samples.power.reserve(selected_indices.size()
+                              * static_cast<std::size_t>(pixel_count));
+        for (int star_index : selected_indices) {
+            if (star_index < 0 || star_index >= state.getNStar(chip_index)) return false;
+            const double x = state.getStarPara(chip_index, star_index, 1);
+            const double y = state.getStarPara(chip_index, star_index, 2);
+            const double size = state.getStarPara(chip_index, star_index, 7);
+            const double e1 = state.getStarPara(chip_index, star_index, 8);
+            const double e2 = state.getStarPara(chip_index, star_index, 9);
+            const std::size_t offset =
+                static_cast<std::size_t>(star_index) * pixel_count;
+            if (!isFinitePSFStar(
+                    all_power, offset, pixel_count, x, y, size, e1, e2)) {
+                return false;
+            }
+            samples.star_indices.push_back(star_index);
+            samples.positions.push_back({x, y});
+            samples.power.insert(
+                samples.power.end(),
+                all_power.begin() + static_cast<std::ptrdiff_t>(offset),
+                all_power.begin() + static_cast<std::ptrdiff_t>(offset + pixel_count));
+        }
+        return true;
+    }
+
+    // ==========================================
+    // Function: Fit one ordered chip sample set and compute leverage
+    // Method: Use Lite's sole normalized local-polynomial design with runtime
+    //         chip geometry and share coefficients/hat diagonals with outputs.
+    // ==========================================
+    static LinearSolve::SolveStatus fitChipSamples(
+        const ChipFitSamples& samples,
+        std::vector<double>& coefficients,
+        std::vector<double>& leverage,
+        LinearSolve::SolveDiagnostics& diagnostics) {
+        const int sample_count = static_cast<int>(samples.star_indices.size());
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
+        return itpNormPSF(
+            sample_count, samples.power, samples.positions,
+            LensingConfig::ns, LensingConfig::npl,
+            lensing.chipnx, lensing.chipny,
+            coefficients, &diagnostics, &leverage);
+    }
+
+    // ==========================================
+    // Function: Mark one chip invalid after a PRESS fitting failure
+    // Method: Clear cached fit products and reject every group-selected candidate.
+    // ==========================================
+    static void invalidatePressChip(int chip_index, ExposurePSFState& state) {
+        ChipPSFState& chip = state.chips[chip_index];
+        chip.fit.clear();
+        for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
+            if (chip.selection[star_index].selected_group) {
+                state.getStarPara(chip_index, star_index, 4) = -1.0;
+                std::vector<float>().swap(
+                    chip.selection[star_index].chi_window);
+            }
+            chip.selection[star_index].selected_press = false;
+        }
+    }
+
+    // ==========================================
+    // Function: Apply exposure-wide analytic PRESS rejection
+    // Method: Fit each group-selected chip once, pool raw central-window LOO
+    //         RMS scores, reject once, and refit only chips whose set changed.
+    // ==========================================
+    void applyPressSelection(
+        int nchip,
+        const std::vector<std::string>& imageFiles,
+        const std::string& dirOutput,
+        ExposurePSFState& state) {
+        const LensingRuntimeConfig& lensing =
+            RuntimeConfigStore::get().lensing;
+        const int ns = LensingConfig::ns;
+        const int pixel_count = ns * ns;
+        const Internal::PSFChiWindow chi_window =
+            Internal::getPSFChiWindow(ns);
+        std::vector<float> exposure_press_scores;
+
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            chip.fit.clear();
+            std::vector<int> selected_indices;
+            for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
+                chip.selection[star_index].selected_press = false;
+                if (chip.selection[star_index].selected_group) {
+                    selected_indices.push_back(star_index);
+                }
+            }
+            if (static_cast<int>(selected_indices.size())
+                < LensingConfig::nstar_min_local) {
+                invalidatePressChip(chip_index, state);
                 continue;
             }
 
-            std::vector<int> id;
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
-                id.push_back(i);
+            const std::vector<float> all_power = readChipCandidatePower(
+                chip_index, imageFiles, dirOutput, state);
+            ChipFitSamples samples;
+            if (!buildChipFitSamples(
+                    chip_index, selected_indices, all_power, state, samples)) {
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelection",
+                    LinearSolve::SolveStatus::FailedSolver,
+                    "chip=" + std::to_string(chip_index + 1)
+                        + " reason=INVALID_SELECTED_SAMPLE action=MARK_CHIP_INVALID");
+                invalidatePressChip(chip_index, state);
+                continue;
             }
 
-            int ntot_local = static_cast<int>(id.size());
-            std::vector<int> group_id(ntot_local, 0);
-            int max_group_id = 0;
+            LinearSolve::SolveDiagnostics diagnostics;
+            std::vector<double> coefficients;
+            std::vector<double> leverage;
+            const LinearSolve::SolveStatus status = fitChipSamples(
+                samples, coefficients, leverage, diagnostics);
+            if (status != LinearSolve::SolveStatus::Normal) {
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelection", status,
+                    "chip=" + std::to_string(chip_index + 1) + " "
+                        + LinearSolve::diagnosticsContext(diagnostics)
+                        + " action=MARK_CHIP_INVALID");
+                invalidatePressChip(chip_index, state);
+                continue;
+            }
 
-            for (int i = 0; i < ntot_local; ++i) {
-                if (group_id[i] == 0) {
-                    max_group_id++;
-                    group_id[i] = max_group_id;
-                }
-                for (int j = i + 1; j < ntot_local; ++j) {
-                    if (group_id[j] == group_id[i]) continue;
-                    if (state.getChiD(k, id[i], id[j]) > thresh_chi) continue;
-                    if (group_id[j] == 0) {
-                        group_id[j] = group_id[i];
-                    } else {
-                        int u = group_id[j];
-                        int v = group_id[i];
-                        for (int w = 0; w < ntot_local; ++w) {
-                            if (group_id[w] == u) {
-                                group_id[w] = v;
-                            }
+            bool loo_valid = true;
+            std::vector<float> chip_press_scores;
+            chip_press_scores.reserve(samples.star_indices.size());
+            for (int local_index = 0;
+                 local_index < static_cast<int>(samples.star_indices.size());
+                 ++local_index) {
+                const double x = 2.0 * (
+                    samples.positions[local_index][0]
+                    / static_cast<double>(lensing.chipnx)) - 1.0;
+                const double y = 2.0 * (
+                    samples.positions[local_index][1]
+                    / static_cast<double>(lensing.chipny)) - 1.0;
+                std::vector<float> model;
+                std::vector<float> constant_model;
+                getPSFModel(
+                    ns, LensingConfig::npl, coefficients,
+                    x, y, model, constant_model);
+                double squared_sum = 0.0;
+                for (int row = chi_window.first;
+                     row <= chi_window.last && loo_valid; ++row) {
+                    for (int column = chi_window.first;
+                         column <= chi_window.last; ++column) {
+                        const int pixel = row * ns + column;
+                        const double observed = samples.power[
+                            static_cast<std::size_t>(local_index) * pixel_count + pixel];
+                        double loo_residual = 0.0;
+                        double loo_model = 0.0;
+                        if (!Internal::computeAnalyticLOO(
+                                observed, model[pixel], leverage[local_index],
+                                LensingConfig::psf_loo_min_denom,
+                                loo_residual, loo_model)) {
+                            loo_valid = false;
+                            break;
                         }
+                        squared_sum += loo_residual * loo_residual;
                     }
                 }
-            }
-
-            std::vector<int> group_size(max_group_id + 1, 0);
-            for (int i = 0; i < ntot_local; ++i) {
-                int u = group_id[i];
-                group_size[u]++;
-            }
-
-            int max_gsize = 0;
-            int max_gid = 0;
-            int max2_gsize = 0;
-            int max2_gid = 0;
-
-            if (state.getNStar(k) > 0 && max_group_id > 0) {
-                max_gsize = group_size[1];
-                max_gid = 1;
-                for (int i = 2; i <= max_group_id; ++i) {
-                    if (group_size[i] > max_gsize) {
-                        max2_gsize = max_gsize;
-                        max2_gid = max_gid;
-                        max_gsize = group_size[i];
-                        max_gid = i;
-                    } else if (group_size[i] > max2_gsize) {
-                        max2_gsize = group_size[i];
-                        max2_gid = i;
-                    }
+                if (!loo_valid) break;
+                const double press_score = std::sqrt(
+                    squared_sum / static_cast<double>(chi_window.pixelCount()));
+                if (!std::isfinite(press_score)) {
+                    loo_valid = false;
+                    break;
                 }
+                const int original_index = samples.star_indices[local_index];
+                chip.selection[original_index].press_score = press_score;
+                chip.selection[original_index].leverage = leverage[local_index];
+                chip_press_scores.push_back(static_cast<float>(press_score));
+            }
+            if (!loo_valid) {
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelection",
+                    LinearSolve::SolveStatus::FailedIllConditioned,
+                    "chip=" + std::to_string(chip_index + 1)
+                        + " reason=INVALID_LOO action=MARK_CHIP_INVALID");
+                invalidatePressChip(chip_index, state);
+                continue;
             }
 
-            for (int i = 0; i < ntot_local; ++i) {
-                int j = id[i];
-                if (group_id[i] != max_gid) {
-                    state.getStarPara(k, j, 4) = -1.0;
-                }
-            }
+            exposure_press_scores.insert(
+                exposure_press_scores.end(),
+                chip_press_scores.begin(), chip_press_scores.end());
+
+            chip.fit.valid = true;
+            chip.fit.initial_star_count = static_cast<int>(samples.star_indices.size());
+            chip.fit.star_indices = samples.star_indices;
+            chip.fit.coefficients = std::move(coefficients);
+            chip.fit.leverage = std::move(leverage);
         }
 
-        // Final local star counts pass
-        for (int k = 0; k < nchip; ++k) {
-            int n = 0;
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
-                n++;
-            }
-            if (n < nstar_min_local) {
-                for (int i = 0; i < state.getNStar(k); ++i) {
-                    state.getStarPara(k, i, 4) = -1.0;
+        const float press_threshold = estimateUpperTailThreshold(
+            exposure_press_scores, LensingConfig::psf_press_sigma_cut);
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            if (!chip.fit.valid) continue;
+
+            std::vector<int> retained_indices;
+            retained_indices.reserve(chip.fit.star_indices.size());
+            for (int star_index : chip.fit.star_indices) {
+                const bool retained = std::isfinite(chip.selection[star_index].press_score)
+                    && chip.selection[star_index].press_score <= press_threshold;
+                chip.selection[star_index].selected_press = retained;
+                state.getStarPara(chip_index, star_index, 4) = retained ? 1.0 : -1.0;
+                if (retained) {
+                    retained_indices.push_back(star_index);
+                } else {
+                    std::vector<float>().swap(
+                        chip.selection[star_index].chi_window);
                 }
+            }
+
+            const bool removed_any =
+                retained_indices.size() != chip.fit.star_indices.size();
+            chip.fit.press_removed_any = removed_any;
+            if (!removed_any) continue;
+            if (static_cast<int>(retained_indices.size())
+                < LensingConfig::nstar_min_local) {
+                invalidatePressChip(chip_index, state);
+                continue;
+            }
+
+            const int initial_star_count = chip.fit.initial_star_count;
+            const std::vector<float> all_power = readChipCandidatePower(
+                chip_index, imageFiles, dirOutput, state);
+            ChipFitSamples retained_samples;
+            if (!buildChipFitSamples(
+                    chip_index, retained_indices, all_power, state,
+                    retained_samples)) {
+                invalidatePressChip(chip_index, state);
+                continue;
+            }
+
+            LinearSolve::SolveDiagnostics diagnostics;
+            std::vector<double> coefficients;
+            std::vector<double> leverage;
+            const LinearSolve::SolveStatus status = fitChipSamples(
+                retained_samples, coefficients, leverage, diagnostics);
+            if (status != LinearSolve::SolveStatus::Normal) {
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelectionRefit", status,
+                    "chip=" + std::to_string(chip_index + 1) + " "
+                        + LinearSolve::diagnosticsContext(diagnostics)
+                        + " action=MARK_CHIP_INVALID");
+                invalidatePressChip(chip_index, state);
+                continue;
+            }
+
+            chip.fit.valid = true;
+            chip.fit.press_removed_any = true;
+            chip.fit.initial_star_count = initial_star_count;
+            chip.fit.star_indices = retained_samples.star_indices;
+            chip.fit.coefficients = std::move(coefficients);
+            chip.fit.leverage = std::move(leverage);
+            for (std::size_t local_index = 0;
+                 local_index < chip.fit.star_indices.size(); ++local_index) {
+                const int original_index = chip.fit.star_indices[local_index];
+                chip.selection[original_index].leverage = chip.fit.leverage[local_index];
             }
         }
     }
@@ -541,6 +1060,7 @@ namespace PSFModel {
     //         checked main-process writers.
     // ==========================================
     void plotStars(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, int nc, const std::vector<std::array<double, 4>>& p_chip, ExposurePSFState& state) {
+        (void)nc;
         int nm = 1000;
         int nstar_min_local = LensingConfig::nstar_min_local;
 
@@ -557,7 +1077,7 @@ namespace PSFModel {
             {static_cast<std::size_t>(
                  RuntimeConfigStore::get().lensing.nmax_chip),
              static_cast<std::size_t>(LensingConfig::nstar_max)},
-            "reserve Lite exposure PSF diagnostics");
+            "reserve exposure PSF diagnostics");
         std::vector<std::array<double, 5>> sk;
         sk.reserve(initial_star_capacity);
 
@@ -584,7 +1104,9 @@ namespace PSFModel {
                 e1_ave += state.getStarPara(k, i, 8);
                 e2_ave += state.getStarPara(k, i, 9);
                 if (nums >= 2 && prev_idx != -1) {
-                    chi_d_ave += state.getChiD(k, i, prev_idx);
+                    chi_d_ave += Internal::normalizedChiDistance(
+                        state.chips[k].selection[i].chi_window,
+                        state.chips[k].selection[prev_idx].chi_window);
                 }
                 prev_idx = i;
             }
@@ -625,6 +1147,10 @@ namespace PSFModel {
         std::string prefix_e = UniversalUtils::getPrefixExpo(imageFiles[0]);
         std::string comp_filename = dirOutput + "/stamps/dat_StarComp/" + prefix_e + "_star_comp_expo.dat";
         MainIO::OutputFile file90(comp_filename);
+        if (!file90.is_open()) {
+            std::cerr << "makePSFLocalFit: Error opening " << comp_filename << std::endl;
+            return;
+        }
         file90 << std::setprecision(17);
 
         for (int k = 0; k < nchip; ++k) {
@@ -643,6 +1169,10 @@ namespace PSFModel {
             std::string coe_filename = OutputLayout::chipPath(
                 dirOutput, "stamps/dat_PsfFit", prefix, "_PSF_coe_local.dat");
             MainIO::OutputFile file10(coe_filename);
+            if (!file10.is_open()) {
+                std::cerr << "makePSFLocalFit: Error opening " << coe_filename << std::endl;
+                continue;
+            }
             file10 << std::setprecision(17);
 
             std::vector<std::array<double, 2>> posi;
@@ -650,8 +1180,8 @@ namespace PSFModel {
             std::vector<float> star_local;
             int removed_non_finite = 0;
 
-            for (int i = 0; i < state.getNStar(k); ++i) {
-                if (state.getStarPara(k, i, 4) < 0.0) continue;
+            const Internal::ChipPSFFitState& cached_fit = state.chips[k].fit;
+            for (int i : cached_fit.star_indices) {
                 double px = state.getStarPara(k, i, 1);
                 double py = state.getStarPara(k, i, 2);
                 double shape_size = state.getStarPara(k, i, 7);
@@ -670,18 +1200,16 @@ namespace PSFModel {
                     star_local.push_back(star[star_offset + idx]);
                 }
             }
-            std::vector<double> PSF_coe_l;
+            std::vector<double> PSF_coe_l = cached_fit.coefficients;
+            std::vector<double> final_leverage = cached_fit.leverage;
             LinearSolve::SolveDiagnostics fit_diagnostics;
-            LinearSolve::SolveStatus fit_status = LinearSolve::SolveStatus::FailedRankDeficient;
-            if (nums >= LensingConfig::nstar_min_local) {
-                fit_status = itpNormPSF(
-                    nums, star_local, posi, ns, npl,
-                    lensing.chipnx, lensing.chipny,
-                    PSF_coe_l, &fit_diagnostics);
-            }
+            LinearSolve::SolveStatus fit_status = cached_fit.valid
+                ? LinearSolve::SolveStatus::Normal
+                : LinearSolve::SolveStatus::FailedRankDeficient;
 
             if (nums >= LensingConfig::nstar_min_local &&
-                fit_status == LinearSolve::SolveStatus::Normal) {
+                fit_status == LinearSolve::SolveStatus::Normal &&
+                final_leverage.size() == static_cast<std::size_t>(nums)) {
 
                 file90 << (k + 1) << " " << nums << " 1\n";
 
@@ -689,17 +1217,34 @@ namespace PSFModel {
                 float poly_ave = 0.0f, poly_std = 0.0f;
 
                 for (int i = 0; i < nums; ++i) {
-                    double xx = 2.0 * (posi[i][0]
-                        / static_cast<double>(lensing.chipnx)) - 1.0;
-                    double yy = 2.0 * (posi[i][1]
-                        / static_cast<double>(lensing.chipny)) - 1.0;
+                    double xx = 2.0 * (posi[i][0] / static_cast<double>(lensing.chipnx)) - 1.0;
+                    double yy = 2.0 * (posi[i][1] / static_cast<double>(lensing.chipny)) - 1.0;
                     std::vector<float> model, model0;
                     getPSFModel(ns, npl, PSF_coe_l, xx, yy, model, model0);
                     ExStar::anaChi2Simple(ns, model.data(), model0.data(), poly_cochi2[i]);
 
+                    std::vector<float> loo_model(static_cast<std::size_t>(ns) * ns);
+                    for (int idx = 0; idx < ns * ns; ++idx) {
+                        const double observed = star_local[
+                            static_cast<std::size_t>(i) * ns * ns + idx];
+                        double residual_value = 0.0;
+                        double model_value = 0.0;
+                        if (!Internal::computeAnalyticLOO(
+                                observed, model[idx], final_leverage[i],
+                                LensingConfig::psf_loo_min_denom,
+                                residual_value, model_value)) {
+                            MPIFailure::abortWorld(
+                                "generate final Lite PSF LOO diagnostics",
+                                "exposure=" + prefix_e
+                                    + " chip=" + std::to_string(k + 1)
+                                    + " star=" + std::to_string(i));
+                        }
+                        loo_model[idx] = static_cast<float>(model_value);
+                    }
+
                     std::array<double, 2> ee = {0.0, 0.0};
                     double size = 0.0;
-                    getPowerAll(ns, ns, model, ee, size, 0.02f);
+                    getPowerAll(ns, ns, loo_model, ee, size, 0.02f);
 
                     double msshape_size = size;
                     double msshape_e1 = ee[0];
@@ -753,17 +1298,16 @@ namespace PSFModel {
     // ==========================================
     // Function: Fit all PSF-frequency pixels with a shared spatial design
     // Method: Factor the constant and polynomial designs once, then reuse both QR objects for every RHS pixel.
-    // Note:   cpp_lite dropped the normalize_positions flag.  It only ever selected the
-    //         native-coordinate design used by interpolatePSF (the PSF_type=2 hybrid fit); with
-    //         that path gone the sole caller itpNormPSF always normalised, so the chip-coordinate
-    //         mapping to [-1,1] is now unconditional.
+    // Note:   Lite retains only the normalized local-polynomial design, so the
+    //         chip-coordinate mapping to [-1,1] is unconditional.
     // ==========================================
     static LinearSolve::SolveStatus fitPSFCoefficients(
         int nsam, const std::vector<float>& image,
         const std::vector<std::array<double, 2>>& posi,
         int ns, int npp, int nx, int ny,
         std::vector<double>& PSF_coe,
-        LinearSolve::SolveDiagnostics* diagnostics) {
+        LinearSolve::SolveDiagnostics* diagnostics,
+        std::vector<double>* leverage) {
         const int pixel_count = ns * ns;
         PSF_coe.assign(static_cast<size_t>(pixel_count) * (npp + 1), 0.0);
 
@@ -817,6 +1361,28 @@ namespace PSFModel {
             return status;
         }
 
+        if (leverage != nullptr) {
+            Eigen::MatrixXd covariance_base;
+            status = polynomial_solver.unscaledCovariance(covariance_base);
+            if (status != LinearSolve::SolveStatus::Normal) return status;
+            leverage->assign(static_cast<std::size_t>(nsam), 0.0);
+            for (int sample = 0; sample < nsam; ++sample) {
+                const double value = (
+                    polynomial_design.row(sample) * covariance_base
+                    * polynomial_design.row(sample).transpose())(0, 0);
+                double loo_residual = 0.0;
+                double loo_model = 0.0;
+                if (!Internal::computeAnalyticLOO(
+                        0.0, 0.0, value,
+                        LensingConfig::psf_loo_min_denom,
+                        loo_residual, loo_model)) {
+                    leverage->clear();
+                    return LinearSolve::SolveStatus::FailedIllConditioned;
+                }
+                (*leverage)[sample] = std::max(0.0, value);
+            }
+        }
+
         Eigen::VectorXd rhs(nsam);
         Eigen::VectorXd constant_solution;
         Eigen::VectorXd polynomial_solution;
@@ -855,9 +1421,11 @@ namespace PSFModel {
         int nsam, const std::vector<float>& image,
         const std::vector<std::array<double, 2>>& posi,
         int ns, int npp, int nx, int ny, std::vector<double>& PSF_coe,
-        LinearSolve::SolveDiagnostics* diagnostics) {
+        LinearSolve::SolveDiagnostics* diagnostics,
+        std::vector<double>* leverage) {
         return fitPSFCoefficients(
-            nsam, image, posi, ns, npp, nx, ny, PSF_coe, diagnostics);
+            nsam, image, posi, ns, npp, nx, ny,
+            PSF_coe, diagnostics, leverage);
     }
 
     void getPSFModel(int ns, int npp, const std::vector<double>& PSF_coe, double xx, double yy, std::vector<float>& modelp, std::vector<float>& model0) {
@@ -994,7 +1562,6 @@ namespace PSFModel {
             return;
         }
         double beta = ns / (2.0 * LensingConfig::pi) / std::sqrt(area / LensingConfig::pi);
-        FWHM = beta * 2.0 * std::sqrt(2.0 * std::log(2.0))
-             * RuntimeConfigStore::get().lensing.pixel_size;
+        FWHM = beta * 2.0 * std::sqrt(2.0 * std::log(2.0)) * LensingConfig::pixel_size;
     }
 }
