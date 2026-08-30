@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <fstream>
+#include <istream>
 #include <sstream>
 #include <string>
 
@@ -35,6 +36,20 @@ inline std::size_t countCatalogDataRows(const std::string& filename) {
         MPIFailure::abortWorld("count catalog rows", filename);
     }
     return row_count;
+}
+
+// ==========================================
+// Function: Read one required paired external-catalog row
+// Method: Consume exactly one physical row and abort the MPI world when the
+//         stream fails after the row-count preflight.
+// ==========================================
+inline void readRequiredPairedCatalogRow(std::istream& input,
+                                         std::string& line,
+                                         const std::string& detail) {
+    if (!std::getline(input, line)) {
+        MPIFailure::abortWorld(
+            "read paired external catalog row", detail);
+    }
 }
 
 // ==========================================

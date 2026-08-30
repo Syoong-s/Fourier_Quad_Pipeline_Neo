@@ -124,16 +124,26 @@ void testSentinelClassification(TemporaryNormTree& tree) {
 // ==========================================
 void testInputFailures(TemporaryNormTree& tree) {
     std::filesystem::remove(tree.normFile());
-    require(Universalblock::checkNorm(tree.imageFile(), tree.outputRoot())
-                == Universalblock::NormStatus::Missing,
+    const Universalblock::NormStatus missing_status =
+        Universalblock::checkNorm(tree.imageFile(), tree.outputRoot());
+    require(missing_status == Universalblock::NormStatus::Missing,
             "absent norm path must be Missing");
+    require(Universalblock::normErrorDetail(
+                missing_status, tree.imageFile(), tree.outputRoot())
+                == "missing norm FITS: " + tree.normFile(),
+            "Missing diagnostic must identify the derived norm path");
 
     std::ofstream malformed(tree.normFile(), std::ios::binary | std::ios::trunc);
     malformed << "not a FITS image";
     malformed.close();
-    require(Universalblock::checkNorm(tree.imageFile(), tree.outputRoot())
-                == Universalblock::NormStatus::ReadError,
+    const Universalblock::NormStatus read_error_status =
+        Universalblock::checkNorm(tree.imageFile(), tree.outputRoot());
+    require(read_error_status == Universalblock::NormStatus::ReadError,
             "malformed existing norm file must be ReadError");
+    require(Universalblock::normErrorDetail(
+                read_error_status, tree.imageFile(), tree.outputRoot())
+                == "unreadable norm FITS: " + tree.normFile(),
+            "ReadError diagnostic must identify the derived norm path");
 }
 
 }  // namespace

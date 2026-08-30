@@ -83,7 +83,7 @@ sbatch mpi-smoke-test.slurm
 
 ## Run
 
-Pass an INI or C++ CLI options after the script name. For example:
+Pass an INI path or C++ CLI options after the script name. For example:
 
 ```bash
 sbatch cpppipeline.slurm \

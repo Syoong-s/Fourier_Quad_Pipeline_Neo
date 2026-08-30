@@ -36,8 +36,9 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
         return;
     }
     if (normStatus != Universalblock::NormStatus::Valid) {
-        Universalblock::reportNormError(normStatus, imageFile, dirOutput);
-        return;
+        MPIFailure::abortWorld(
+            "check Stage 1 norm before galaxy FFT",
+            Universalblock::normErrorDetail(normStatus, imageFile, dirOutput));
     }
 
     int ns = LensingConfig::ns;

@@ -163,9 +163,10 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             continue;
         }
         if (normStatus != Universalblock::NormStatus::Valid) {
-            Universalblock::reportNormError(
-                normStatus, imageFiles[ichip], dirOutput);
-            continue;
+            MPIFailure::abortWorld(
+                "check Stage 1 norm before shear measurement",
+                Universalblock::normErrorDetail(
+                    normStatus, imageFiles[ichip], dirOutput));
         }
 
         proc_error = 0;

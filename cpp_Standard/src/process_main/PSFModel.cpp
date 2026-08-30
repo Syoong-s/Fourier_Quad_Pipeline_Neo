@@ -445,9 +445,10 @@ namespace PSFModel {
                 continue;
             }
             if (normStatus != Universalblock::NormStatus::Valid) {
-                Universalblock::reportNormError(
-                    normStatus, imageFiles[k], dirOutput);
-                continue;
+                MPIFailure::abortWorld(
+                    "validate PSF chip norm",
+                    Universalblock::normErrorDetail(
+                        normStatus, imageFiles[k], dirOutput));
             }
 
             double cRPIX[2] = {0.0, 0.0};

@@ -177,9 +177,10 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             continue;
         }
         if (normStatus != Universalblock::NormStatus::Valid) {
-            Universalblock::reportNormError(
-                normStatus, imageFiles[ichip], dirOutput);
-            continue;
+            MPIFailure::abortWorld(
+                "check Stage 1 norm before catalog combination",
+                Universalblock::normErrorDetail(
+                    normStatus, imageFiles[ichip], dirOutput));
         }
 
         int chip_index = UniversalUtils::getChipId(imageFiles[ichip]);
@@ -258,9 +259,8 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
 
             std::string cat_content;
             if (use_external_catalog) {
-                if (!std::getline(fin15, cat_content)) {
-                    break;
-                }
+                Internal::readRequiredPairedCatalogRow(
+                    fin15, cat_content, prefix);
                 cat_content = trimRight(cat_content);
             }
 

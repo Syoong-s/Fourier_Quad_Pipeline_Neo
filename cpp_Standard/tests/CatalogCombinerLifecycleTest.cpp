@@ -18,6 +18,7 @@
 #include <system_error>
 #include <vector>
 
+#include <sys/wait.h>
 #include <unistd.h>
 
 ProcessMain::State ProcessMain::state;
@@ -93,6 +94,28 @@ public:
         std::filesystem::create_directories(
             std::filesystem::path(filename).parent_path());
         FitsIO::writeImage(filename, 1, 1, std::vector<float>{sentinel});
+    }
+
+    // ==========================================
+    // Function: Remove the Stage-1 norm product
+    // Method: Delete the production-derived path to synthesize a Missing state.
+    // ==========================================
+    void removeNorm() const {
+        std::filesystem::remove(
+            Universalblock::normFilename(image_file_, root_.string()));
+    }
+
+    // ==========================================
+    // Function: Replace the Stage-1 norm product with malformed bytes
+    // Method: Truncate the production-derived path to synthesize a ReadError state.
+    // ==========================================
+    void writeMalformedNorm() const {
+        std::ofstream malformed(
+            Universalblock::normFilename(image_file_, root_.string()),
+            std::ios::binary | std::ios::trunc);
+        require(static_cast<bool>(malformed),
+                "malformed norm fixture must open");
+        malformed << "not a FITS image";
     }
 
     // ==========================================
@@ -181,6 +204,45 @@ void testNoOutputCases(TemporaryCatalogTree& tree) {
 }
 
 // ==========================================
+// Function: Require Stage 9 to terminate for a norm integrity failure
+// Method: Run the production combiner in a child process and accept only a
+//         nonzero exit or terminating signal as fatal behavior.
+// ==========================================
+void requireNormFailureAbort(const TemporaryCatalogTree& tree,
+                             const std::string& message) {
+    const pid_t child = ::fork();
+    require(child >= 0, "fork failed for norm integrity case");
+    if (child == 0) {
+        tree.combine(0.0f);
+        std::_Exit(EXIT_SUCCESS);
+    }
+
+    int status = 0;
+    require(::waitpid(child, &status, 0) == child,
+            "waitpid failed for norm integrity case");
+    require((WIFEXITED(status) && WEXITSTATUS(status) != EXIT_SUCCESS)
+                || WIFSIGNALED(status),
+            message);
+}
+
+// ==========================================
+// Function: Verify missing and unreadable norm products are fatal
+// Method: Exercise both integrity states through Stage 9, then restore a valid
+//         sentinel so the ordinary output lifecycle cases can continue.
+// ==========================================
+void testNormIntegrityFailures(TemporaryCatalogTree& tree) {
+    tree.writeCatalogs(true, true);
+    tree.removeNorm();
+    requireNormFailureAbort(
+        tree, "Missing norm must terminate Stage 9");
+
+    tree.writeMalformedNorm();
+    requireNormFailureAbort(
+        tree, "ReadError norm must terminate Stage 9");
+    tree.writeNorm(-1.0f);
+}
+
+// ==========================================
 // Function: Verify lazy creation and the complete Stage-9 schema
 // Method: Require exposure/CCD header and data order, exact width, and terminal Chi2.
 // ==========================================
@@ -258,6 +320,7 @@ int main() {
 
     TemporaryCatalogTree tree;
     testNoOutputCases(tree);
+    testNormIntegrityFailures(tree);
     testLiveOutput(tree);
     testSentinelOutput(tree);
     std::cout << "CatalogCombiner lifecycle tests passed\n";

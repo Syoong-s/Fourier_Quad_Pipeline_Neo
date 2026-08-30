@@ -32,12 +32,12 @@ NormStatus checkNorm(const std::string& imageFile,
                      float* sentinel = nullptr);
 
 // ==========================================
-// Function: Report a real normalized-image input failure
-// Method: Emit one shared diagnostic for missing/read-error states and remain silent otherwise.
+// Function: Describe a normalized-image input failure
+// Method: Return a stable missing/read-error diagnostic for MPI-wide fatal reporting.
 // ==========================================
-void reportNormError(NormStatus status,
-                     const std::string& imageFile,
-                     const std::string& dirOutput);
+std::string normErrorDetail(NormStatus status,
+                            const std::string& imageFile,
+                            const std::string& dirOutput);
 
 }  // namespace Universalblock
 

@@ -152,8 +152,10 @@ namespace SourceExtractor {
             return;
         }
         if (normStatus != Universalblock::NormStatus::Valid) {
-            Universalblock::reportNormError(normStatus, imageFile, dirOutput);
-            return;
+            MPIFailure::abortWorld(
+                "check Stage 1 norm before source extraction",
+                Universalblock::normErrorDetail(
+                    normStatus, imageFile, dirOutput));
         }
 
         int proc_error = 0;

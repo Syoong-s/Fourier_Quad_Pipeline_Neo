@@ -51,8 +51,10 @@ namespace FourierTransformSt1 {
             return;
         }
         if (normStatus != Universalblock::NormStatus::Valid) {
-            Universalblock::reportNormError(normStatus, imageFile, dirOutput);
-            return;
+            MPIFailure::abortWorld(
+                "check Stage 1 norm before star FFT",
+                Universalblock::normErrorDetail(
+                    normStatus, imageFile, dirOutput));
         }
 
         std::string raw_prefix = UniversalUtils::getPrefix(imageFile);

@@ -45,5 +45,14 @@ row now has 49 fields; regenerate older 48-field products before rearrangement
 or FD. Invalid numerical rows are represented by a full `-99999` sentinel row
 before Stage 9 rejects them.
 
+Every downstream Norm gate treats an invalid sentinel as an ordinary chip
+skip, but a missing or unreadable Norm FITS product is a pipeline-integrity
+failure and aborts the MPI world. Stage 9 likewise aborts if a paired external
+catalog row cannot be read after row-count preflight; it never treats runtime
+EOF as normal completion. `UniversalblockTest`, `CatalogRowCountTest`, and
+`CatalogCombinerLifecycleTest` provide the focused local regression coverage
+for these contracts and are compiled explicitly with the same C++17 MPI and
+science-library settings as the production build.
+
 See the [main guide](../CPP_GUIDE.md) and
 [parameter reference](../CPP_PIPELINE_PARAMETERS.md).

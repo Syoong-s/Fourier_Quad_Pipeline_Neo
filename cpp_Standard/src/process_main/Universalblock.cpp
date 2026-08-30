@@ -5,7 +5,7 @@
 #include "process_main/UniversalUtils.hpp"
 
 #include <cmath>
-#include <iostream>
+#include <string>
 
 namespace Universalblock {
 
@@ -50,19 +50,20 @@ NormStatus checkNorm(const std::string& imageFile,
 }
 
 // ==========================================
-// Function: Report a real normalized-image input failure
-// Method: Emit one shared diagnostic for missing/read-error states and remain silent otherwise.
+// Function: Describe a normalized-image input failure
+// Method: Return a stable missing/read-error diagnostic for MPI-wide fatal reporting.
 // ==========================================
-void reportNormError(NormStatus status,
-                     const std::string& imageFile,
-                     const std::string& dirOutput) {
+std::string normErrorDetail(NormStatus status,
+                            const std::string& imageFile,
+                            const std::string& dirOutput) {
+    const std::string filename = normFilename(imageFile, dirOutput);
     if (status == NormStatus::Missing) {
-        std::cerr << "Error / norm FITS file missing: "
-                  << normFilename(imageFile, dirOutput) << std::endl;
-    } else if (status == NormStatus::ReadError) {
-        std::cerr << "Error / norm FITS read failure: "
-                  << normFilename(imageFile, dirOutput) << std::endl;
+        return "missing norm FITS: " + filename;
     }
+    if (status == NormStatus::ReadError) {
+        return "unreadable norm FITS: " + filename;
+    }
+    return "unexpected norm status for: " + filename;
 }
 
 }  // namespace Universalblock
