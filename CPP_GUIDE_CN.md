@@ -116,6 +116,32 @@ INI 列表，后续同名选项追加。一个裸位置参数仍可作为 `--exp
 派生常量，然后执行 `make clean` 并重新编译。参数参考按七个配置头文件各给一张
 完整的 Standard/Lite 对照表，并明确标出哪些值可在不重编译的情况下覆盖。
 
+### 常用及随图像数据源变化的参数
+
+下表是运行前应主动检查的参数入口。运行时设置优先写入 INI；有对应 CLI 的字段可在
+单次调用中覆盖。只有标为“编译时”的固定参数才需要修改所选版本的头文件并重新执行
+`make clean && make`。派生尺寸和运行时解析出的星表列号不要单独修改。
+
+| 类别 | 参数（当前默认） | 修改方式 | 何时修改与约束 |
+|---|---|---|---|
+| 顶层阶段 | `[process].run_process_astrocat/run_process_extcat/run_process_init/run_process_main/run_process_rearr/run_process_fd` | INI；运行时 `--run-astrocat`、`--run-extcat`、`--run-init`、`--run-main`、`--run-rearr`、`--run-fd` | 选择本次执行的阶段。Standard 默认 `false/false/true/true/true/true`，Lite 默认 `false/false/true/true/false/false`。 |
+| Science/DQ 归档与数据集 | `[init].science_root`、`dq_root`、`output_root`、`datasets`、`contains` | INI；运行时 `--science-root`、`--dq-root`、`--output-root`、`--dataset`、`--contains` | 更换观测归档、文件名前缀、筛选 token 或输出根目录时修改。Lite 必须提供逐 CCD DQ masks。 |
+| 曝光表与阶段输出 | `[process].expo_list`、`rearr_output_directory`、`rearr_output_base_directory`、`rearranged_expo_list_filename`、`rearranged_expo_list_directory`、`fd_expo_list`、`fd_output_directory`、`fd_output_base_directory` | INI；对应 CLI 为 `--expo-list`、`--rearr-output-dir`、`--rearr-output-base`、`--rearr-list-name`、`--rearr-list-dir`、`--fd-expo-list`、`--fd-output-dir`、`--fd-output-base` | 下游单独运行，或改变重排/FD 输出目录和曝光表位置时修改。 |
+| Gaia 星表分块 | `[astrocat].input_directory`、`output_directory`、`add_header=true`、`existing_policy=fail` | INI；运行时 `--astrocat-input`、`--astrocat-output`、`--astrocat-add-header`、`--astrocat-existing` | 更换 Gaia 原始星表或重跑策略时修改。输出只属于 `process_astrocat`，不会传播到 `[lensing].astrometry_cat`。 |
+| Gaia 星表布局 | `[lensing].astrometry_cat_type=1`、`astrometry_cat` | INI，运行时 | `1` 读取旧式大 `gaia_*.cat` 瓦片；`2` 累积读取 `process_astrocat` 生成的一度 `des_y6_*.dat` 瓦片。切换布局时同时指向对应消费目录，无需重编译。 |
+| 外部星表发现与发布 | `[extcat].input_directory`、`output_directory` | INI；运行时 `--extcat-input`、`--extcat-output` | 更换 External source catalog 的原始目录或规范化瓦片目录时修改。输出目录不能等于或位于输入目录内；它同时是有效的 `SOURCE_CAT`。 |
+| 外部星表 schema | `[extcat].total_columns`、`use_explicit_columns`、`input_columns`、`use_explicit_coordinate_columns`、`ra_column`、`dec_column`、`zp_column` | INI；投影和 RA/Dec/ZP 列可用 `--extcat-columns`、`--extcat-ra-column`、`--extcat-dec-column`、`--extcat-zp-column` 覆盖 | 更换 survey 或列顺序时修改。显式投影必须保留 RA、Dec、photo-z 以及启用阶段需要的字段；完整行宽和下游偏移由 `CatalogLayout` 自动解析。 |
+| FD magnitude 映射 | `[extcat].mag_g_column`、`mag_r_column`、`mag_i_column`、`mag_z_column`、`mag_y_column` | INI，运行时；`0` 表示该波段不存在 | 更换 survey/band schema 时修改。显式投影应保留所用 magnitude；`process_fd` 至少需要一个波段，并按 `i -> z -> r -> g -> y` 选择首个可用列，无需手工修改 FD 偏移。 |
+| 标定路径与 Standard 分支 | `[lensing].flat_path`、`psf_path`、`astrometry_trivial=0`、`include_flat=0`、`include_mask=2`、`ext_cat=1`、`ext_psf=0`、`psf_type=1`、`psf_ms=0` | Standard 的 INI 运行时设置；Lite 拒绝这些已删除分支键 | 更换平场/外部 PSF 数据或选择替代科学分支时修改。Lite 固定为 Gaia、无平场、逐 CCD DQ、外部源星表、帧内 PSF、局域多项式且无 PCA。 |
+| 图像与探测器几何 | `[lensing].ccd_split=2`、`pixel_size=0.2628`、`nmax_chip=62`、`chipnx=2046`、`chipny=4094`；编译时 `npx=3000`、`npy=5000`、`NMAX_EXPO=25000` | 前五项为 INI 运行时；后三项在 `config/LensingConfig.hpp` 中修改并重编译 | 更换相机、CCD 尺寸、放大器布局、像元尺度或单批曝光规模时成组核对。运行时物理芯片尺寸不替代编译期图像数组尺寸。 |
+| 数值阶段 | `[lensing].process_stage=223092870` | INI，运行时 | 用素因数选择九个主流程阶段；阶段 9（23）必须与阶段 8（19）同时启用。 |
+| 源检测与像素阈值 | `saturation_thresh=25000` | `config/LensingConfig.hpp`，编译时 | 更换图像源、增益或饱和定义后，以代表性数据重新标定并重编译。 |
+| FD 探测器规则 | `bad_ccds={2,31,53,61}`、`chip_xmin=50`、`chip_xmax=1990`、`chip_ymin=100`、`chip_ymax=3990` | `config/FDConfig.hpp`，编译时 | 更换相机、坏 CCD 清单或边缘 mask 策略时修改；`n_bad_ccds` 是派生长度，不应单独改。 |
+
+每个独立参数的 Standard/Lite 默认值、合法值、INI/CLI 覆盖和重编译要求见
+[CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md)。修改高耦合参数时，应保留基准
+配置，并先用最小代表性数据验证。
+
 ## 常用运行方式
 
 按 INI 串联运行：

@@ -65,6 +65,12 @@ make -j4
 mpirun -np 4 ./Fourier_Quad_Pipe --config pipeline.ini
 ```
 
+Docker 与 HPC 运行说明入口：
+
+| 实现 | Docker 本地运行 | HPC / Slurm + Apptainer |
+|---|---|---|
+| C++ | [C++ Docker 指南](cpp_docker/README-CN.md) | [C++ runner 指南](cpp_docker/runner/README-CN.md) |
+
 完整编译变量、阶段选择、运行方式、输入输出和失败规则见
 [CPP_GUIDE_CN.md](CPP_GUIDE_CN.md)。
 

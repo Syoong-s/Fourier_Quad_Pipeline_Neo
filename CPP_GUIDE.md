@@ -149,6 +149,33 @@ rather than derived constants, then run `make clean` and rebuild. The parameter
 reference has one complete Standard/Lite comparison table for each of the seven
 configuration headers and marks every value that can avoid a rebuild.
 
+### Common and data-source-dependent parameters
+
+Review the following entry points before each run. Put persistent runtime settings in the
+INI and use the listed CLI options only for one-off overrides. Only fixed settings marked
+as build time require editing the selected variant's header and running
+`make clean && make`. Do not edit derived sizes or runtime-resolved catalog offsets alone.
+
+| Category | Parameters (current defaults) | How to change | When to change / constraints |
+|---|---|---|---|
+| Top-level phases | `[process].run_process_astrocat/run_process_extcat/run_process_init/run_process_main/run_process_rearr/run_process_fd` | INI; runtime `--run-astrocat`, `--run-extcat`, `--run-init`, `--run-main`, `--run-rearr`, `--run-fd` | Select phases for this invocation. Standard defaults to `false/false/true/true/true/true`; Lite defaults to `false/false/true/true/false/false`. |
+| Science/DQ archives and datasets | `[init].science_root`, `dq_root`, `output_root`, `datasets`, `contains` | INI; runtime `--science-root`, `--dq-root`, `--output-root`, `--dataset`, `--contains` | Change for another observing archive, basename prefix, filter token, or output root. Lite requires per-CCD DQ masks. |
+| Exposure lists and phase outputs | `[process].expo_list`, `rearr_output_directory`, `rearr_output_base_directory`, `rearranged_expo_list_filename`, `rearranged_expo_list_directory`, `fd_expo_list`, `fd_output_directory`, `fd_output_base_directory` | INI; corresponding CLI: `--expo-list`, `--rearr-output-dir`, `--rearr-output-base`, `--rearr-list-name`, `--rearr-list-dir`, `--fd-expo-list`, `--fd-output-dir`, `--fd-output-base` | Change for downstream-only execution or a different rearrangement/FD output or exposure-list location. |
+| Gaia catalog tiling | `[astrocat].input_directory`, `output_directory`, `add_header=true`, `existing_policy=fail` | INI; runtime `--astrocat-input`, `--astrocat-output`, `--astrocat-add-header`, `--astrocat-existing` | Change for another raw Gaia catalog or rerun policy. Output belongs only to `process_astrocat` and is not propagated to `[lensing].astrometry_cat`. |
+| Gaia catalog layout | `[lensing].astrometry_cat_type=1`, `astrometry_cat` | INI, runtime | `1` reads legacy large `gaia_*.cat` tiles; `2` accumulates one-degree `des_y6_*.dat` tiles from `process_astrocat`. Change the consumer directory with the layout; no rebuild is required. |
+| External-catalog discovery and publication | `[extcat].input_directory`, `output_directory` | INI; runtime `--extcat-input`, `--extcat-output` | Change the raw external-catalog directory or normalized tile directory. Output must not equal or sit below input; it is also the effective `SOURCE_CAT`. |
+| External-catalog schema | `[extcat].total_columns`, `use_explicit_columns`, `input_columns`, `use_explicit_coordinate_columns`, `ra_column`, `dec_column`, `zp_column` | INI; projection and RA/Dec/ZP can be overridden with `--extcat-columns`, `--extcat-ra-column`, `--extcat-dec-column`, `--extcat-zp-column` | Change for another survey or column order. Explicit projection must retain RA, Dec, photo-z, and fields consumed by enabled phases; `CatalogLayout` resolves complete widths and downstream offsets. |
+| FD magnitude mapping | `[extcat].mag_g_column`, `mag_r_column`, `mag_i_column`, `mag_z_column`, `mag_y_column` | INI, runtime; `0` marks an absent band | Change for another survey/band schema. Explicit projection should retain the selected magnitude; `process_fd` requires at least one band and chooses the first available in `i -> z -> r -> g -> y` order, without hand-edited FD offsets. |
+| Calibration paths and Standard branches | `[lensing].flat_path`, `psf_path`, `astrometry_trivial=0`, `include_flat=0`, `include_mask=2`, `ext_cat=1`, `ext_psf=0`, `psf_type=1`, `psf_ms=0` | Standard INI runtime settings; Lite rejects keys for deleted branches | Change for another flat/external-PSF source or an alternate science branch. Lite is fixed to Gaia, no flat, per-CCD DQ, external sources, frame PSF, local polynomial, and no PCA. |
+| Image and detector geometry | `[lensing].ccd_split=2`, `pixel_size=0.2628`, `nmax_chip=62`, `chipnx=2046`, `chipny=4094`; build-time `npx=3000`, `npy=5000`, `NMAX_EXPO=25000` | First five are runtime INI fields; edit the last three in `config/LensingConfig.hpp` and rebuild | Review together for another camera, CCD size, amplifier layout, pixel scale, or exposure-batch size. Runtime physical chip dimensions do not replace compile-time image-array dimensions. |
+| Numerical stages | `[lensing].process_stage=223092870` | INI, runtime | Select the nine main stages by prime factors; Stage 9 (23) requires Stage 8 (19). |
+| Source detection and pixel threshold | `saturation_thresh=25000` | `config/LensingConfig.hpp`, build time | Recalibrate on representative data and rebuild when the image source, gain, or saturation definition changes. |
+| FD detector rules | `bad_ccds={2,31,53,61}`, `chip_xmin=50`, `chip_xmax=1990`, `chip_ymin=100`, `chip_ymax=3990` | `config/FDConfig.hpp`, build time | Change for another camera, bad-CCD list, or chip-edge mask. `n_bad_ccds` is a derived length and should not be edited alone. |
+
+See [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md) for every individual
+Standard/Lite default, legal value, INI/CLI override, and rebuild rule. Preserve a baseline
+configuration and validate coupled changes on the smallest representative dataset first.
+
 ## Common run modes
 
 Initializer and numerical stages from one INI:

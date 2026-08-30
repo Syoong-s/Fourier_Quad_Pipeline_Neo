@@ -24,6 +24,18 @@ and vendor-fabric acceleration need separate qualification.
 
 ## Build and verify
 
+### Pull the GHCR image
+
+```bash
+docker pull ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest
+```
+
+### Download the source and build
+
+Download `cpp-docker-<tag>.zip` for the selected tag from
+[GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases), extract it,
+then run:
+
 ```bash
 docker build --platform linux/amd64 --target runtime \
   --build-arg BUILD_JOBS=4 \
@@ -41,6 +53,26 @@ cp .env.example .env
 # Set CPP_SOURCE_HOST and every host path used by the selected phases.
 docker compose run --rm FourierQuad-CPP
 ```
+
+### Common `.env` parameters
+
+Copy `.env.example`, then adapt the table to the host directories and selected phases.
+`*_HOST` values are host paths; `*_CONTAINER` values are the absolute paths seen by the
+pipeline and `pipeline.ini` inside the container.
+
+| Parameter | Typical change | Constraint |
+|---|---|---|
+| `IMAGE_NAME` | Set the image tag to run or build locally. | It must match `docker build -t` or the pulled image. |
+| `BUILD_JOBS` | Set image-build parallelism. | Size it for available host CPU and memory. |
+| `HOST_UID`, `HOST_GID` | Set the current host user's UID/GID. | Change when host users must directly own and edit outputs. |
+| `CPP_SOURCE_HOST` | Point to a `cpp_Standard` or `cpp_Lite` source directory. | It is mounted read/write at `/workspace/src_pipe` for `pipeline.ini` and build products. |
+| `SCIENCE_ROOT_HOST/CONTAINER` | Set the Science-image archive and its container path. | Used by `process_init`; match `[init].science_root` or CLI and enable it through `compose.optional.yaml`. |
+| `DQ_ROOT_HOST/CONTAINER` | Set the DQ-mask archive and its container path. | Required whenever DQ is read and always for Lite; match `[init].dq_root` or CLI. |
+| `ASTROMETRY_CAT_HOST/CONTAINER` | Point to the Gaia catalog directory. | The container path must match `[lensing].astrometry_cat`; Type 1/2 must also match `[lensing].astrometry_cat_type`. |
+| `SOURCE_CAT_HOST/CONTAINER` | Point to normalized external-source tiles. | Match the effective `[extcat].output_directory`, `[lensing].source_cat`, or `--extcat-output` path. |
+| `FLAT_PATH_HOST/CONTAINER` | Point to flat calibration data. | Needed only for Standard with `[lensing].include_flat=1`; match `[lensing].flat_path`. |
+| `PROCESS_DATA_HOST/CONTAINER` | Point to writable processing storage. | Holds exposure lists, intermediates, and results; container default is `/data/DataProcess`. |
+| `EXTCAT_INPUT_*`, `REARR_OUTPUT_*`, `EXPOLIST_DIR_*`, `FD_OUTPUT_*` | Set only for phases that need independent mounts. | Add `compose.optional.yaml` and use the matching container paths in INI/CLI; otherwise prefer locations below processing data. |
 
 Inside the container:
 

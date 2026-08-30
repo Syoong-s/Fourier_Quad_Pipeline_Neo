@@ -17,6 +17,17 @@ OpenBLAS 0.3.33。
 
 ## 构建与验证
 
+### 拉取 GHCR 镜像
+
+```bash
+docker pull ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest
+```
+
+### 下载源码并构建
+
+从 [GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases)
+下载与所用 tag 对应的 `cpp-docker-<tag>.zip`，解压后执行：
+
 ```bash
 docker build --platform linux/amd64 --target runtime \
   --build-arg BUILD_JOBS=4 \
@@ -33,6 +44,25 @@ cp .env.example .env
 # 设置 CPP_SOURCE_HOST，以及本次启用阶段需要的宿主路径。
 docker compose run --rm FourierQuad-CPP
 ```
+
+### 常改 `.env` 参数
+
+先复制 `.env.example`，再按实际宿主目录和所选阶段修改下表。`*_HOST` 是宿主路径，
+`*_CONTAINER` 是 Pipeline 和 `pipeline.ini` 在容器内看到的绝对路径。
+
+| 参数 | 通常如何修改 | 约束 |
+|---|---|---|
+| `IMAGE_NAME` | 设为准备运行或本地构建的镜像 tag。 | 必须与 `docker build -t` 或已拉取镜像一致。 |
+| `BUILD_JOBS` | 设为镜像构建允许的并行任务数。 | 按本机 CPU 和内存调整。 |
+| `HOST_UID`、`HOST_GID` | 设为当前宿主用户 UID/GID。 | 输出需要由宿主用户直接读写时修改。 |
+| `CPP_SOURCE_HOST` | 指向 `cpp_Standard` 或 `cpp_Lite` 源码目录。 | 以读写方式挂载到 `/workspace/src_pipe`，用于保存 `pipeline.ini` 和编译产物。 |
+| `SCIENCE_ROOT_HOST/CONTAINER` | 指向 Science image 归档及其容器路径。 | `process_init` 使用；容器路径须与 `[init].science_root` 或 CLI 一致，并通过 `compose.optional.yaml` 启用。 |
+| `DQ_ROOT_HOST/CONTAINER` | 指向 DQ mask 归档及其容器路径。 | 启用 DQ 访问时必须设置；Lite 必须提供。容器路径须与 `[init].dq_root` 或 CLI 一致。 |
+| `ASTROMETRY_CAT_HOST/CONTAINER` | 指向 Gaia 星表目录。 | 容器路径须与 `[lensing].astrometry_cat` 一致；Type 1/2 还须匹配 `[lensing].astrometry_cat_type`。 |
+| `SOURCE_CAT_HOST/CONTAINER` | 指向规范化 External source catalog 目录。 | 容器路径须与 `[extcat].output_directory`、`[lensing].source_cat` 或 `--extcat-output` 的有效值一致。 |
+| `FLAT_PATH_HOST/CONTAINER` | 指向平场标定目录。 | 仅 Standard 启用 `[lensing].include_flat=1` 时需要；容器路径须与 `[lensing].flat_path` 一致。 |
+| `PROCESS_DATA_HOST/CONTAINER` | 指向可写处理目录。 | 保存曝光表、中间文件和结果；容器内默认 `/data/DataProcess`。 |
+| `EXTCAT_INPUT_*`、`REARR_OUTPUT_*`、`EXPOLIST_DIR_*`、`FD_OUTPUT_*` | 只为需要独立挂载的相应阶段设置。 | 使用时叠加 `compose.optional.yaml`，并在 INI/CLI 中使用对应容器路径；未设置时优先使用处理目录下的位置。 |
 
 容器内执行：
 

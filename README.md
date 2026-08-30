@@ -73,6 +73,12 @@ make -j4
 mpirun -np 4 ./Fourier_Quad_Pipe --config pipeline.ini
 ```
 
+Docker and HPC execution guides:
+
+| Implementation | Local Docker | HPC / Slurm + Apptainer |
+|---|---|---|
+| C++ | [C++ Docker guide](cpp_docker/README.md) | [C++ runner guide](cpp_docker/runner/README.md) |
+
 See [CPP_GUIDE.md](CPP_GUIDE.md) for complete build variables, phase selection,
 run modes, inputs, outputs, and failure rules.
 
