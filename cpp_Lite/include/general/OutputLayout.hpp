@@ -1,55 +1,12 @@
 #ifndef GENERAL_OUTPUT_LAYOUT_HPP
 #define GENERAL_OUTPUT_LAYOUT_HPP
 
-#include <array>
+#include "pathconfig.hpp"
+
 #include <stdexcept>
 #include <string>
 
 namespace OutputLayout {
-
-// Base directories that never receive process_main chip products. Together
-// with CHIP_PRODUCT_DIRECTORIES, this is the complete process_init directory
-// contract. std::filesystem::create_directories makes creation idempotent.
-inline constexpr std::array<const char*, 14> NON_CHIP_BASE_DIRECTORIES = {
-    "science",
-    "dqmask",
-    "stamps",
-    "result",
-    "stamps/dat_StarInfo",
-    "stamps/fits_StarP",
-    "stamps/fits_PsfSrc",
-    "stamps/dat_ExpoInfo",
-    "stamps/dat_StarComp",
-    "stamps/dat_Rescale",
-    "stamps/dat_Pcs",
-    "stamps/dat_StarCompV2",
-    "astrometry/Head",
-    "astrometry/dat_Chk",
-};
-
-// Union of every Standard/Lite process_main directory whose products have one
-// file per chip. Lite intentionally reserves the Standard-only PSF directories
-// so both variants expose one stable initializer layout. After publishing
-// expo_<target>.list, process_init uses the same list to materialize one
-// exposure subdirectory beneath each product directory.
-inline constexpr std::array<const char*, 16> CHIP_PRODUCT_DIRECTORIES = {
-    "stamps/Norm",
-    "stamps/cat_Orig",
-    "stamps/dat_StarCanInfo",
-    "stamps/fits_StarCan",
-    "stamps/fits_StarCanN",
-    "stamps/fits_StarCanP",
-    "stamps/dat_SrcInfo",
-    "stamps/fits_Src",
-    "stamps/fits_Noise",
-    "stamps/fits_SrcP",
-    "stamps/dat_PsfFit",
-    "stamps/fits_PsfLocal",
-    "stamps/dat_Shear",
-    "stamps/dat_StarXY",
-    "stamps/fits_PsfResi",
-    "astrometry/dat_Astro",
-};
 
 // Extract the exposure component from the established <exposure>_<chip>
 // prefix contract used by process_init and UniversalUtils::getPrefix.

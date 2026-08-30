@@ -1,7 +1,8 @@
 #ifndef LENSING_CONFIG_HPP
 #define LENSING_CONFIG_HPP
 
-#include <string>
+#include "pathconfig.hpp"
+
 #include <cmath>
 
 namespace LensingConfig {
@@ -31,18 +32,6 @@ namespace LensingConfig {
     constexpr int include_FLAT = 0;  // Apply super-flat correction when one.
     constexpr int include_Mask = 2;  // Select the DQ-mask input mode.
     constexpr int include_BGsub = 1;  // Subtract the fitted science-image background.
-
-    // Catalog/flat paths (originally from para.inc).
-    const std::string ASTROMETRY_CAT = "/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted";  // Gaia tile directory.
-
-    // ==========================================
-    // Configuration: Primary external source-catalog directory
-    // Method: Seed RuntimeConfig's authoritative extcat output/source path;
-    //         runtime file or CLI overrides update the copied value.
-    // ==========================================
-    inline const std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";  // Default external catalog tile directory.
-    const std::string FLAT_PATH = "/lustre/home/acct-phyzj/share/DES/testy/DES_super_flat/i2014";  // Super-flat FITS directory.
-    const std::string PSF_PATH = "hahahaha";  // External PSF image directory.
 
     // Split parameters
     constexpr int ext_cat = 1;  // Use the external source catalog when one.

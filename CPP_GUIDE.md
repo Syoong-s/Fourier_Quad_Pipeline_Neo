@@ -146,8 +146,33 @@ For a run-time setting, prefer the selected variant's INI template and use CLI
 only for per-run overrides. For a header-only setting, edit the matching file
 below `cpp_Standard/config/` or `cpp_Lite/config/`, change source parameters
 rather than derived constants, then run `make clean` and rebuild. The parameter
-reference has one complete Standard/Lite comparison table for each of the seven
-configuration headers and marks every value that can avoid a rebuild.
+reference has one complete Standard/Lite comparison table for each configuration
+domain and marks every value that can avoid a rebuild.
+
+### Centralized path configuration
+
+The selected variant's `config/pathconfig.hpp` is the sole physical definition
+point for compiled input/output paths, workflow output/list names,
+rearrangement filenames, and initializer/product relative directories. Existing
+namespaces and RuntimeConfig keys remain unchanged.
+
+- Keep `AstroCatConfig::ASTROCAT_OUTPUT_DIRECTORY` initialized from
+  `LensingConfig::ASTROMETRY_CAT` as two coupled symbols. After RuntimeConfig is
+  built, `[astrocat].output_directory` and `[lensing].astrometry_cat` are
+  independent producer/consumer fields and must both be set when they should
+  name the same newly published tile directory.
+- Keep `ExtCatConfig::EXTCAT_OUTPUT_DIRECTORY` as a `const std::string&` to
+  `LensingConfig::SOURCE_CAT`. `[lensing].source_cat` and
+  `[extcat].output_directory` update the same effective RuntimeConfig directory;
+  `--extcat-output` has final precedence.
+- `FLAT_PATH` and `PSF_PATH` exist only in Standard because Lite physically
+  removed those optional branches.
+- `ProcessRearrConfig`'s fixed filenames and the two `OutputLayout` directory
+  arrays have no RuntimeConfig/INI/CLI override. Editing them—or any compiled
+  default directly in `pathconfig.hpp`—requires `make clean && make`.
+
+INI and CLI values override RuntimeConfig copies only; they do not modify the
+header or its compile-time relationships.
 
 ### Common and data-source-dependent parameters
 
@@ -161,6 +186,7 @@ as build time require editing the selected variant's header and running
 | Top-level phases | `[process].run_process_astrocat/run_process_extcat/run_process_init/run_process_main/run_process_rearr/run_process_fd` | INI; runtime `--run-astrocat`, `--run-extcat`, `--run-init`, `--run-main`, `--run-rearr`, `--run-fd` | Select phases for this invocation. Standard defaults to `false/false/true/true/true/true`; Lite defaults to `false/false/true/true/false/false`. |
 | Science/DQ archives and datasets | `[init].science_root`, `dq_root`, `output_root`, `datasets`, `contains` | INI; runtime `--science-root`, `--dq-root`, `--output-root`, `--dataset`, `--contains` | Change for another observing archive, basename prefix, filter token, or output root. Lite requires per-CCD DQ masks. |
 | Exposure lists and phase outputs | `[process].expo_list`, `rearr_output_directory`, `rearr_output_base_directory`, `rearranged_expo_list_filename`, `rearranged_expo_list_directory`, `fd_expo_list`, `fd_output_directory`, `fd_output_base_directory` | INI; corresponding CLI: `--expo-list`, `--rearr-output-dir`, `--rearr-output-base`, `--rearr-list-name`, `--rearr-list-dir`, `--fd-expo-list`, `--fd-output-dir`, `--fd-output-base` | Change for downstream-only execution or a different rearrangement/FD output or exposure-list location. |
+| Fixed generated layout | `SKIP_DIRECTORY_NAME`, `SUBCAT_PREFIX`, `SUBCAT_EXTENSION`, `SUMMARY_FILENAME`, `NON_CHIP_BASE_DIRECTORIES`, `CHIP_PRODUCT_DIRECTORIES` | `config/pathconfig.hpp`, build time | Change only when the published catalog naming or relative output-directory contract changes; rebuild and regenerate affected products. |
 | Gaia catalog tiling | `[astrocat].input_directory`, `output_directory`, `add_header=true`, `existing_policy=fail` | INI; runtime `--astrocat-input`, `--astrocat-output`, `--astrocat-add-header`, `--astrocat-existing` | Change for another raw Gaia catalog or rerun policy. Output belongs only to `process_astrocat` and is not propagated to `[lensing].astrometry_cat`. |
 | Gaia catalog layout | `[lensing].astrometry_cat_type=1`, `astrometry_cat` | INI, runtime | `1` reads legacy large `gaia_*.cat` tiles; `2` accumulates one-degree `des_y6_*.dat` tiles from `process_astrocat`. Change the consumer directory with the layout; no rebuild is required. |
 | External-catalog discovery and publication | `[extcat].input_directory`, `output_directory` | INI; runtime `--extcat-input`, `--extcat-output` | Change the raw external-catalog directory or normalized tile directory. Output must not equal or sit below input; it is also the effective `SOURCE_CAT`. |

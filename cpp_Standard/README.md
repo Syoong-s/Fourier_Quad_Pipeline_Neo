@@ -27,6 +27,9 @@ Standard defaults to `process_init`, `process_main`, `process_rearr`, and
 `process_fd` enabled. Review `[process]` before running. `[lensing]` exposes the
 Standard branch choices; fixed numerical thresholds remain in
 `config/LensingConfig.hpp` and require rebuilding.
+Compiled path defaults and output layout names are centralized in
+`config/pathconfig.hpp`; INI and CLI values continue to override their runtime
+copies.
 `[lensing].astrometry_cat_type` selects legacy large Gaia tiles (`1`) or
 1-degree Gaia tiles (`2`); both layouts remain rooted at
 `[lensing].astrometry_cat` and use the same RA/Dec row format.

@@ -1,7 +1,8 @@
 #ifndef LENSING_CONFIG_HPP
 #define LENSING_CONFIG_HPP
 
-#include <string>
+#include "pathconfig.hpp"
+
 #include <cmath>
 
 namespace LensingConfig {
@@ -46,16 +47,6 @@ namespace LensingConfig {
                                 19 *       // Exposure info
                                 23;        // Catalog Combiners
     constexpr int include_BGsub = 1;  // Subtract the fitted science-image background.
-
-    // Catalog paths (originally from para.inc).
-    const std::string ASTROMETRY_CAT = "/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted";  // Gaia tile directory.
-
-    // ==========================================
-    // Configuration: Primary external source-catalog directory fallback
-    // Method: Seed the unified runtime extcat output/input path without allowing
-    //         deep pipeline code to mutate the compiled default.
-    // ==========================================
-    inline const std::string SOURCE_CAT = "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";  // Default external catalog tile directory.
 
     // Split parameters
     constexpr int CCD_split = 2;  // Split each CCD into one or two amplifier regions.

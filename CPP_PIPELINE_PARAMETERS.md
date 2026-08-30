@@ -1,7 +1,7 @@
 # C++ Pipeline Parameter Reference
 
-This reference is generated from the live Standard and Lite configuration headers.
-Each source file has one section and one complete table. Defaults are compiled into
+This reference follows the live Standard and Lite configuration namespaces.
+Each namespace has one section and one complete table. Defaults are compiled into
 the executable; only entries named in **INI / CLI override** can change at run time.
 
 Runtime precedence is `config header default < --config INI < CLI`. An INI or CLI
@@ -12,7 +12,29 @@ physically absent from Lite and cannot be restored by adding a constant.
 Derived parameters remain listed for source coverage. Do not edit them directly; change
 their source parameter and preserve the associated assertions and consumers.
 
-## `config/ProcessConfig.hpp`
+## Centralized path configuration
+
+Each variant has its own `config/pathconfig.hpp`. It is the sole physical source
+for fixed input/output paths, workflow list/output names, rearrangement filenames,
+and fixed relative output-directory layouts. The established namespaces remain
+unchanged, so existing call sites and INI mapping continue to use the same
+namespace-qualified symbols.
+
+| Namespace | Definitions physically owned by `pathconfig.hpp` | Coupling and RuntimeConfig rule |
+|---|---|---|
+| `LensingConfig` | `ASTROMETRY_CAT`, `SOURCE_CAT`; Standard only: `FLAT_PATH`, `PSF_PATH` | These seed RuntimeConfig. `[lensing].astrometry_cat`, `source_cat`, `flat_path`, and `psf_path` can replace the surviving values at run time; Lite rejects the removed flat/PSF keys. |
+| `AstroCatConfig` | `ASTROCAT_INPUT_DIRECTORY`, `ASTROCAT_OUTPUT_DIRECTORY` | The compiled output default is deliberately initialized as `LensingConfig::ASTROMETRY_CAT`. Once RuntimeConfig is created, producer output and Stage-1 consumer input are separate fields. |
+| `ExtCatConfig` | `EXTCAT_INPUT_DIRECTORY`, `EXTCAT_OUTPUT_DIRECTORY` | `EXTCAT_OUTPUT_DIRECTORY` deliberately remains a `const std::string&` to `LensingConfig::SOURCE_CAT`. `[lensing].source_cat` and `[extcat].output_directory` address the same effective RuntimeConfig field; CLI has final precedence. |
+| `InitConfig` | `SCIENCE_ROOT`, `DQ_ROOT`, `OUTPUT_ROOT` | These seed RuntimeConfig and have INI/CLI overrides. |
+| `ProcessConfig` | `EXPO_LIST`, `REARR_OUTPUT_DIRECTORY`, `REARR_OUTPUT_BASE_DIRECTORY`, `REARRANGED_EXPO_LIST_FILENAME`, `REARRANGED_EXPO_LIST_DIRECTORY`, `FD_EXPO_LIST`, `FD_OUTPUT_DIRECTORY`, `FD_OUTPUT_BASE_DIRECTORY` | These seed RuntimeConfig and have INI/CLI overrides. |
+| `ProcessRearrConfig` | `SKIP_DIRECTORY_NAME`, `SUBCAT_PREFIX`, `SUBCAT_EXTENSION`, `SUMMARY_FILENAME` | No RuntimeConfig field; edit the selected variant and rebuild. |
+| `OutputLayout` | `NON_CHIP_BASE_DIRECTORIES`, `CHIP_PRODUCT_DIRECTORIES` | No RuntimeConfig field; these are fixed relative directory contracts used by initialization and processing. |
+
+Editing `pathconfig.hpp` changes compiled defaults and therefore requires a clean
+rebuild. INI and CLI overrides change only RuntimeConfig copies according to
+`compiled default < INI < CLI`; they do not mutate the header constants.
+
+## `ProcessConfig` (`config/ProcessConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
@@ -34,7 +56,7 @@ their source parameter and preserve the associated assertions and consumers.
 The runtime option structs are mutable copies of these defaults, not a second
 source of defaults. At least one top-level phase must be enabled.
 
-## `config/InitConfig.hpp`
+## `InitConfig` (`config/InitConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
@@ -48,18 +70,21 @@ source of defaults. At least one top-level phase must be enabled.
 | `EXISTING` | `const char*` | `"fail"` | same | `[init].existing`; `--existing` | fail, resume, or overwrite | Existing-output policy. | Select intentionally per run. | No at run time; yes if editing the header |
 | `F77_MAX_PATH` | `int` | `0` | same | `[init].f77_max_path`; `--f77-max-path` | Non-negative; 0 disables the guard | Generated-path compatibility limit; zero disables it. | Change only for path-policy compatibility. | No at run time; yes if editing the header |
 
-## `config/AstroCatConfig.hpp`
+## `AstroCatConfig` (`config/AstroCatConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
 | `ASTROCAT_INPUT_DIRECTORY` | `const char*` | empty | same | `[astrocat].input_directory`; `--astrocat-input` | Readable flat directory | Raw Gaia files; each data row begins with RA and Dec. | Set when running `process_astrocat`. | No at run time; yes if editing the header |
-| `ASTROCAT_OUTPUT_DIRECTORY` | `std::string` | compiled `ASTROMETRY_CAT` value | same | `[astrocat].output_directory`; `--astrocat-output` | Writable directory that does not equal, contain, or sit below the input directory | Destination for one-degree Type-2 Gaia tiles. | Set independently for each publication. | No at run time; yes if editing the header |
+| `ASTROCAT_OUTPUT_DIRECTORY` | `std::string` | `LensingConfig::ASTROMETRY_CAT` | same | `[astrocat].output_directory`; `--astrocat-output` | Writable directory that does not equal, contain, or sit below the input directory | Compiled default destination for one-degree Type-2 Gaia tiles. | Override independently for each publication. | No at run time; yes if editing the header |
 | `ASTROCAT_ADD_HEADER` | `bool` | `true` | same | `[astrocat].add_header`; `--astrocat-add-header` | `true` starts at the first line; `false` skips exactly one line per input file | Controls raw-input header handling; output tiles always contain `RA    DEC`. | Change to match the raw files. | No at run time; yes if editing the header |
 | `ASTROCAT_EXISTING_POLICY` | `const char*` | `"fail"` | same | `[astrocat].existing_policy`; `--astrocat-existing` | fail or overwrite | Existing generated-tile policy. | Select intentionally for reruns. | No at run time; yes if editing the header |
 
-`[astrocat].output_directory` and `--astrocat-output` independently control
-only `process_astrocat`. They are not compared with, propagated to, or otherwise
-coupled to `[lensing].astrometry_cat`.
+In `pathconfig.hpp`, `ASTROCAT_OUTPUT_DIRECTORY` intentionally derives from
+`LensingConfig::ASTROMETRY_CAT`; keep both symbols and that expression rather
+than merging them. After RuntimeConfig is constructed,
+`[astrocat].output_directory` and `--astrocat-output` change only the
+`process_astrocat` destination. They are not compared with or propagated back
+to `[lensing].astrometry_cat`.
 
 The phase discovers only direct regular children of the input directory; it
 does not recurse. It reads each complete file through dynamic MPI scheduling,
@@ -74,7 +99,7 @@ and contain round-trip-precision doubles. `overwrite` removes only files that
 match this generated basename contract and preserves unrelated directory
 content.
 
-## `config/ExtCatConfig.hpp`
+## `ExtCatConfig` (`config/ExtCatConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
@@ -105,7 +130,7 @@ address the same effective external-tile directory. Explicit projection must
 retain RA, Dec, photo-z, and every nonzero magnitude field. FD needs at least one
 magnitude and selects the first available band in i, z, r, g, y order.
 
-## `config/LensingConfig.hpp`
+## `LensingConfig` (`config/LensingConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
@@ -284,7 +309,7 @@ Lite accepts only the `[lensing]` keys whose symbols survive in its table. The
 implementation-local `PSFr_ratio = 0.75` in `ShearMeasurement.cpp` is not a
 configuration-header parameter and is intentionally excluded.
 
-## `config/ProcessRearrConfig.hpp`
+## `ProcessRearrConfig` (`config/ProcessRearrConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
 |---|---|---|---|---|---|---|---|---|
@@ -311,6 +336,20 @@ zero-based `EXPO_NUM=18`, `ccD_NUM=19`, source base `20`, and `Chi2=48`.
 Standard's `ext_cat=0` rearrangement schema has 31 fields using the same two
 identity fields. Catalogs produced by the former 48/30-field schemas must be
 regenerated before rearrangement or FD processing.
+
+## `OutputLayout` (`config/pathconfig.hpp`)
+
+These arrays are identical in Standard and Lite and have no RuntimeConfig, INI,
+or CLI override. They contain relative directory names, not deployment roots;
+the runtime dataset root is prepended by the existing path helpers.
+
+| Parameter | Type | Standard / Lite compiled value | Function | Rebuild after change |
+|---|---|---|---|---|
+| `NON_CHIP_BASE_DIRECTORIES` | `std::array<const char*, 14>` | `science`, `dqmask`, `stamps`, `result`, `stamps/dat_StarInfo`, `stamps/fits_StarP`, `stamps/fits_PsfSrc`, `stamps/dat_ExpoInfo`, `stamps/dat_StarComp`, `stamps/dat_Rescale`, `stamps/dat_Pcs`, `stamps/dat_StarCompV2`, `astrometry/Head`, `astrometry/dat_Chk` | Complete fixed base-directory contract created without a chip suffix. | Yes |
+| `CHIP_PRODUCT_DIRECTORIES` | `std::array<const char*, 16>` | `stamps/Norm`, `stamps/cat_Orig`, `stamps/dat_StarCanInfo`, `stamps/fits_StarCan`, `stamps/fits_StarCanN`, `stamps/fits_StarCanP`, `stamps/dat_SrcInfo`, `stamps/fits_Src`, `stamps/fits_Noise`, `stamps/fits_SrcP`, `stamps/dat_PsfFit`, `stamps/fits_PsfLocal`, `stamps/dat_Shear`, `stamps/dat_StarXY`, `stamps/fits_PsfResi`, `astrometry/dat_Astro` | Complete fixed per-chip product-directory contract. | Yes |
+
+`include/general/OutputLayout.hpp` now contains only the functions that derive
+exposure and chip paths from these centralized arrays.
 
 ## `config/FDConfig.hpp`
 

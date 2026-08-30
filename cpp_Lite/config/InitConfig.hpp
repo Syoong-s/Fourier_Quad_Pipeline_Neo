@@ -1,6 +1,8 @@
 #ifndef INIT_CONFIG_HPP
 #define INIT_CONFIG_HPP
 
+#include "pathconfig.hpp"
+
 // ==========================================
 // InitConfig - Initializer and exposure-list defaults
 // Method: Edit this file for one site's usual dataset.
@@ -16,9 +18,6 @@ struct DatasetSpec {
     std::string prefix;  // Archive basename prefix.
 };
 
-inline constexpr const char* SCIENCE_ROOT = "/lustre/home/acct-phyzj/share/DES/g";  // Science archive root.
-inline constexpr const char* DQ_ROOT = "/lustre/home/acct-phyzj/share/DES/mask_v1/g_mask";  // DQ archive root.
-inline constexpr const char* OUTPUT_ROOT = "/lustre/home/acct-phyzj/share/DES/g_band_v1";  // Pipeline output root.
 // {"Target1", "Prefix1"}, {"Target2", "Prefix2"} ...
 inline const std::vector<DatasetSpec> DATASETS = {
     {"gband", "c4d_"}

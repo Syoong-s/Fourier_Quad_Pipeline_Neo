@@ -113,8 +113,30 @@ INI 列表，后续同名选项追加。一个裸位置参数仍可作为 `--exp
 
 运行期设置优先写入所选版本的 INI，CLI 只用于单次覆盖。头文件专属设置应修改
 `cpp_Standard/config/` 或 `cpp_Lite/config/` 下对应的配置头文件；修改源参数而非
-派生常量，然后执行 `make clean` 并重新编译。参数参考按七个配置头文件各给一张
-完整的 Standard/Lite 对照表，并明确标出哪些值可在不重编译的情况下覆盖。
+派生常量，然后执行 `make clean` 并重新编译。参数参考按配置领域分别给出完整的
+Standard/Lite 对照表，并明确标出哪些值可在不重编译的情况下覆盖。
+
+### 集中路径配置
+
+所选版本的 `config/pathconfig.hpp` 是所有输入/输出路径、流程输出与曝光表名称、重排
+文件名，以及初始化/处理产物相对目录的唯一实际定义点。原有命名空间与 RuntimeConfig
+键保持不变。
+
+- 必须保留 `AstroCatConfig::ASTROCAT_OUTPUT_DIRECTORY` 从
+  `LensingConfig::ASTROMETRY_CAT` 初始化的关系，以及这两个相互耦合但独立的符号。
+  RuntimeConfig 构造后，
+  `[astrocat].output_directory` 与 `[lensing].astrometry_cat` 是相互独立的生产者/消费者
+  字段；若它们应指向同一批新瓦片，必须同时显式配置。
+- 必须保留 `ExtCatConfig::EXTCAT_OUTPUT_DIRECTORY` 对
+  `LensingConfig::SOURCE_CAT` 的 `const std::string&` 引用关系。
+  `[lensing].source_cat` 与 `[extcat].output_directory` 更新同一个有效 RuntimeConfig 目录，
+  `--extcat-output` 具有最终优先级。
+- `FLAT_PATH` 与 `PSF_PATH` 只存在于 Standard；Lite 已物理删除对应可选分支。
+- `ProcessRearrConfig` 的固定文件名和两组 `OutputLayout` 目录数组没有
+  RuntimeConfig/INI/CLI 覆盖。直接修改它们或 `pathconfig.hpp` 中任何编译默认值后，
+  必须执行 `make clean && make`。
+
+INI 与 CLI 只覆盖 RuntimeConfig 副本，不会修改头文件或其编译期引用关系。
 
 ### 常用及随图像数据源变化的参数
 
@@ -127,6 +149,7 @@ INI 列表，后续同名选项追加。一个裸位置参数仍可作为 `--exp
 | 顶层阶段 | `[process].run_process_astrocat/run_process_extcat/run_process_init/run_process_main/run_process_rearr/run_process_fd` | INI；运行时 `--run-astrocat`、`--run-extcat`、`--run-init`、`--run-main`、`--run-rearr`、`--run-fd` | 选择本次执行的阶段。Standard 默认 `false/false/true/true/true/true`，Lite 默认 `false/false/true/true/false/false`。 |
 | Science/DQ 归档与数据集 | `[init].science_root`、`dq_root`、`output_root`、`datasets`、`contains` | INI；运行时 `--science-root`、`--dq-root`、`--output-root`、`--dataset`、`--contains` | 更换观测归档、文件名前缀、筛选 token 或输出根目录时修改。Lite 必须提供逐 CCD DQ masks。 |
 | 曝光表与阶段输出 | `[process].expo_list`、`rearr_output_directory`、`rearr_output_base_directory`、`rearranged_expo_list_filename`、`rearranged_expo_list_directory`、`fd_expo_list`、`fd_output_directory`、`fd_output_base_directory` | INI；对应 CLI 为 `--expo-list`、`--rearr-output-dir`、`--rearr-output-base`、`--rearr-list-name`、`--rearr-list-dir`、`--fd-expo-list`、`--fd-output-dir`、`--fd-output-base` | 下游单独运行，或改变重排/FD 输出目录和曝光表位置时修改。 |
+| 固定生成布局 | `SKIP_DIRECTORY_NAME`、`SUBCAT_PREFIX`、`SUBCAT_EXTENSION`、`SUMMARY_FILENAME`、`NON_CHIP_BASE_DIRECTORIES`、`CHIP_PRODUCT_DIRECTORIES` | `config/pathconfig.hpp`，编译时 | 仅在发布星表命名或相对输出目录约定变化时修改；重编译并重新生成受影响产物。 |
 | Gaia 星表分块 | `[astrocat].input_directory`、`output_directory`、`add_header=true`、`existing_policy=fail` | INI；运行时 `--astrocat-input`、`--astrocat-output`、`--astrocat-add-header`、`--astrocat-existing` | 更换 Gaia 原始星表或重跑策略时修改。输出只属于 `process_astrocat`，不会传播到 `[lensing].astrometry_cat`。 |
 | Gaia 星表布局 | `[lensing].astrometry_cat_type=1`、`astrometry_cat` | INI，运行时 | `1` 读取旧式大 `gaia_*.cat` 瓦片；`2` 累积读取 `process_astrocat` 生成的一度 `des_y6_*.dat` 瓦片。切换布局时同时指向对应消费目录，无需重编译。 |
 | 外部星表发现与发布 | `[extcat].input_directory`、`output_directory` | INI；运行时 `--extcat-input`、`--extcat-output` | 更换 External source catalog 的原始目录或规范化瓦片目录时修改。输出目录不能等于或位于输入目录内；它同时是有效的 `SOURCE_CAT`。 |

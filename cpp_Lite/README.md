@@ -27,6 +27,9 @@ LAPACK, and BLAS dependencies.
 Lite defaults to `process_init` and `process_main` enabled, with
 `process_rearr` and `process_fd` disabled. It rejects Standard-only `[lensing]`
 keys rather than silently ignoring them.
+Compiled path defaults and output layout names are centralized in
+`config/pathconfig.hpp`; INI and CLI values continue to override their runtime
+copies.
 `[lensing].astrometry_cat_type` selects legacy large Gaia tiles (`1`) or
 1-degree Gaia tiles (`2`); both layouts remain rooted at
 `[lensing].astrometry_cat` and use the same RA/Dec row format.
