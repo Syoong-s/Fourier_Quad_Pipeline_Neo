@@ -1,7 +1,7 @@
 #ifndef STAR_CUT_CALCULATOR_HPP
 #define STAR_CUT_CALCULATOR_HPP
 
-#include "FDData.hpp"
+#include "process_fd/FDData.hpp"
 
 #include <vector>
 
@@ -15,14 +15,13 @@
 class StarCutCalculator {
 public:
     // Single global star cut (all exposures share one bar)
-    static void calculateGlobalStarCut(const FDData& data, int rank,
-                                       int num_procs,
+    static void calculateGlobalStarCut(const FDData& data,
                                        float& S_mean, float& S_std,
                                        float& S_cut);
 
     // Per-exposure star cut (one bar per exposure)
     static void calculateGlobalStarCutAuto(
-        const FDData& data, int rank, int num_procs,
+        const FDData& data,
         std::vector<float>& S_mean_arr,
         std::vector<float>& S_std_arr,
         std::vector<float>& S_cut_arr);

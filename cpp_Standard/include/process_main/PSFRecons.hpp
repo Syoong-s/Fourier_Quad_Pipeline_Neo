@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <array>
-#include "LinearSolve.hpp"
+#include "process_main/LinearSolve.hpp"
 
 namespace PSFRecons {
     // Stage 6 main entry: coordinates PSF fitting and reconstruction across chips and exposures

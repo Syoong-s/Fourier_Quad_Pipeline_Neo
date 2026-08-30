@@ -1,5 +1,6 @@
 #include "RuntimeConfig.hpp"
 
+#include "AstroCatConfig.hpp"
 #include "ExtCatConfig.hpp"
 #include "LensingConfig.hpp"
 #include "ProcessConfig.hpp"
@@ -24,7 +25,11 @@ struct CommandLineState {
     bool contains_seen = false;
 };
 
-std::unique_ptr<const RuntimeConfig> stored_config;
+struct StoreState {
+    std::unique_ptr<const RuntimeConfig> config;
+};
+
+StoreState store_state;
 
 // ==========================================
 // Function: trim
@@ -378,6 +383,7 @@ bool applyIniValue(const std::string& section, const std::string& key,
     };
 
     if (section == "process") {
+        if (key == "run_process_astrocat") return parseBoolean(raw_value, config.process.run_process_astrocat) || (reason = "expected boolean", false);
         if (key == "run_process_extcat") return parseBoolean(raw_value, config.process.run_process_extcat) || (reason = "expected boolean", false);
         if (key == "run_process_init") return parseBoolean(raw_value, config.process.run_process_init) || (reason = "expected boolean", false);
         if (key == "run_process_main") return parseBoolean(raw_value, config.process.run_process_main) || (reason = "expected boolean", false);
@@ -392,6 +398,16 @@ bool applyIniValue(const std::string& section, const std::string& key,
         else if (key == "fd_expo_list") config.process.fd_expo_list = string_value;
         else if (key == "fd_output_directory") config.process.fd_output_directory = string_value;
         else if (key == "fd_output_base_directory") config.process.fd_output_base_directory = string_value;
+        else { reason = "unknown key"; return false; }
+        return true;
+    }
+
+    if (section == "astrocat") {
+        if (key == "add_header") return parseBoolean(raw_value, config.astrocat.add_header) || (reason = "expected boolean", false);
+        if (!parse_string()) return false;
+        if (key == "input_directory") config.astrocat.input_directory = string_value;
+        else if (key == "output_directory") config.astrocat.output_directory = string_value;
+        else if (key == "existing_policy") config.astrocat.existing_policy = lowercase(string_value);
         else { reason = "unknown key"; return false; }
         return true;
     }
@@ -438,6 +454,7 @@ bool applyIniValue(const std::string& section, const std::string& key,
 
     if (section == "lensing") {
         if (key == "astrometry_trivial") return parseSignedInteger(raw_value, config.lensing.astrometry_trivial, false, false) || (reason = "expected integer", false);
+        if (key == "astrometry_cat_type") return parseSignedInteger(raw_value, config.lensing.astrometry_cat_type, false, false) || (reason = "expected integer", false);
         if (key == "process_stage") return parseSignedInteger(raw_value, config.lensing.process_stage, true, false) || (reason = "expected positive integer", false);
         if (key == "include_flat") return parseSignedInteger(raw_value, config.lensing.include_flat, false, false) || (reason = "expected integer", false);
         if (key == "include_mask") return parseSignedInteger(raw_value, config.lensing.include_mask, false, false) || (reason = "expected integer", false);
@@ -496,7 +513,17 @@ bool prepareLegacyDataset(RuntimeConfig& config, CommandLineState& state,
 bool applyNamedOption(const std::string& name, const std::string& value,
                       RuntimeConfig& config, CommandLineState& state,
                       std::string& error) {
-    if (name == "--run-extcat") {
+    if (name == "--run-astrocat") {
+        if (!parseBoolean(value, config.process.run_process_astrocat)) error = "--run-astrocat must be a boolean";
+    } else if (name == "--astrocat-input") {
+        config.astrocat.input_directory = value;
+    } else if (name == "--astrocat-output") {
+        config.astrocat.output_directory = value;
+    } else if (name == "--astrocat-add-header") {
+        if (!parseBoolean(value, config.astrocat.add_header)) error = "--astrocat-add-header must be a boolean";
+    } else if (name == "--astrocat-existing") {
+        config.astrocat.existing_policy = lowercase(value);
+    } else if (name == "--run-extcat") {
         if (!parseBoolean(value, config.process.run_process_extcat)) error = "--run-extcat must be true, false, 1, 0, yes, no, on, or off";
     } else if (name == "--run-init") {
         if (!parseBoolean(value, config.process.run_process_init)) error = "--run-init must be a boolean";
@@ -615,6 +642,7 @@ bool valueInSet(int value, std::initializer_list<int> allowed) {
 
 RuntimeConfig makeDefaultRuntimeConfig() {
     RuntimeConfig config;
+    config.process.run_process_astrocat = ProcessConfig::RUN_PROCESS_ASTROCAT;
     config.process.run_process_extcat = ProcessConfig::RUN_PROCESS_EXTCAT;
     config.process.run_process_init = ProcessConfig::RUN_PROCESS_INIT;
     config.process.run_process_main = ProcessConfig::RUN_PROCESS_MAIN;
@@ -628,6 +656,11 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.process.fd_expo_list = ProcessConfig::FD_EXPO_LIST;
     config.process.fd_output_directory = ProcessConfig::FD_OUTPUT_DIRECTORY;
     config.process.fd_output_base_directory = ProcessConfig::FD_OUTPUT_BASE_DIRECTORY;
+
+    config.astrocat.input_directory = AstroCatConfig::ASTROCAT_INPUT_DIRECTORY;
+    config.astrocat.output_directory = AstroCatConfig::ASTROCAT_OUTPUT_DIRECTORY;
+    config.astrocat.add_header = AstroCatConfig::ASTROCAT_ADD_HEADER;
+    config.astrocat.existing_policy = AstroCatConfig::ASTROCAT_EXISTING_POLICY;
 
     config.extcat.input_directory = ExtCatConfig::EXTCAT_INPUT_DIRECTORY;
     config.extcat.output_directory = ExtCatConfig::EXTCAT_OUTPUT_DIRECTORY;
@@ -660,6 +693,7 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.init.f77_max_path = InitConfig::F77_MAX_PATH;
 
     config.lensing.astrometry_trivial = LensingConfig::ASTROMETRY_trivial;
+    config.lensing.astrometry_cat_type = LensingConfig::AstroCatType;
     config.lensing.process_stage = LensingConfig::PROCESS_stage;
     config.lensing.include_flat = LensingConfig::include_FLAT;
     config.lensing.include_mask = LensingConfig::include_Mask;
@@ -729,7 +763,8 @@ bool applyRuntimeConfigText(const std::string& text,
                 return false;
             }
             section = lowercase(trim(cleaned.substr(1, cleaned.size() - 2)));
-            if (section != "process" && section != "extcat"
+            if (section != "process" && section != "astrocat"
+                && section != "extcat"
                 && section != "init" && section != "lensing") {
                 error = formatConfigError(source_name, section, "<section>", cleaned,
                                           "unknown section at line " + std::to_string(line_number));
@@ -823,11 +858,26 @@ bool parseRuntimeCommandLine(int argc, char* argv[], RuntimeConfig& config,
 bool validateRuntimeConfig(const RuntimeConfig& config, std::string& error) {
     error.clear();
     const ProcessRuntimeConfig& process = config.process;
+    const AstroCatRuntimeConfig& astrocat = config.astrocat;
     const ExtCatRuntimeConfig& extcat = config.extcat;
     const InitRuntimeConfig& init = config.init;
     const LensingRuntimeConfig& lensing = config.lensing;
 
-    if ((process.run_process_extcat
+    if (!process.run_process_astrocat && !process.run_process_extcat
+        && !process.run_process_init && !process.run_process_main
+        && !process.run_process_rearr && !process.run_process_fd) {
+        error = "all process phases cannot be disabled";
+    } else if (process.run_process_astrocat
+               && astrocat.input_directory.empty()) {
+        error = "astrometry-catalog input directory must not be empty";
+    } else if (process.run_process_astrocat
+               && astrocat.output_directory.empty()) {
+        error = "astrometry-catalog output directory must not be empty";
+    } else if (process.run_process_astrocat
+               && astrocat.existing_policy != "fail"
+               && astrocat.existing_policy != "overwrite") {
+        error = "astrocat.existing_policy must be fail or overwrite";
+    } else if ((process.run_process_extcat
                 || (process.run_process_main && lensing.ext_cat == 1))
                && extcat.output_directory.empty()) {
         error = "external source-catalog output directory must not be empty";
@@ -841,6 +891,8 @@ bool validateRuntimeConfig(const RuntimeConfig& config, std::string& error) {
         error = "at least one dataset must be configured";
     } else if (!valueInSet(lensing.astrometry_trivial, {0, 1})) {
         error = "lensing.astrometry_trivial must be 0 or 1";
+    } else if (!valueInSet(lensing.astrometry_cat_type, {1, 2})) {
+        error = "lensing.astrometry_cat_type must be 1 or 2";
     } else if (!valueInSet(lensing.include_flat, {0, 1})) {
         error = "lensing.include_flat must be 0 or 1";
     } else if (!valueInSet(lensing.include_mask, {0, 1, 2, 3})) {
@@ -941,24 +993,25 @@ bool validateRuntimeConfig(const RuntimeConfig& config, std::string& error) {
 namespace RuntimeConfigStore {
 
 bool initialize(RuntimeConfig config, std::string& error) {
-    if (stored_config) {
+    if (store_state.config) {
         error = "RuntimeConfigStore is already initialized";
         return false;
     }
-    stored_config = std::make_unique<const RuntimeConfig>(std::move(config));
+    store_state.config =
+        std::make_unique<const RuntimeConfig>(std::move(config));
     error.clear();
     return true;
 }
 
 bool isInitialized() {
-    return static_cast<bool>(stored_config);
+    return static_cast<bool>(store_state.config);
 }
 
 const RuntimeConfig& get() {
-    if (!stored_config) {
+    if (!store_state.config) {
         throw std::logic_error("RuntimeConfigStore is not initialized");
     }
-    return *stored_config;
+    return *store_state.config;
 }
 
 }  // namespace RuntimeConfigStore

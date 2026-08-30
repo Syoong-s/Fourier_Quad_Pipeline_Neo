@@ -1,689 +1,268 @@
 # Fourier_Quad C++ Pipeline Guide
 
-Comprehensive guide for the C++17 (`cpp_Standard` / `cpp_Lite`) pipeline: source
-structure, pipeline stages, configuration, external catalog, building, run modes,
-initializer output layout, Docker environment, and HPC runner. For the project
-overview and the Fortran pipeline see [`README.md`](README.md) and
-[`F77_GUIDE.md`](F77_GUIDE.md). The full parameter reference is
-[`CPP_PIPELINE_PARAMETERS.md`](CPP_PIPELINE_PARAMETERS.md).
+This guide explains how to build, configure, and run `Fourier_Quad_Cpp`.
 
-`cpp_Standard` is the full build (includes PCA `PSFRecons`); `cpp_Lite` is the
-frozen-branch simplified build with `PSFRecons` removed. See
-`cpp_Lite/REFACTOR_NOTES.md` for the Lite change log.
+> 中文版：[CPP_GUIDE_CN.md](CPP_GUIDE_CN.md)
 
-> **中文文档**：请参阅 [CPP_GUIDE_CN.md](CPP_GUIDE_CN.md)
+## Program layout
 
----
+Both [`cpp_Standard`](cpp_Standard/) and [`cpp_Lite`](cpp_Lite/) build
+`Fourier_Quad_Pipe`. Each variant contains:
 
-## Source Structure
+- `main.cpp`: MPI lifecycle and six-phase dispatch;
+- `pipeline.example.ini`: complete run-time configuration template;
+- `config/`: compiled defaults and fixed numerical settings;
+- `include/` and `src/`: phase modules, shared catalog layout, and run-time
+  configuration;
+- `include/general/` and `src/general/`: exposure-list, path, MPI, scheduler,
+  output-layout, and numerical utilities;
+- `Makefile`: portable C++17/MPI build.
 
-### Source directories
+Standard retains optional scientific branches. Lite fixes and physically
+removes eight branches:
 
-#### `cpp_Standard/` — Full C++17 pipeline
-
-| File | Description |
+| Setting | Lite behavior |
 |---|---|
-| `main.cpp` | MPI entry point, workflow option parsing, five-phase ordering, and shared catalog-layout resolution. |
-| `config/ProcessConfig.hpp` | Compiled workflow defaults and phase switches. |
-| `include/RuntimeConfig.hpp`, `src/RuntimeConfig.cpp` | Unified runtime model, INI/CLI parsing, validation, and immutable store. |
-| `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp` | Runtime external/source schema resolved once and consumed by all catalog phases. |
-| `src/process_init/`, `include/process_init/` | Archive initializer implementation and headers. |
-| `src/process_main/process_main.cpp`, `include/process_main/process_main.hpp` | Exposure-list loading and Stage 1–9 orchestration. |
-| `src/process_rearr/`, `include/process_rearr/` | Self-contained `_all.cat` sky partitioning, MPI redistribution, sorted subcatalogs, and summary output. |
-| `config/ProcessRearrConfig.hpp` | Rearrangement-only spatial, partitioning, and output parameters. |
-| `config/LensingConfig.hpp` | Compiled fallbacks plus fixed dimensions, indices, and algorithm constants. |
-| `src/process_main/PreProcess.cpp`, `include/process_main/PreProcess.hpp` | **Stage 1**: pre-processing. |
-| `src/process_main/Astrometry.cpp`, `include/process_main/Astrometry.hpp` | **Stage 2**: astrometric calibration. |
-| `src/process_main/SourceExtractor.cpp`, `include/process_main/SourceExtractor.hpp` | **Stage 3**: source detection and extraction. |
-| `src/process_main/FourierTransformSt1.cpp`, `include/process_main/FourierTransformSt1.hpp` | **Stage 4**: first-stage Fourier transform. |
-| `src/process_main/PSFModel.cpp`, `PSFStarSelection.cpp`, and matching headers | **Stage 5**: Gaia/FWHM star selection, grouping, PRESS rejection, and PSF modeling. |
-| `src/process_main/PSFRecons.cpp`, `include/process_main/PSFRecons.hpp` | PSF PCA reconstruction (`PSF_Ms=1` only). |
-| `src/process_main/FourierTransformSt2.cpp`, `include/process_main/FourierTransformSt2.hpp` | **Stage 6**: second-stage Fourier transform. |
-| `src/process_main/ShearMeasurement.cpp`, `include/process_main/ShearMeasurement.hpp` | **Stage 7**: Fourier\_Quad shear estimation and point-source statistic integration. |
-| `src/process_main/PointSourceStatistics.cpp`, `include/process_main/PointSourceStatistics.hpp` | Single-beta Fourier-power point-source morphology statistics used by Stage 7. |
-| `src/process_main/ExposureInfo.cpp`, `include/process_main/ExposureInfo.hpp` | **Stage 8**: per-exposure statistics. |
-| `src/process_main/CatalogCombiner.cpp`, `include/process_main/CatalogCombiner.hpp` | **Stage 9**: catalog combination and calibration. |
-| `src/process_main/` and `include/process_main/` support modules | FITS I/O, linear algebra, image processing, MPI scheduling, and shared numerical utilities. |
-| `src/process_main/NumericalRecipes.cpp`, `include/process_main/NumericalRecipes.hpp` | Numerical Recipes port (RNG, sorting, interpolation). |
-| `src/process_main/MPIScheduler.cpp`, `include/process_main/MPIScheduler.hpp` | MPI initialization and task distribution. |
-| `src/process_main/ExStar.cpp`, `include/process_main/ExStar.hpp` | Star extraction and classification. |
-| `Makefile` | Build file. Uses `mpicxx`, C++17, links against CFITSIO, FFTW, LAPACK. |
+| astrometry | Gaia only (`ASTROMETRY_trivial=0`) |
+| flat | disabled (`include_FLAT=0`) |
+| mask | per-chip DQ mask (`include_Mask=2`) |
+| sources | external catalog (`ext_cat=1`) |
+| PSF input | stars in the exposure (`ext_PSF=0`) |
+| deblending | enabled |
+| PSF model | local polynomial (`PSF_type=1`) |
+| PCA/multi-scale | disabled (`PSF_Ms=0`) |
 
-#### `cpp_Lite/` — Simplified C++17 pipeline
+## Processing model
 
-Uses the same integrated `process_extcat` / `process_init` / `process_main` /
-`process_rearr` directory layout and runtime option contract as
-`cpp_Standard/`, but its scientific modules retain
-the frozen Lite branches and `PSFRecons.cpp/.hpp` is absent. See
-`cpp_Lite/REFACTOR_NOTES.md` for the detailed change log. Both variants now
-use the same pipeline-level `CatalogLayout` contract; Lite keeps only its
-intentional numerical-branch and default-setting differences.
+The driver invokes six phases in a fixed order. `process_astrocat` and
+`process_extcat` run once, in that order; the other enabled phases run once per
+dataset. Datasets are processed sequentially and the first collective failure
+stops the run.
 
+| Phase | CLI switch | Purpose |
+|---|---|---|
+| `process_astrocat` | `--run-astrocat` | Repartition raw two-column Gaia catalogs into deduplicated one-degree tiles. |
+| `process_extcat` | `--run-extcat` | Repartition raw External source catalog files into sky tiles. |
+| `process_init` | `--run-init` | Discover `.fits.fz` archives, extract Science/DQ chips, and publish exposure lists. |
+| `process_main` | `--run-main` | Run the nine-stage numerical shear pipeline. |
+| `process_rearr` | `--run-rearr` | Partition `*_all.cat` rows into spatial subcatalogs. |
+| `process_fd` | `--run-fd` | Recover mean shear in field-distortion bins. |
 
+`process_main` uses a prime-product stage selector:
 
-## Source layout
+| Stage | Prime | Work |
+|---:|---:|---|
+| 1 | 2 | background/noise preprocessing and Gaia matching |
+| 2 | 3 | astrometric solution |
+| 3 | 5 | source detection, deblending, and star candidates |
+| 4 | 7 | star-candidate power spectra |
+| 5 | 11 | PSF selection and modeling |
+| 6 | 13 | galaxy power spectra |
+| 7 | 17 | Fourier_Quad estimators and morphology measurements |
+| 8 | 19 | exposure diagnostics |
+| 9 | 23 | catalog combination and calibration |
 
-- `config/ProcessConfig.hpp`: workflow defaults and default phase switches.
-- `include/RuntimeConfig.hpp`, `src/RuntimeConfig.cpp`: typed runtime sections,
-  strict INI/CLI parsing, validation, and immutable access.
-- `include/CatalogLayout.hpp`, `src/CatalogLayout.cpp`: shared runtime catalog
-  schema and projection validation in both C++ variants.
-- `include/process_extcat/`, `src/process_extcat/`: external-catalog schema,
-  parsing, MPI byte-range partitioning, and deterministic tile publication.
-- `include/process_init/`, `src/process_init/`: initializer wrapper plus the
-  preserved `Initializer` and `FitsExtractor` modules.
-- `include/process_main/`, `src/process_main/`: `LensingConfig`, all numerical
-  modules, exposure-list loading, and the complete Stage 1–9 orchestration.
-- `include/process_rearr/`, `src/process_rearr/`: self-contained `_all.cat`
-  schema validation, full-sky weighted k-d partitioning, MPI redistribution,
-  sorted subcatalog publication, and summary output.
-- Each `cpp_Standard` / `cpp_Lite` root contains only the executable entry point, build file,
-  documentation, and phase implementation trees.
-
-
-## Pipeline Stages
-
-The pipeline consists of 9 stages. C++ stage execution is controlled by
-`[lensing] process_stage`; Fortran uses `PROCESS_stage` in `para.inc`. The value
-is a product of prime factors, and a stage runs when it is divisible by that
-stage's prime. The default `2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23` enables all
-stages.
-
-| Stage | Prime | Function | Description |
-|---|---|---|---|
-| 1 | 2 | `pre_process` / `PreProcess` | Read FITS images, apply flat-field and mask corrections, estimate background noise (F6 mode-bar estimator). |
-| 2 | 3 | `proc_astrometry` / `Astrometry` | Astrometric calibration using Gaia reference catalog; WCS fitting. |
-| 3 | 5 | `proc_source` / `SourceExtractor` | Source detection, deblending, and stamp extraction. |
-| 4 | 7 | `proc_FFT_st1` / `FourierTransformSt1` | First-stage Fourier transform of galaxy stamps. |
-| 5 | 11 | `proc_PSF` / `PSFModel` | Same-chip Gaia/FWHM and selectable graph star selection, analytic PRESS/LOO, local polynomial PSF fitting, and optional Standard PCA reconstruction (`PSF_Ms=1`). |
-| 6 | 13 | `proc_FFT_st2` / `FourierTransformSt2` | Second-stage Fourier transform. |
-| 7 | 17 | `proc_shear` / `ShearMeasurement` | Fourier\_Quad shear estimation plus `delta_chi2` and `orth_ext` point-source statistics. |
-| 8 | 19 | `proc_info` / `ExposureInfo` | Collect per-exposure statistics (PSF FWHM, star count, etc.). |
-| 9 | 23 | `proc_combine_shear_catalog` / `CatalogCombiner` | Combine shear catalogs across exposures and apply calibration corrections. |
-
-To disable a stage, divide `process_stage` by its prime factor. For example,
-setting `process_stage = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19` (omit 23) skips
-catalog combination.
-
----
-
-
-
-## Configuration
-
-### C++ runtime configuration
-
-Both variants build a `RuntimeConfig` from compiled defaults, then an optional
-INI file, then CLI overrides. Use `--config PATH`; rank 0 reads the file once,
-broadcasts the exact bytes, and every rank parses and validates the same text
-before the write-once store is initialized. The supported sections are
-`[process]`, `[extcat]`, `[init]`, and `[lensing]`. Start from the variant's
-`pipeline.example.ini`.
-
-Standard exposes every live run-selectable lensing branch. Lite exposes only
-`process_stage`, `astrometry_cat`, `ccd_split`, `gal_smooth`, `star_smooth`,
-`pixel_size`, `nmax_chip`, `chipnx`, and `chipny`; its physically deleted
-branches are not accepted as configuration keys. Fixed array dimensions,
-catalog indices, and algorithm constants remain in `config/LensingConfig.hpp`
-and require a rebuild. Catalog column indices are 0-based in C++. See the
-complete
-[`C++ Pipeline External Inputs and Parameter Reference`](CPP_PIPELINE_PARAMETERS.md)
-for every INI/CLI option, fixed parameter, valid value, and Standard/Lite
-difference.
-
----
-
-
-
-## External Source Catalog
-
-The C++ external-catalog path is the authoritative runtime
-`extcat.output_directory` (`[lensing] source_cat` is an alias). Standard reads
-it when `ext_cat=1`; Lite is external-catalog-only. The Fortran pipeline still
-uses `SOURCE_CAT`. The
-[`gen_src_cat`](gen_src_cat/README.md) utilities download or repartition those
-tiles with the filename convention expected by the catalog readers. The Python
-downloader writes the DES Y6 GOLD 18-column schema. The C++ MPI repartitioner
-preserves every raw column by default or selects any ordered list when explicit
-projection is enabled; it is also integrated into `cpp_Standard` and `cpp_Lite`
-as `process_extcat`, the optional first phase before `process_init` and
-`process_main`.
-
-In both C++ variants, `main` resolves one immutable `CatalogLayout` before
-any phase runs. Pass-through mode uses `EXTCAT_TOTAL_COLUMNS` (default 18) for the
-external prefix; explicit mode uses the unique projection length. The layout
-then places CCD_NUM and the fixed 29-field process-main suffix, yielding 48
-legacy columns or `N + 30` columns for an `N`-field projection. The same
-effective RA/Dec positions and exact row width are consumed by `process_rearr`.
-
-Both C++ variants use the same zero-source output contract. A norm-valid Stage 3
-chip always publishes `_orig.cat` with the real external-catalog header and zero
-or more rows. Stage 7 publishes header-only `_shear.dat` for a norm-valid chip
-with no output sources. A norm-invalid chip is skipped before any shear output is
-created; Stage 7 neither inspects nor deletes a pre-existing `_shear.dat`.
-Stage 9 checks norm before shear, treats header-only shear as a successful
-zero-source chip without opening `_orig.cat`, and creates `<EXPOSURE>_all.cat`
-only when at least one norm-valid chip has a shear data row.
-
-For either C++ variant, set the one-based raw positions for RA, Dec,
-g/r/i/z/y magnitudes, and ZP in its `config/ExtCatConfig.hpp`. The
-shipped DES Y6 GOLD defaults are `5,6,7,9,11,13,15,17`. RA, Dec, and ZP are
-mandatory; each magnitude is optional and configured raw value `0` means the
-band is absent. These are the complete named external schema in
-`CatalogLayout`; no flag, extendedness, or anonymous-column members exist.
-Explicit projections must be unique and retain RA/Dec/ZP. A positive configured
-magnitude is available only when its raw identity is retained; otherwise its
-effective position is absent. Runtime jobs may override RA/Dec/ZP with
-`--extcat-ra-column`, `--extcat-dec-column`, and `--extcat-zp-column`; magnitude
-positions remain compiled defaults. Extra physical fields may pass through and
-affect the external width, but are otherwise unmodeled. `process_rearr` and FD
-still require every complete `_all.cat` token to be finite numeric data.
-
-At FD startup, either variant selects one available magnitude in i -> z -> r ->
-g -> y order. That one band supplies both the existing magnitude-range cut and all
-size-magnitude star-bar histograms. If no band is available, FD returns a
-collective nonzero error before opening its exposure list or catalogs.
-
-```bash
-cd gen_src_cat
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install numpy pyvo
-python query_y6gold_sync_mp_v2.py
-```
-
-Review the sky bounds, row limit, output directory, and query concurrency in the
-script before running it. For C++, set `output_directory` in the INI `[extcat]`
-section or pass `--extcat-output`; generation and numerical processing consume
-the same runtime field.
-Raw local catalogs can instead be tiled inside the pipeline with
-`--run-extcat true --extcat-input PATH`. Fortran still uses `SOURCE_CAT` in
-`para.inc`. See
-[`gen_src_cat/README.md`](gen_src_cat/README.md) for the Python schema, C++
-projection modes, and catalog-generation behavior.
-
----
-
-
-
-## Compiler and libraries
-
-Local verification used GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.4, FFTW
-3.3.11, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33 on Linux in WSL2.
-
-The existing portable HPC target is GCC/G++ 12.3.0, Open MPI 4.1.8, CFITSIO
-4.6.4, FFTW 3.3.11, Eigen 3.4.0, and LAPACK 3.11.0. A cluster may use equivalent
-site modules as long as one matching MPI C++ wrapper compiles and launches the
-program.
-
+A stage runs when `process_stage` is divisible by its prime. Stage 9 requires
+Stage 8. The full product `223092870` enables all stages.
 
 ## Build
 
-When all headers and libraries are visible through the compiler's normal search
-paths:
+Required libraries are CFITSIO, FFTW3 (double and float), Eigen3, LAPACK, and
+BLAS. Use an MPI C++ wrapper with C++17 support.
 
 ```bash
+cd cpp_Standard                 # or cpp_Lite
 make -j4
+./Fourier_Quad_Pipe --help
 ```
 
-For one consolidated scientific-stack prefix containing headers, Eigen under
-`include/eigen3`, and libraries under `lib`:
+For libraries installed below one prefix:
 
 ```bash
-make STACK_PREFIX="${STACK_PREFIX}" -j4
+make CXX=/path/to/mpicxx STACK_PREFIX=/opt/science-stack -j4
 ```
 
-When Eigen and the linked libraries use different prefixes, pass portable local
-overrides explicitly:
+For a separate Eigen installation:
 
 ```bash
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" -j4
+make STACK_PREFIX=/opt/science-stack \
+     EIGEN_INCLUDE=/opt/eigen/include/eigen3 -j4
 ```
 
-No Windows-native compiler or wrapper is required. Cluster builds use the same
-Makefile after loading the site's compiler, MPI, and scientific-library modules.
+The live Standard and Lite Makefiles expose only `all` and `clean`. `make` is
+equivalent to `make all`; use `make clean` before rebuilding after a compiled
+configuration or toolchain change.
 
-Run the focused Stage-5 selection, quality, compact-state, and analytic-LOO
-regressions in either C++ variant with:
+Stage 5 computes each candidate's minChi from all same-chip FWHM-locus pairs,
+while its exposure cut is estimated from unique pairs touching capped
+large-size references. Raw analytic PRESS remains a diagnostic; optional
+rejection uses leverage-standardized PRESS and a guarded temporary refit. The
+valid first fit survives disabled rejection, removal safeguards, and refit
+failure. These scientific switches remain compile-time settings; the existing
+runtime PSF mode, chip geometry, and direct stamp-cube I/O are unchanged.
+
+## Configure a run
+
+Copy the template belonging to the selected variant:
 
 ```bash
-make test-psf-star-selection
+cp pipeline.example.ini pipeline.ini
 ```
 
-The current Makefiles do not expose dedicated `test-extcat-reader` or
-`test-rearr` targets. Validate rearr changes with a representative
-rearrangement-only MPI invocation and compare its row counts, schema failures,
-and emitted catalogs.
+Configuration is resolved as:
 
-Run the Stage 7 synthetic point-source regression in either C++ variant with:
+```text
+compiled defaults < INI file < CLI options
+```
+
+The INI has five sections:
+
+- `[process]`: phase switches and downstream output/list paths;
+- `[astrocat]`: raw two-column Gaia input, independent tile output, header mode, and existing-output policy;
+- `[extcat]`: raw catalog parsing, schema, and tile publication;
+- `[init]`: archive roots, dataset pairs, and existing-output policy;
+- `[lensing]`: run-selectable stage, branch, catalog, and camera settings.
+
+Lite rejects Standard-only lensing keys. Unknown sections, keys, malformed
+values, and inconsistent stage/schema choices are errors. The INI is applied
+transactionally on every rank before any phase runs.
+
+`[lensing].astrometry_cat_type=1` reads legacy large Gaia tiles; value `2`
+accumulates the one-degree tiles generated by `process_astrocat`. The producer
+path in `[astrocat].output_directory` and the consumer path in
+`[lensing].astrometry_cat` remain separate settings. Configure both explicitly
+when a later phase in the same run should consume the newly published tiles.
+
+CLI options accept `--name value` and `--name=value`. Booleans accept
+`true/false`, `1/0`, `yes/no`, and `on/off`. The first explicit `--dataset`,
+`--contains`, or `--extcat-contains` replaces its configured list; later
+occurrences append values. A single bare argument remains a legacy alias for
+`--expo-list`.
+
+Use `./Fourier_Quad_Pipe --help` for the exhaustive current option list and
+[CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md) for INI keys.
+
+For a run-time setting, prefer the selected variant's INI template and use CLI
+only for per-run overrides. For a header-only setting, edit the matching file
+below `cpp_Standard/config/` or `cpp_Lite/config/`, change source parameters
+rather than derived constants, then run `make clean` and rebuild. The parameter
+reference has one complete Standard/Lite comparison table for each of the seven
+configuration headers and marks every value that can avoid a rebuild.
+
+## Common run modes
+
+Initializer and numerical stages from one INI:
 
 ```bash
-make test-point-source-statistics
+mpirun -np 8 ./Fourier_Quad_Pipe --config pipeline.ini
 ```
 
-The test covers PSF-like and fixed-beta extended sources, brightness scaling,
-negative noise-subtracted power, invalid inputs, and the 28/29-column catalog
-contract. Production runs use the normal `mpirun` commands below; no separate
-runtime dependency is introduced by the statistic module.
-
-Run the non-square FITS stamp-cube regression in either C++ variant with:
+Main-only, using an existing exposure list:
 
 ```bash
-make test-stamp-cube-io
+mpirun -np 8 ./Fourier_Quad_Pipe --config pipeline.ini \
+  --run-init false --run-main true --run-rearr false --run-fd false \
+  --expo-list /data/work/expo_gband.list
 ```
 
-For the Standard-only PCA row-major regression, run:
+Archive initialization with CLI overrides:
 
 ```bash
-make test-psf-recons-orientation
-```
-
-
-## Defaults and option syntax
-
-Copy `pipeline.example.ini` from the selected variant for normal runs. Compiled
-fallbacks remain in `config/ProcessConfig.hpp`, `config/ExtCatConfig.hpp`,
-`config/InitConfig.hpp`, and `config/LensingConfig.hpp`. Both variants default
-extcat off and init/main on; Standard defaults rearr/FD on while Lite defaults
-them off. Precedence is compiled defaults < INI < CLI. Both `--name value` and
-`--name=value` are accepted in any order.
-
-The `EXTCAT_*` values configure raw-catalog discovery, the output directory,
-parsing policies, MPI task size, optional ordered column selection, three
-required field positions, and five optional magnitude positions. With explicit selection disabled, every raw input field is
-preserved in place and the selected variant requires the emitted width to equal
-`EXTCAT_TOTAL_COLUMNS`. With explicit selection, each variant requires unique raw
-indices and uses the projection-list length as the effective width. The
-startup `CatalogLayout` supplies all downstream positions and row widths.
-The authoritative catalog path is `extcat.output_directory`; the compiled
-fallback is `SOURCE_CAT`, and `[lensing] source_cat` is an alias. Thus
-`process_extcat` writes where `process_main` reads without mutating a header
-global.
-
-`DATASETS` stores paired target/prefix values, and `CONTAINS` stores the archive
-basename tokens accepted with OR semantics. For example:
-
-```cpp
-inline const std::vector<DatasetSpec> DATASETS = {
-    {"g2013", "c4d_13"},
-    {"g2014", "c4d_14"},
-    {"g2019", "c4d_19"},
-};
-inline const std::vector<std::string> CONTAINS = {"v1", "v2"};
-```
-
-| Option | Purpose |
-|:---|:---|
-| `--config PATH` | Load an INI file before applying CLI overrides. |
-| `--run-extcat BOOL` | Enable or disable external-catalog repartitioning. |
-| `--run-init BOOL` | Enable or disable archive initialization at runtime. |
-| `--run-main BOOL` | Enable or disable the numerical pipeline at runtime. |
-| `--run-rearr BOOL` | Enable or disable `_all.cat` spatial rearrangement; it follows `process_main` when both run. |
-| `--run-fd BOOL` | Enable or disable the field-distortion test. |
-| `--extcat-input PATH` | Directory containing any number of raw text catalogs. |
-| `--extcat-output PATH` | Destination tile directory and effective C++ `SOURCE_CAT`. |
-| `--extcat-contains TEXT` | Repeatable case-sensitive basename token; repeats use OR. |
-| `--extcat-recursive BOOL` | Enable or disable recursive input discovery. |
-| `--extcat-delimiter MODE` | `auto`, `whitespace`, `comma`, or `tab`. |
-| `--extcat-header MODE` | `auto`, `present`, or `absent`. |
-| `--extcat-columns LIST` | One or more one-based raw indices; output fields follow this exact order and width. |
-| `--extcat-ra-column N` | Raw one-based RA index; overrides `ra` header discovery. |
-| `--extcat-dec-column N` | Raw one-based Dec index; overrides `dec` header discovery. |
-| `--extcat-zp-column N` | Raw one-based photometric-redshift (`dnf_z`) index used by `process_main`. |
-| `--extcat-chunk-mib N` | Positive MPI byte-range task size in MiB. |
-| `--extcat-malformed POLICY` | `fail` or `skip` malformed rows. |
-| `--extcat-existing POLICY` | `fail` or transactionally `overwrite` generated tiles. |
-| `--science-root PATH` | Original read-only Science `.fits.fz` repository. |
-| `--dq-root PATH` | Original read-only DQ `.fits.fz` repository. |
-| `--output-root PATH` | Parent of the target directory and generated lists. |
-| `--dataset TARGET:PREFIX` | One paired dataset; repeat the option for a batch. |
-| `--target NAME` | Legacy single-dataset target; cannot be mixed with `--dataset`. |
-| `--prefix TEXT` | Legacy single-dataset prefix; cannot be mixed with `--dataset`. |
-| `--contains TEXT` | Accepted basename token; repeat for OR matching. |
-| `--existing MODE` | `fail`, `resume`, or `overwrite`; default is `fail`. |
-| `--f77-max-path N` | Initializer-only maximum generated path length; `0` disables the check. |
-| `--expo-list PATH` | Exposure list used in main/rearr-only mode. |
-| `--help` | Print the effective command contract. |
-
-Boolean values accept `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`. One legacy
-positional exposure-list path is retained as a compatibility alias, but new jobs
-should use `--expo-list`. The first explicit `--dataset` replaces configured
-`DATASETS`, and subsequent occurrences append. `--contains` follows the same
-replacement/append rule for `CONTAINS`. Other duplicate scalar options use the
-last value. The first explicit `--extcat-contains` similarly replaces
-`EXTCAT_FILENAME_TOKENS`; later occurrences append. Dataset target names must be
-unique within one invocation.
-
-`--f77-max-path` belongs to `process_init`: its default value of 150 protects
-paths intended to remain compatible with the legacy Fortran workflow. It does
-not truncate or reject paths in `process_main`. Main-process paths are
-`std::string` values and are instead subject to the selected filesystem and I/O
-library limits (including CFITSIO's filename capacity for FITS products).
-
-
-## Run modes
-
-External-catalog-only execution accepts any number of matching input files and
-does not require a configured dataset:
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-extcat true --run-init false --run-main false \
-  --extcat-input /data/raw_catalogs \
-  --extcat-output /data/catalogs/des_y6_chunks \
-  --extcat-contains .csv --extcat-contains y6_gold
-```
-
-`process_extcat` runs collectively once before the dataset loop. It writes the
-same one-degree filenames as `gen_src_cat/query_y6gold_sync_mp_v2.py`. Its
-default output preserves the complete raw schema; for example,
-`--extcat-columns 17,5,6,11` writes ZP/RA/Dec plus i magnitude, which is the
-minimal projection that can also run FD with the default priority. If it
-fails, no later phase starts. Output passed onward to `process_main` must
-include RA, Dec, and ZP. In pass-through mode they are read at
-their configured/canonical positions. With explicit projection, the shared
-resolver maps each raw identity to its unique ordered output position.
-
-Main-only local execution:
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-init false --run-main true \
-  --expo-list /data/work/expo_g2019.list
-```
-
-Rearrangement-only local execution consumes existing per-exposure `_all.cat`
-files referenced by the same exposure list:
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-init false --run-main false --run-rearr true \
-  --expo-list /data/work/expo_g2019.list
-```
-
-All rearrangement-specific parameters are in
-`config/ProcessRearrConfig.hpp`. In either variant, the startup layout supplies the
-row width (`18 + 1 + 29 = 48` by default) and effective RA/Dec positions; the
-rearrangement config contains only algorithm/output controls. The default
-0.1-degree grid targets about 500,000 rows per
-weighted k-d partition. Outputs are written below each dataset root in
-`rearranged_catalog/` as `subcat_NNNNNN.cat` plus
-`catalog_summary.txt`. Every data row must have the exact numeric width and
-finite values; configured missing catalogs and malformed rows are skipped and
-reported.
-
-Before dynamic reads, rank 0 scans `_all.cat` paths in exposure-list order,
-selects the first readable header as the shared schema, and broadcasts it with
-the resolved paths. `MPIScheduler::distribute` then assigns 1-based exposure
-jobs. Each worker reads one catalog header, immediately validates it against the
-shared schema, discards it, and parses rows; workers do not cache per-catalog
-headers. The original zero-based exposure-list index remains the deterministic
-row provenance key. Rank 0 reports catalog-read completion, redistribution, and
-partition-writing markers in that order.
-
-Initializer-only local execution:
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-init true --run-main false \
+mpirun -np 8 ./Fourier_Quad_Pipe --config pipeline.ini \
   --science-root /data/archive/science \
-  --dq-root /data/archive/dq \
-  --output-root /data/work --dataset g2019:c4d_19
-```
-
-Batch initialization pairs every target with its own prefix. Multiple contains
-tokens select an archive when any token occurs in its basename:
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-init true --run-main false \
-  --science-root /data/archive/science \
-  --dq-root /data/archive/dq \
+  --dq-root /data/archive/dqmask \
   --output-root /data/work \
-  --dataset g2013:c4d_13 --dataset g2014:c4d_14 \
-  --dataset g2019:c4d_19 \
-  --contains v1 --contains v2
+  --dataset g2019:c4d_19 --existing resume
 ```
 
-Chained local execution uses the same initializer options with downstream phase
-switches enabled. After successful initialization, `process_main` and
-`process_rearr` receive
-the normalized absolute `output_root/expo_<target>.list` path returned by
-`process_init`. That generated path overrides `--expo-list`, the legacy positional
-argument, and every configured exposure-list default.
+Gaia-catalog-only, with CLI overrides:
 
 ```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-init true --run-main true --run-rearr true \
-  --science-root /data/archive/science \
-  --dq-root /data/archive/dq \
-  --output-root /data/work --dataset g2019:c4d_19 \
-  --existing resume
+mpirun -np 8 ./Fourier_Quad_Pipe \
+  --run-astrocat true --run-extcat false --run-init false --run-main false \
+  --run-rearr false --run-fd false \
+  --astrocat-input /data/raw_gaia --astrocat-output /data/gaia/tiles \
+  --astrocat-add-header true --astrocat-existing fail
 ```
 
-Enable all four switches to build the external catalog first, then initialize,
-process, and rearrange every configured dataset. The effective
-`--extcat-output` path is also used by the numerical source extractor.
+`--astrocat-output` controls only `process_astrocat`. It is not compared with,
+propagated to, or required to match `[lensing].astrometry_cat`.
 
-Datasets execute sequentially on the same MPI communicator and stop at the first
-failure. In main/rearr-only batch mode, omit `--expo-list`; the driver derives one
-`output_root/expo_<target>.list` path per dataset. A single external exposure list
-is accepted only for a single downstream-only dataset. In chained batch mode, every
-initializer-generated absolute list overrides external exposure-list input for
-its corresponding dataset.
-
-On a Slurm cluster, use the same executable arguments with the site launcher,
-for example `srun -n 40 ./Fourier_Quad_Pipe ...`. The initializer failure status
-is collective; the numerical phase is never entered after initialization fails.
-
-
-## Initializer output contract
-
-For each `--output-root OUTPUT --dataset TARGET:PREFIX`, initialization builds
-the pipeline directory tree below `OUTPUT/TARGET`. The exact order is: create
-the fixed type directories idempotently; extract Science/DQ chip images; write
-each successful Science exposure's `stamps/<EXPOSURE>.list`; have rank zero
-publish the two top-level lists; create chip-product exposure subdirectories
-from the published expo list; and finally publish the manifest. Source
-`.fits.fz` archives are read in place and are never copied or removed. The
-complete fixed directory contract and its chip-product subset are centralized
-in `include/OutputLayout.hpp` for both variants.
-
-### Output layout under `OUTPUT/TARGET`
-
-- `science/<EXPOSURE>/<EXPOSURE>_<N>.fits` - Science chip images, sharded one
-  subdirectory per exposure; `<N>` is the sequential two-dimensional HDU
-  occurrence index (1, 2, 3, ...).
-- `dqmask/<EXPOSURE>/<EXPOSURE>_<CCDNUM>.fits` - DQ mask chip images, sharded
-  one subdirectory per exposure; `<CCDNUM>` is the FITS `CCDNUM` header value.
-- `stamps/` - per-exposure chip lists (`<EXPOSURE>.list`) written during
-  extraction, plus all `process_main` intermediate products in type-specific
-  subdirectories (below).
-- `astrometry/dat_Astro/`, `astrometry/Head/`, `astrometry/dat_Chk/` -
-  astrometry solutions (`<P>_astro.dat`), WCS `.head` files, and check data.
-- `result/` - final per-exposure products, including `<EXPOSURE>_all.cat`
-  consumed by `process_rearr`.
-
-### process_main intermediate products (under `stamps/`)
-
-Type-specific subdirectories replace the former flat `stamps/`, `rescale/`,
-`starxy/`, `fits_psfresi/`, `dat_pcs/`, and `dat_starcomp/` directories:
-
-`Norm/`, `cat_Orig/`, `dat_StarInfo/`, `dat_StarCanInfo/`, `dat_SrcInfo/`,
-`dat_PsfFit/`, `dat_Shear/`, `dat_ExpoInfo/`, `dat_StarComp/`, `dat_StarCompV2/`,
-`dat_Rescale/`, `dat_StarXY/`, `dat_Pcs/`, `fits_StarCan/`, `fits_StarCanN/`,
-`fits_StarCanP/`, `fits_StarP/`, `fits_Src/`, `fits_Noise/`, `fits_SrcP/`,
-`fits_PsfLocal/`, `fits_PsfSrc/`, `fits_PsfResi/`.
-
-### Stamp-cube data contract
-
-Stage 3--7 stamp collections are stored as contiguous three-dimensional FITS
-primary images. Their axes are `NAXIS1=nx`, `NAXIS2=ny`, and
-`NAXIS3=count`; memory uses `[stamp][row][col]`, or flat index
-`((stamp * ny) + row) * nx + col`. Each writer also records
-`FQFMT='STAMP_CUBE'` and `FQORDER='X,Y,STAMP'`.
-
-Readers recover the dimensions from the FITS header, then direct consumers
-require exact agreement with the configured stamp size and catalog plane count.
-A mismatch is a fatal inter-stage contract error and terminates the MPI world.
-The former two-dimensional mosaic format, caller-supplied packing geometry, and
-maximum-capacity stamp image buffers are no longer supported.
-
-This is an intentional intermediate-format break. Regenerate Stage 3 and later
-stamp products after upgrading. Standard users of `PSF_Ms=1` must also regenerate
-PCA residual/component products because PCA pixels now retain the same row-major
-feature order as the image instead of using the legacy internal transpose. Lite
-remains `PSF_Ms=0` and does not contain the PCA reconstruction path.
-
-Every chip-scoped product is sharded one level further by exposure:
-`<TYPE>/<EXPOSURE>/<CHIP><SUFFIX>`. For example, a normalized chip is written
-as `stamps/Norm/<EXPOSURE>/<CHIP>_norm.fits`, and its astrometry solution is
-`astrometry/dat_Astro/<EXPOSURE>/<CHIP>_astro.dat`. Exposure-scoped products
-such as `.head`, `_star_info_expo.dat`, `_star_power_expo.fits`,
-`_PSF_source.fits`, `_expo_info.dat`, and `_all.cat` remain directly in their
-existing type directories. Rank zero creates these chip-product
-`<EXPOSURE>/` directories idempotently only after publishing and re-reading
-`expo_TARGET.list`.
-
-### process_main path and output-failure contract
-
-The Stage 1--9 producer/consumer chain has been audited against this layout.
-Chip products are constructed on both write and read paths with
-`OutputLayout::chipPath`; exposure products remain directly in their declared
-type directories. The checked chain is: astrometry/normalization, WCS/check,
-source and star-candidate extraction, star power, PSF products, source power,
-shear, exposure information, and final catalog combination. DQ input is read
-from the same `dqmask/<EXPOSURE>/<EXPOSURE>_<CCDNUM>.fits` contract published
-by initialization. No path-layer or suffix mismatch was found.
-
-All `process_main` text outputs use the checked `MainIO::OutputFile` stream.
-FITS outputs use the checked `FitsIO` creation/write/close paths. A create,
-write, flush, or close failure emits one `Output creation failed` diagnostic
-containing MPI rank, operation, output path, and the OS/CFITSIO reason, then
-terminates the MPI job with `MPI_Abort`. This avoids leaving the master or
-another worker blocked in the dynamic scheduler.
-
-### Exposure-list generation
-
-During extraction each rank writes `stamps/<EXPOSURE>.list` (the chip image
-paths it produced) directly from the extraction result - no post-hoc disk
-re-scan is performed. After all ranks finish, rank zero scans `stamps/`, sorts
-the per-exposure lists, and atomically publishes the first two files below:
-
-- `OUTPUT/expo_TARGET.list` - top-level list; each line is
-  `"<OUTPUT/TARGET/stamps/<EXPOSURE>.list>"  <chip count>`.
-- `OUTPUT/fits_TARGET.list` - flat list of every Science chip image path.
-
-Rank zero then reads the published expo list and creates each chip-product
-exposure subdirectory. Only after that step succeeds does it atomically publish
-`OUTPUT/init_TARGET_manifest.json`. Manifest schema version 2 records the
-`exposure_directories_created` completion flag as well as all active basename
-filters in the `filename_tokens` array.
-
-Science chips are numbered by two-dimensional HDU occurrence; DQ chips are
-numbered by `CCDNUM`. Downstream stages derive the dataset root from a Science
-chip path via `getDir(image, 3)` (three levels up:
-`science/<EXPOSURE>/<file>` -> `science` -> `OUTPUT/TARGET`), and per-chip DQ
-masks are read from `dqmask/<EXPOSURE>/<EXPOSURE>_<CCDNUM>.fits`.
-
-
-## Docker Environment
-
-
-The Docker environments provide a reproducible build toolchain without requiring
-manual installation of compilers and scientific libraries.
-
-
-### Docker directories
-
-#### `cpp_docker/`
-
-Builds a portable HPC runtime image:
-
-| Component | Version |
-|---|---|
-| Base image | Rocky Linux 8.10 |
-| G++ | 12.3.0 (conda-forge) |
-| OpenMPI | 4.1.8 (Slurm PMI2 direct-launch) |
-| CFITSIO | 4.6.4 |
-| FFTW | 3.3.11 |
-| Eigen | 3.4.0 |
-| LAPACK / OpenBLAS | 3.11.0 / 0.3.33 |
-
-Key files: `Dockerfile`, `compose.yaml`, `pixi.toml`, `.env.example`,
-`scripts/verify-image.sh`, `scripts/check-public-repo.sh`, `runner/` (HPC
-deployment scripts), `SOURCES.md`, `THIRD_PARTY_NOTICES.md`.
-
----
-
-
-### Quick start (C++)
+External-catalog-only:
 
 ```bash
-cd cpp_docker
-cp .env.example .env
-# Edit .env: set CPP_SOURCE_HOST, catalog paths, and PROCESS_DATA_HOST
-
-docker compose build
-docker compose run --rm FourierQuad-CPP
+mpirun -np 8 ./Fourier_Quad_Pipe \
+  --run-extcat true --run-init false --run-main false \
+  --run-rearr false --run-fd false \
+  --extcat-input /data/raw_catalogs \
+  --extcat-output /data/catalogs/tiles
 ```
 
-Inside the container:
+At least one phase must be enabled. If initialization runs successfully, its
+generated absolute `expo_<target>.list` is used by later phases. In
+downstream-only mode, omit `--expo-list` only when `output_root` and the dataset
+name can derive it unambiguously.
 
-```bash
-cd /workspace/src_pipe
-make -j4
-mpirun -np 4 ./Fourier_Quad_Pipe /data/DataProcess/expo_list.list
+On Slurm, replace `mpirun` with the site-supported launcher. The supplied
+container runner requires `srun --mpi=pmi2`; see
+[cpp_docker/runner/README.md](cpp_docker/runner/README.md).
+
+## Inputs and outputs
+
+The canonical definitions and minimum requirements for Science images, the
+Gaia catalog, the External source catalog, and DQ masks are in the root
+[Input data requirements](README.md#input-data-requirements). DQ masks are a
+configuration-dependent input class: Lite always reads per-chip DQ masks,
+whereas Standard may omit them only when the selected
+`[lensing].include_mask` mode and active code path do not access DQ data.
+
+An exposure list contains one chip-list path per nonblank record. A trailing
+legacy chip count is accepted. Quoted paths are supported by the current C++
+reader.
+
+Initialization reads compressed archives in place and creates a dataset tree
+below `output_root/<target>/`, including `science/`, `dqmask/`, `stamps/`, and
+`result/`. It also publishes `expo_<target>.list`, `fits_<target>.list`, and an
+initializer manifest.
+
+The most important downstream products are:
+
+```text
+<dataset>/result/<exposure>_all.cat
+<dataset>/<rearr-output-dir>/subcat_*.cat
+<dataset>/<rearr-output-dir>/catalog_summary.txt
+<dataset>/<fd-output-dir>/FD_test_comb.dat
 ```
 
+Stage 7 writes 28 pipeline fields; Stage 9 writes `EXPO_NUM`, `ccD_NUM`, and
+one exposure chi-square. The default complete row is therefore 18 external
+fields + two identity fields + 29 pipeline fields = 49 fields. Explicit
+external-catalog projection changes only the external prefix width. The
+canonical identity order is always `EXPO_NUM` immediately before `ccD_NUM`;
+FD uses this serialized exposure identity rather than file-list order. Older
+48-field products are schema-incompatible and must be regenerated before
+rearrangement or FD processing. Column identities, optional-band mapping, and
+the FD band-selection priority are defined in
+[CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md).
 
-### Verifying an image
+Invalid numerical sources retain row alignment. Stage 6 records a 12-value
+`-99999` source marker; Stage 7 emits a full 28-value `-99999` row for that
+source or any later non-finite result; Stage 9 rejects the marked row. This is
+an output contract, not an additional configuration option.
 
-Each Docker directory includes a verification script:
+## Frequent errors
 
-```bash
-bash f77_docker/scripts/verify-image.sh f77pipeline-dev:gnu4.8.5
-bash cpp_docker/scripts/verify-image.sh cpppipeline-dev:gxx12.3-openmpi4.1.8-pmi2
-```
+- Do not enable Stage 9 without Stage 8.
+- The external-catalog output must not equal or be nested below its input.
+- With explicit column projection, include raw RA, Dec, and photo-z columns.
+- Do not use Standard-only `[lensing]` keys with Lite.
+- Do not run concurrent builds that clean the same source tree.
+- Container paths, not host paths, belong in INI/CLI arguments executed inside
+  a container.
 
-For detailed Docker environment documentation, see:
-- [`f77_docker/README.md`](f77_docker/README.md) / [`f77_docker/README-CN.md`](f77_docker/README-CN.md)
-- [`cpp_docker/README.md`](cpp_docker/README.md) / [`cpp_docker/README-CN.md`](cpp_docker/README-CN.md)
+## Container deployment
 
----
-
-
-
-## HPC Deployment
-
-Both Docker environments include `runner/` directories with Slurm/Apptainer
-deployment scripts. The typical workflow is:
-
-1. Pull the GHCR image and convert to a SIF:
-   ```bash
-   bash f77_docker/runner/pull-sif.sh    # or cpp_docker/runner/pull-sif.sh
-   ```
-
-2. Configure the environment:
-   ```bash
-   cp f77_docker/runner/f77pipeline.env.example f77_docker/runner/f77pipeline.env
-   # Edit paths for your cluster
-   ```
-
-3. Audit MPI compatibility (read-only):
-   ```bash
-   bash f77_docker/runner/inspect-cluster-mpi.sh
-   ```
-
-4. Submit the pipeline:
-   ```bash
-   sbatch f77_docker/runner/f77pipeline.slurm
-   ```
-
-For detailed HPC runner documentation, see:
-- [`f77_docker/runner/README.md`](f77_docker/runner/README.md) / [`f77_docker/runner/README-CN.md`](f77_docker/runner/README-CN.md)
-- [`cpp_docker/runner/README.md`](cpp_docker/runner/README.md) / [`cpp_docker/runner/README-CN.md`](cpp_docker/runner/README-CN.md)
-
----
+For local Docker use, see [cpp_docker/README.md](cpp_docker/README.md). For
+Slurm/Apptainer, see [cpp_docker/runner/README.md](cpp_docker/runner/README.md).
+The image is a toolchain/runtime image: it never supplies the pipeline source,
+configuration, catalogs, or observation data.

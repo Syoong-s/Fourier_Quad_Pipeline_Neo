@@ -1,7 +1,7 @@
 #ifndef OUTPUT_FILE_HPP
 #define OUTPUT_FILE_HPP
 
-#include <mpi.h>
+#include "general/MPIScheduler.hpp"
 
 #include <cerrno>
 #include <cstdlib>
@@ -28,7 +28,7 @@ namespace MainIO {
         MPI_Finalized(&mpi_finalized);
     }
     if (mpi_initialized != 0 && mpi_finalized == 0) {
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        rank = MPIScheduler::state.rank;
     }
 
     std::cerr << "Output creation failed"
@@ -38,7 +38,7 @@ namespace MainIO {
               << " reason=" << reason << std::endl;
 
     if (mpi_initialized != 0 && mpi_finalized == 0) {
-        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        MPI_Abort(MPIScheduler::state.communicator, EXIT_FAILURE);
     }
     std::_Exit(EXIT_FAILURE);
 }

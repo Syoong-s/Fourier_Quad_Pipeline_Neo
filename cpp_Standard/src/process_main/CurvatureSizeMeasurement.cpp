@@ -1,4 +1,4 @@
-#include "ShearMeasurement.hpp"
+#include "process_main/ShearMeasurement.hpp"
 #include "LensingConfig.hpp"
 
 #include <Eigen/Dense>

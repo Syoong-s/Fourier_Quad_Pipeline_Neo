@@ -1,6 +1,6 @@
-#include "ImageProcessing.hpp"
-#include "NoiseCovariance.hpp"
-#include "NumericalRecipes.hpp"
+#include "process_main/ImageProcessing.hpp"
+#include "process_main/NoiseCovariance.hpp"
+#include "general/NumericalRecipes.hpp"
 
 #include <algorithm>
 #include <cmath>

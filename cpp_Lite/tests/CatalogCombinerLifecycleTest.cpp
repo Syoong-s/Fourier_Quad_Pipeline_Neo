@@ -1,9 +1,11 @@
-#include "CatalogCombiner.hpp"
-#include "FitsIO.hpp"
+#include "process_main/CatalogCombiner.hpp"
+#include "process_main/ExposureInfo.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/FitsIO.hpp"
 #include "LensingConfig.hpp"
-#include "OutputLayout.hpp"
-#include "UniversalUtils.hpp"
-#include "Universalblock.hpp"
+#include "general/OutputLayout.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/Universalblock.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -17,13 +19,15 @@
 
 #include <unistd.h>
 
-std::vector<std::string> EXPO_FILE;
+ProcessMain::State ProcessMain::state;
 
 namespace ExposureInfo {
-std::vector<float> expo_para;
+State state;
 }
 
 namespace {
+
+constexpr int kExposureIndex = 7;
 
 // ==========================================
 // Function: Stop the catalog-lifecycle test on a failed requirement
@@ -94,7 +98,8 @@ public:
     // Function: Write independently populated shear and original catalogs
     // Method: Always write nonblank headers and optionally one data row per input.
     // ==========================================
-    void writeCatalogs(bool with_shear_data, bool with_original_data) const {
+    void writeCatalogs(bool with_shear_data, bool with_original_data,
+                       float first_shear_value = 0.0f) const {
         std::ofstream shear(shear_file_, std::ios::trunc);
         std::ofstream orig(orig_file_, std::ios::trunc);
         require(static_cast<bool>(shear) && static_cast<bool>(orig),
@@ -107,7 +112,8 @@ public:
         orig << "ra dec\n";
         if (with_shear_data) {
             for (int column = 0; column < LensingConfig::shear_cat_ncols; ++column) {
-                shear << (column == 0 ? "0" : " 0");
+                shear << (column == 0 ? "" : " ")
+                      << (column == 0 ? first_shear_value : 0.0f);
             }
             shear << '\n';
         }
@@ -132,10 +138,12 @@ public:
     // ==========================================
     void combine(float chi2) const {
         CatalogCombiner::combineExpoCatalog(
-            1, std::vector<std::string>{image_file_}, root_.string(), chi2);
+            1, std::vector<std::string>{image_file_}, root_.string(),
+            kExposureIndex, chi2);
     }
 
     const std::string& outputFile() const noexcept { return output_file_; }
+    int chipIndex() const { return UniversalUtils::getChipId(image_file_); }
 
 private:
     std::filesystem::path root_;
@@ -172,8 +180,8 @@ void testNoOutputCases(TemporaryCatalogTree& tree) {
 }
 
 // ==========================================
-// Function: Verify lazy creation and terminal Chi2 serialization
-// Method: Combine one aligned data row and inspect both output lines.
+// Function: Verify lazy creation and the complete Stage-9 schema
+// Method: Require exposure/CCD header and data order, exact width, and terminal Chi2.
 // ==========================================
 void testLiveOutput(TemporaryCatalogTree& tree) {
     constexpr float chi2 = 0.005f;
@@ -189,20 +197,50 @@ void testLiveOutput(TemporaryCatalogTree& tree) {
     require(std::getline(output, header) && std::getline(output, row)
                 && !std::getline(output, extra),
             "combined catalog must contain one header and one data row");
-    require(header.size() >= 4
-                && header.substr(header.size() - 4) == "Chi2",
-            "combined catalog header must end in Chi2");
-
-    std::istringstream values(row);
-    double value = 0.0;
-    double last_value = 0.0;
-    int columns = 0;
-    while (values >> value) {
-        last_value = value;
-        ++columns;
+    std::istringstream header_stream(header);
+    std::vector<std::string> header_fields;
+    std::string header_field;
+    while (header_stream >> header_field) {
+        header_fields.push_back(header_field);
     }
-    require(columns > 0 && std::abs(last_value - chi2) < 1.0e-7,
+
+    std::istringstream values_stream(row);
+    std::vector<double> values;
+    double value = 0.0;
+    while (values_stream >> value) {
+        values.push_back(value);
+    }
+    const std::size_t expected_columns =
+        2U + 2U
+        + static_cast<std::size_t>(LensingConfig::shear_cat_ncols) + 1U;
+    require(header_fields.size() == expected_columns
+                && values.size() == expected_columns,
+            "combined header and row must have the complete schema width");
+    require(header_fields[2] == "EXPO_NUM"
+                && header_fields[3] == "ccD_NUM",
+            "EXPO_NUM must immediately precede ccD_NUM in the header");
+    require(std::abs(values[2] - kExposureIndex) < 1.0e-7
+                && std::abs(values[3] - tree.chipIndex()) < 1.0e-7,
+            "data exposure and CCD identities must match the header order");
+    require(header_fields.back() == "Chi2"
+                && std::abs(values.back() - chi2) < 1.0e-7,
             "combined catalog data must end in the exposure Chi2");
+}
+
+// ==========================================
+// Function: Verify Stage-9 sentinel rejection preserves row pairing
+// Method: Combine one full-width sentinel shear row with its original row and
+//         require a header-only science catalog.
+// ==========================================
+void testSentinelOutput(TemporaryCatalogTree& tree) {
+    tree.writeCatalogs(true, true, -99999.0f);
+    tree.combine(0.0f);
+
+    std::ifstream output(tree.outputFile());
+    std::string header;
+    std::string row;
+    require(std::getline(output, header) && !std::getline(output, row),
+            "sentinel shear row must be consumed but omitted from science output");
 }
 
 }  // namespace
@@ -215,6 +253,7 @@ int main() {
     TemporaryCatalogTree tree;
     testNoOutputCases(tree);
     testLiveOutput(tree);
+    testSentinelOutput(tree);
     std::cout << "CatalogCombiner lifecycle tests passed\n";
     return EXIT_SUCCESS;
 }

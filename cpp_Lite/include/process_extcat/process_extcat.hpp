@@ -3,8 +3,6 @@
 
 #include "CatalogLayout.hpp"
 
-#include <mpi.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -84,14 +82,13 @@ void normalizeAndValidateConfig(Config& config);
 // Method: Discover and inspect inputs on rank zero, optionally project any ordered column
 //         subset, process newline-aligned byte ranges, and publish deterministic tiles.
 // ==========================================
-int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator = MPI_COMM_WORLD);
+int process_extcat(ProcessExtcat::Config config);
 
 // ==========================================
 // Function: Run external-catalog tiling from unified pipeline options
 // Method: Translate the extcat section, preserve its configured projection
 //         width, and participate collectively on the pipeline-owned communicator.
 // ==========================================
-int process_extcat(const RuntimeConfig& runtime_config,
-                   MPI_Comm communicator = MPI_COMM_WORLD);
+int process_extcat(const RuntimeConfig& runtime_config);
 
 #endif  // PROCESS_EXTCAT_PROCESS_EXTCAT_HPP

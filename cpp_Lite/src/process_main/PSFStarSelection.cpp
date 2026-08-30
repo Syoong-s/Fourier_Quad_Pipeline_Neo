@@ -1,4 +1,4 @@
-#include "PSFStarSelection.hpp"
+#include "process_main/PSFStarSelection.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -449,6 +449,74 @@ void updateTopK(
 }
 
 // ==========================================
+// Function: Select capped exposure-wide large-size minChi references
+// Method: Sort the top fraction by size/chip/star, then apply a per-chip cap
+//         without filling from candidates below the exposure-wide pool.
+// ==========================================
+std::vector<MinChiReferenceCandidate> selectMinChiReferenceStars(
+    const std::vector<MinChiReferenceCandidate>& locus_candidates,
+    double reference_fraction,
+    int maximum_per_chip) {
+    std::vector<MinChiReferenceCandidate> ranked;
+    if (!std::isfinite(reference_fraction) || reference_fraction <= 0.0
+        || reference_fraction > 1.0 || maximum_per_chip <= 0) return ranked;
+    ranked.reserve(locus_candidates.size());
+    for (const MinChiReferenceCandidate& candidate : locus_candidates) {
+        if (candidate.chip_index >= 0 && candidate.star_index >= 0
+            && std::isfinite(candidate.size)) ranked.push_back(candidate);
+    }
+    std::sort(ranked.begin(), ranked.end(),
+        [](const MinChiReferenceCandidate& first,
+           const MinChiReferenceCandidate& second) {
+            if (first.size != second.size) return first.size > second.size;
+            if (first.chip_index != second.chip_index) return first.chip_index < second.chip_index;
+            return first.star_index < second.star_index;
+        });
+    const std::size_t pool_count = std::min(
+        ranked.size(), static_cast<std::size_t>(std::ceil(
+            reference_fraction * static_cast<double>(ranked.size()))));
+    std::vector<MinChiReferenceCandidate> selected;
+    selected.reserve(pool_count);
+    std::vector<int> chip_counts;
+    for (std::size_t index = 0; index < pool_count; ++index) {
+        const MinChiReferenceCandidate& candidate = ranked[index];
+        if (candidate.chip_index >= static_cast<int>(chip_counts.size())) {
+            chip_counts.resize(static_cast<std::size_t>(candidate.chip_index + 1), 0);
+        }
+        if (chip_counts[candidate.chip_index] >= maximum_per_chip) continue;
+        chip_counts[candidate.chip_index]++;
+        selected.push_back(candidate);
+    }
+    return selected;
+}
+
+// ==========================================
+// Function: Compute one chip's minChi values and threshold-pair sample
+// Method: Visit every unordered locus-locus pair once, update both endpoints,
+//         and sample the distance when either endpoint is a reference.
+// ==========================================
+MinChiPairResult computeMinChiAndThresholdPairs(
+    const std::vector<MinChiCandidateView>& candidates) {
+    MinChiPairResult result;
+    result.min_chi.assign(candidates.size(), std::numeric_limits<float>::infinity());
+    for (std::size_t first = 0; first + 1 < candidates.size(); ++first) {
+        if (!candidates[first].in_fwhm_locus || candidates[first].chi_window == nullptr) continue;
+        for (std::size_t second = first + 1; second < candidates.size(); ++second) {
+            if (!candidates[second].in_fwhm_locus || candidates[second].chi_window == nullptr) continue;
+            const float chi = normalizedChiDistance(
+                *candidates[first].chi_window, *candidates[second].chi_window);
+            if (!std::isfinite(chi)) continue;
+            result.min_chi[first] = std::min(result.min_chi[first], chi);
+            result.min_chi[second] = std::min(result.min_chi[second], chi);
+            if (candidates[first].is_reference || candidates[second].is_reference) {
+                result.threshold_pair_chi.push_back(chi);
+            }
+        }
+    }
+    return result;
+}
+
+// ==========================================
 // Function: Extract mutual-KNN graph edges among active candidates
 // Method: Keep an undirected edge only when both retained top-K lists contain
 //         the opposite endpoint and both endpoints survived the shared cut.
@@ -587,6 +655,42 @@ bool computeAnalyticLOO(
     loo_residual = (observed - fitted) / denominator;
     loo_model = observed - loo_residual;
     return std::isfinite(loo_residual) && std::isfinite(loo_model);
+}
+
+// ==========================================
+// Function: Convert raw analytic PRESS to its leverage-standardized score
+// Method: Multiply by sqrt(1-h) after the same finite denominator guard used
+//         by the analytic leave-one-out calculation.
+// ==========================================
+bool computeLeverageStandardizedPress(
+    double raw_press,
+    double leverage,
+    double minimum_denominator,
+    double& standardized_press) {
+    const double denominator = 1.0 - leverage;
+    if (!std::isfinite(raw_press) || !std::isfinite(denominator)
+        || !std::isfinite(minimum_denominator) || minimum_denominator <= 0.0
+        || denominator <= minimum_denominator) return false;
+    standardized_press = raw_press * std::sqrt(denominator);
+    return std::isfinite(standardized_press);
+}
+
+// ==========================================
+// Function: Decide whether an optional PRESS removal may be attempted
+// Method: Apply the rejection switch, outlier count, removal cap, and minimum
+//         retained-star guard without mutating any fitting or selection state.
+// ==========================================
+PressRemovalDecision decidePressRemoval(
+    bool rejection_enabled,
+    int initial_count,
+    int flagged_count,
+    int minimum_count,
+    int maximum_removals) {
+    if (!rejection_enabled) return PressRemovalDecision::Disabled;
+    if (flagged_count <= 0) return PressRemovalDecision::NoOutliers;
+    if (maximum_removals < 0 || flagged_count > maximum_removals) return PressRemovalDecision::TooManyOutliers;
+    if (initial_count - flagged_count < minimum_count) return PressRemovalDecision::WouldUnderrunMinimum;
+    return PressRemovalDecision::Apply;
 }
 
 }  // namespace Internal

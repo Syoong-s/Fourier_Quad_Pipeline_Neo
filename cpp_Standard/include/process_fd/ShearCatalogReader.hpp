@@ -2,7 +2,7 @@
 #define SHEAR_CATALOG_READER_HPP
 
 #include "CatalogLayout.hpp"
-#include "FDData.hpp"
+#include "process_fd/FDData.hpp"
 
 #include <cstddef>
 #include <string>

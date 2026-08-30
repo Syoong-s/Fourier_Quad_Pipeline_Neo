@@ -1,31 +1,32 @@
 #include "process_main/process_main.hpp"
 
-#include "Astrometry.hpp"
-#include "CatalogCombiner.hpp"
-#include "ExposureInfo.hpp"
-#include "ExternalCatalogReader.hpp"
-#include "FourierTransformSt1.hpp"
-#include "FourierTransformSt2.hpp"
+#include "process_main/Astrometry.hpp"
+#include "process_main/CatalogCombiner.hpp"
+#include "process_main/ExposureInfo.hpp"
+#include "process_main/ExternalCatalogReader.hpp"
+#include "process_main/FourierTransformSt1.hpp"
+#include "process_main/FourierTransformSt2.hpp"
 #include "LensingConfig.hpp"
-#include "MPIScheduler.hpp"
-#include "OutputFile.hpp"
-#include "PSFModel.hpp"
-#include "PreProcess.hpp"
-#include "ShearMeasurement.hpp"
-#include "SourceExtractor.hpp"
-#include "UniversalUtils.hpp"
+#include "general/MPIScheduler.hpp"
+#include "process_main/OutputFile.hpp"
+#include "process_main/PSFModel.hpp"
+#include "process_main/PreProcess.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/ShearMeasurement.hpp"
+#include "process_main/SourceExtractor.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "general/ExposureList.hpp"
+#include "general/MPIUtils.hpp"
 
 #include <mpi.h>
 
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
 
-std::vector<std::string> EXPO_FILE;
-int N_EXPO = 0;
+ProcessMain::State ProcessMain::state;
 
 namespace {
 
@@ -35,35 +36,20 @@ namespace {
 //         input before any rank enters the numerical stage scheduler.
 // ==========================================
 bool loadExposureList(const std::string& exposure_list, std::string& error) {
-    EXPO_FILE.clear();
-    N_EXPO = 0;
-
-    std::ifstream input(exposure_list);
-    if (!input.is_open()) {
-        error = "EXPO_LIST reading error: " + exposure_list;
+    ProcessMain::state.clear();
+    std::vector<ExposureList::Entry> entries;
+    if (!ExposureList::loadPipelineList(
+            exposure_list, entries, 0, error)) {
         return false;
     }
 
-    std::string exposure_name;
-    int chip_count = 0;
-    while (input >> exposure_name >> chip_count) {
-        if (exposure_name.size() >= 2 && exposure_name.front() == '"'
-            && exposure_name.back() == '"') {
-            exposure_name = exposure_name.substr(1, exposure_name.size() - 2);
-        }
-        EXPO_FILE.push_back(exposure_name);
+    ProcessMain::state.exposure_files.reserve(entries.size());
+    for (const ExposureList::Entry& entry : entries) {
+        ProcessMain::state.exposure_files.push_back(entry.path);
     }
-    if (!input.eof()) {
-        error = "EXPO_LIST contains an invalid record: " + exposure_list;
-        EXPO_FILE.clear();
-        return false;
-    }
-    if (EXPO_FILE.empty()) {
-        error = "EXPO_LIST contains no exposures: " + exposure_list;
-        return false;
-    }
-    N_EXPO = static_cast<int>(EXPO_FILE.size());
-    std::cout << "Total number of EXPOSURE: " << N_EXPO << std::endl;
+
+    std::cout << "Total number of EXPOSURE: "
+              << ProcessMain::state.exposureCount() << std::endl;
     return true;
 }
 
@@ -71,22 +57,9 @@ bool loadExposureList(const std::string& exposure_list, std::string& error) {
 // Function: Broadcast the validated exposure list to every MPI rank
 // Method: Send the count, then length-prefix each mutable C++ string.
 // ==========================================
-void broadcastExposureList(int rank) {
-    MPI_Bcast(&N_EXPO, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank != 0) {
-        EXPO_FILE.resize(static_cast<std::size_t>(N_EXPO));
-    }
-
-    for (int index = 0; index < N_EXPO; ++index) {
-        int length = rank == 0 ? static_cast<int>(EXPO_FILE[index].size()) : 0;
-        MPI_Bcast(&length, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        if (rank != 0) {
-            EXPO_FILE[index].resize(static_cast<std::size_t>(length));
-        }
-        if (length > 0) {
-            MPI_Bcast(EXPO_FILE[index].data(), length, MPI_CHAR, 0, MPI_COMM_WORLD);
-        }
-    }
+bool broadcastExposureList(std::string& error) {
+    return MPIUtils::broadcastStrings(
+        ProcessMain::state.exposure_files, 0, error);
 }
 
 }  // namespace
@@ -101,7 +74,7 @@ int process_main(const std::string& exposure_list) {
     std::string store_error;
     if (!RuntimeConfigStore::isInitialized()
         && !RuntimeConfigStore::initialize(config, store_error)) {
-        if (MPIScheduler::my_id == 0) {
+        if (MPIScheduler::state.rank == 0) {
             std::cerr << "Runtime config error: " << store_error << std::endl;
         }
         return 1;
@@ -123,9 +96,9 @@ int process_main(const std::string& exposure_list,
             : 0;
     int global_layout_ok = 0;
     MPI_Allreduce(&local_layout_ok, &global_layout_ok, 1, MPI_INT, MPI_MIN,
-                  MPI_COMM_WORLD);
+                  MPIScheduler::state.communicator);
     if (global_layout_ok == 0) {
-        if (MPIScheduler::my_id == 0) {
+            if (MPIScheduler::state.rank == 0) {
             std::cerr << "Catalog layout error: "
                       << (layout_error.empty()
                               ? "resolution failed on another MPI rank"
@@ -144,7 +117,7 @@ int process_main(const std::string& exposure_list,
 int process_main(const std::string& exposure_list,
                  const RuntimeConfig& runtime_config,
                  const PipelineCatalog::CatalogLayout& layout) {
-    const int rank = MPIScheduler::my_id;
+    const int rank = MPIScheduler::state.rank;
     if (!RuntimeConfigStore::isInitialized()) {
         std::string store_error;
         if (!RuntimeConfigStore::initialize(runtime_config, store_error)) {
@@ -161,7 +134,7 @@ int process_main(const std::string& exposure_list,
         ExternalCatalogReader::configure(layout, column_error) ? 1 : 0;
     int global_columns_ok = 0;
     MPI_Allreduce(&local_columns_ok, &global_columns_ok, 1, MPI_INT, MPI_MIN,
-                  MPI_COMM_WORLD);
+                  MPIScheduler::state.communicator);
     if (global_columns_ok == 0) {
         if (rank == 0) {
             std::cerr << "External-catalog column error: "
@@ -178,7 +151,7 @@ int process_main(const std::string& exposure_list,
     if (rank == 0 && !loadExposureList(exposure_list, load_error)) {
         load_ok = 0;
     }
-    MPI_Bcast(&load_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&load_ok, 1, MPI_INT, 0, MPIScheduler::state.communicator);
     if (load_ok == 0) {
         if (rank == 0) {
             std::cerr << load_error << std::endl;
@@ -186,7 +159,13 @@ int process_main(const std::string& exposure_list,
         return 1;
     }
 
-    broadcastExposureList(rank);
+    std::string broadcast_error;
+    if (!broadcastExposureList(broadcast_error)) {
+        std::cerr << "Exposure-list broadcast error on rank " << rank << ": "
+                  << broadcast_error << std::endl;
+        return 1;
+    }
+    const int exposure_count = ProcessMain::state.exposureCount();
     MPIScheduler::barrier();
 
     // ==========================================
@@ -204,54 +183,55 @@ int process_main(const std::string& exposure_list,
     }
 
     if (lensing.process_stage % 2 == 0) {
-        MPIScheduler::distribute(N_EXPO, PreProcess::preProcess, "Pre-process...");
+        MPIScheduler::distribute(exposure_count, PreProcess::preProcess, "Pre-process...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 3 == 0) {
-        MPIScheduler::distribute(N_EXPO, Astrometry::procAstrometry, "Astrometry...");
+        MPIScheduler::distribute(exposure_count, Astrometry::procAstrometry, "Astrometry...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 5 == 0) {
-        MPIScheduler::distribute(N_EXPO, SourceExtractor::procSource, "Sources ...");
+        MPIScheduler::distribute(exposure_count, SourceExtractor::procSource, "Sources ...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 7 == 0) {
-        MPIScheduler::distribute(N_EXPO, FourierTransformSt1::procFourierTSt1, "FFT st1...");
+        MPIScheduler::distribute(exposure_count, FourierTransformSt1::procFourierTSt1, "FFT st1...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 11 == 0) {
-        MPIScheduler::distribute(N_EXPO, PSFModel::procPSF, "PSF ...");
+        MPIScheduler::distribute(exposure_count, PSFModel::procPSF, "PSF ...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 13 == 0) {
-        MPIScheduler::distribute(N_EXPO, FourierTransformSt2::procFourierTSt2, "FFT st2...");
+        MPIScheduler::distribute(exposure_count, FourierTransformSt2::procFourierTSt2, "FFT st2...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 17 == 0) {
-        MPIScheduler::distribute(N_EXPO, ShearMeasurement::procShear, "Shear ...");
+        MPIScheduler::distribute(exposure_count, ShearMeasurement::procShear, "Shear ...");
     }
     MPIScheduler::barrier();
 
     if (lensing.process_stage % 19 == 0) {
-        const int mpi_parameter_count = N_EXPO * 6;
+        const int mpi_parameter_count = exposure_count * 6;
         const std::size_t parameter_count =
             static_cast<std::size_t>(mpi_parameter_count);
 
-        ExposureInfo::expo_para.assign(parameter_count, 0.0f);
-        MPIScheduler::distribute(N_EXPO, ExposureInfo::procInfo, "Info ...");
+        ExposureInfo::state.parameters.assign(parameter_count, 0.0f);
+        MPIScheduler::distribute(exposure_count, ExposureInfo::procInfo, "Info ...");
         MPIScheduler::barrier();
 
         std::vector<float> reduced_exposure_parameters(parameter_count, 0.0f);
-        MPI_Allreduce(ExposureInfo::expo_para.data(),
+        MPI_Allreduce(ExposureInfo::state.parameters.data(),
                       reduced_exposure_parameters.data(),
-                      mpi_parameter_count, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-        ExposureInfo::expo_para = std::move(reduced_exposure_parameters);
+                      mpi_parameter_count, MPI_FLOAT, MPI_SUM,
+                      MPIScheduler::state.communicator);
+        ExposureInfo::state.parameters = std::move(reduced_exposure_parameters);
 
         if (rank == 0) {
             const std::string root_directory = UniversalUtils::getDir(exposure_list, 1);
@@ -260,11 +240,11 @@ int process_main(const std::string& exposure_list,
             output << std::setprecision(10);
             output << "N-valid-chip PSF-FWHM(arcsec) chi_d-stars nstar-per-chip "
                       "cRVAL1 cRVAL2 expo_name\n";
-            for (int exposure = 0; exposure < N_EXPO; ++exposure) {
+            for (int exposure = 0; exposure < exposure_count; ++exposure) {
                 for (int parameter = 0; parameter < 6; ++parameter) {
-                    output << ExposureInfo::expo_para[exposure * 6 + parameter] << " ";
+                    output << ExposureInfo::state.parameters[exposure * 6 + parameter] << " ";
                 }
-                output << EXPO_FILE[exposure] << "\n";
+                output << ProcessMain::state.exposure_files[exposure] << "\n";
             }
             output.close();
         }
@@ -272,7 +252,7 @@ int process_main(const std::string& exposure_list,
     }
 
     if (lensing.process_stage % 23 == 0) {
-        MPIScheduler::distribute(N_EXPO, CatalogCombiner::procComb, "combine ...");
+        MPIScheduler::distribute(exposure_count, CatalogCombiner::procComb, "combine ...");
     }
     MPIScheduler::barrier();
     return 0;

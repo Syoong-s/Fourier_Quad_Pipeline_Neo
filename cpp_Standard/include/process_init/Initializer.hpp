@@ -4,8 +4,6 @@
 #include "InitConfig.hpp"
 #include "process_init/FitsExtractor.hpp"
 
-#include <mpi.h>
-
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -36,7 +34,7 @@ void normalizeAndValidateConfig(Config& config);
 // Method: Discover on rank zero, broadcast in-memory paths, extract archives
 //         directly in parallel, and publish corrected deterministic lists.
 // ==========================================
-int runInitializer(const Config& config, MPI_Comm communicator);
+int runInitializer(const Config& config);
 
 }  // namespace fqinit
 

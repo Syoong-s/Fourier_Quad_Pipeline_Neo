@@ -13,8 +13,7 @@ class KMeansClusterer {
 public:
     // Run distributed k-means and return N_jack cluster centers (3D unit vectors)
     static void runMPI(int ng, const std::vector<float>& ra,
-                       const std::vector<float>& dec, int rank,
-                       int num_procs,
+                       const std::vector<float>& dec,
                        std::vector<float>& centers /* 3×N_jack */);
 };
 

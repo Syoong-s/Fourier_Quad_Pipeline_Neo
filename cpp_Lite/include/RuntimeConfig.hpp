@@ -14,6 +14,7 @@
 //         leaving parser-only state outside the persisted process section.
 // ==========================================
 struct ProcessRuntimeConfig {
+    bool run_process_astrocat = false;
     bool run_process_extcat = false;
     bool run_process_init = true;
     bool run_process_main = true;
@@ -27,6 +28,18 @@ struct ProcessRuntimeConfig {
     std::string fd_expo_list;
     std::string fd_output_directory;
     std::string fd_output_base_directory;
+};
+
+// ==========================================
+// Structure: AstroCatRuntimeConfig
+// Method: Hold the independent raw-Gaia tiling input, output, header, and
+//         replacement policy selected through INI or CLI.
+// ==========================================
+struct AstroCatRuntimeConfig {
+    std::string input_directory;
+    std::string output_directory;
+    bool add_header = true;
+    std::string existing_policy;
 };
 
 // ==========================================
@@ -79,6 +92,7 @@ struct InitRuntimeConfig {
 //         physically deleted Standard branches remain absent from this API.
 // ==========================================
 struct LensingRuntimeConfig {
+    int astrometry_cat_type = 1;
     std::int64_t process_stage = 1;
     std::string astrometry_cat;
     int ccd_split = 2;
@@ -97,6 +111,7 @@ struct LensingRuntimeConfig {
 // ==========================================
 struct RuntimeConfig {
     ProcessRuntimeConfig process;
+    AstroCatRuntimeConfig astrocat;
     ExtCatRuntimeConfig extcat;
     InitRuntimeConfig init;
     LensingRuntimeConfig lensing;
@@ -106,7 +121,7 @@ struct RuntimeConfig {
 
 // ==========================================
 // Function: makeDefaultRuntimeConfig
-// Method: Copy the four compiled configuration-header domains into one mutable
+// Method: Copy the compiled configuration-header domains into one mutable
 //         startup value before file and CLI overrides are applied.
 // ==========================================
 RuntimeConfig makeDefaultRuntimeConfig();

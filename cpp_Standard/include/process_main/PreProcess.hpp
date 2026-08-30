@@ -3,7 +3,7 @@
 
 #include <string>
 #include <vector>
-#include "FitsIO.hpp"
+#include "process_main/FitsIO.hpp"
 
 namespace PreProcess {
 

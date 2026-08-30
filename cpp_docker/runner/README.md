@@ -1,146 +1,96 @@
-# cpp_Standard on Slurm/Apptainer clusters
+# Fourier_Quad C++ on Slurm/Apptainer
 
-This runner consumes one precompiled SIF on any x86_64 Slurm cluster that
-advertises the PMI2 launcher plugin. The SIF supplies G++ 12.3.0,
-OpenMPI 4.1.8, a PMI2 client, and the scientific stack. Host OpenMPI and host
-compiler ABI compatibility are not part of the launch contract.
+This runner launches the container-linked pipeline on x86_64 Slurm clusters
+that advertise `pmi2`. The SIF supplies the compiler, OpenMPI, and scientific
+libraries; host compiler/OpenMPI ABI compatibility is not required.
 
-The process boundary is:
+> 中文版：[README-CN.md](README-CN.md)
 
-`srun --mpi=pmi2` → `run-apptainer.sh` → `apptainer exec --cleanenv` →
-container-linked `Fourier_Quad_Pipe`.
+## Prerequisites
 
-## Site prerequisites
+- `pmi2` appears in `srun --mpi=list`;
+- Apptainer or Singularity is available on compute nodes;
+- runner, SIF, source, catalogs, data, cache, and temporary directories are on
+  storage visible at the same paths from every node;
+- allocated nodes can communicate over TCP.
 
-- x86_64 Linux compute nodes;
-- Slurm with `pmi2` listed by `srun --mpi=list`;
-- Apptainer or Singularity available on compute nodes;
-- one shared filesystem visible at identical paths on all allocated nodes;
-- routable TCP between allocated nodes for the portable baseline.
+Run the read-only site check first:
 
-The image does not include vendor UCX, OFI, or RDMA providers. Those are
-performance extensions that require separate qualification.
-
-## Directory and configuration
-
-A typical shared layout is:
-
-```text
-/shared/project/cpppipeline/
-├── code/
-├── runner/
-├── images/
-├── apptainer-cache/
-├── apptainer-tmp/
-├── scratch/
-└── data/
-    ├── Science/
-    ├── DQMask/
-    ├── AstroDir/
-    ├── ExtSrcDir/
-    ├── FlatDir/
-    └── DataProcess/
+```bash
+bash inspect-cluster-mpi.sh
 ```
 
-Copy this complete runner directory and create the trusted configuration:
+## Configure
 
-```text
+```bash
 cp cpppipeline.env.example cpppipeline.env
 ```
 
-Edit every host path. `CPP_SIF`, source, data, scratch, and the runner must be
-visible from every allocated node. Container catalogue destinations must match
-the strings compiled into
-`/workspace/src_pipe/include/process_main/LensingConfig.hpp`.
+Set the SIF or OCI/archive source, `CPP_SOURCE_HOST`, `PROCESS_DATA_HOST`,
+catalog/calibration binds, and Apptainer cache/tmp paths. Set Science, DQ,
+extcat input, rearr output, exposure-list, and FD output binds only when the
+selected phases require them.
 
-`SCIENCE_ROOT_HOST` and `DQ_ROOT_HOST` are optional read-only archive binds.
-Set them only when running process_init or process_main. Their container
-destinations are `SCIENCE_ROOT_CONTAINER` and `DQ_ROOT_CONTAINER`; use exactly
-those values for the executable's `--science-root` and `--dq-root` arguments
-when active. Four additional optional mounts (`EXTCAT_INPUT`, `REARR_OUTPUT`,
-`EXPOLIST_DIR`, `FD_OUTPUT`) follow the same conditional pattern: set `*_HOST`
-to bind, leave empty to skip. Generated files remain under the writable
-`PROCESS_DATA_CONTAINER`.
+`cpppipeline.env` is sourced as Bash. Keep `HPC_MODULES`,
+`HPC_EXTRA_BINDS`, `HPC_PASSTHROUGH_ENV`, `HPC_CONTAINER_ENV`, and
+`SRUN_ARGS` as indexed arrays. Preserve:
 
-`HPC_MODULES`, `HPC_EXTRA_BINDS`, `HPC_PASSTHROUGH_ENV`,
-`HPC_CONTAINER_ENV`, and `SRUN_ARGS` are Bash indexed arrays. Modules may make
-Apptainer or Slurm available, but must not inject a host MPI into the
-application environment. The runner uses `--cleanenv`, forwards every
-`SLURM_*`, `PMI_*`, and `PMI2_*` value created by Slurm, and forwards only
-the explicitly configured extra environment.
+```text
+MPI_LAUNCH_MODE=srun
+SLURM_MPI_TYPE=pmi2
+```
+
+Modules may expose Slurm or Apptainer, but must not inject host MPI libraries
+into the application.
 
 ## Acquire the SIF
 
-For a reviewed Docker archive, set `CPP_DOCKER_ARCHIVE`, `CPP_SIF`,
-`APPTAINER_CACHE_DIR`, and `APPTAINER_TMP_DIR`, then submit:
+From a reviewed Docker archive:
 
-```text
+```bash
 sbatch build-sif.slurm
 ```
 
-For a registry image, set a digest-pinned `OCI_IMAGE_URI` and run:
+From a digest-pinned registry image:
 
-```text
+```bash
 bash pull-sif.sh
 ```
 
-Both paths build or pull to a temporary file, atomically rename the finished
-SIF, create `${CPP_SIF}.sha256`, and refuse existing outputs. Copy the first
-field of that sidecar to `CPP_SIF_SHA256_EXPECTED` before production use.
+Both paths refuse to overwrite an existing SIF and create a SHA256 sidecar.
+Set `CPP_SIF_SHA256_EXPECTED` from that sidecar before production.
 
-## Validation order
+## Validate and run
 
-Run the singleton image and bind check:
-
-```text
+```bash
 bash run-apptainer.sh --check
-```
-
-Compile the full pipeline once on a compute node:
-
-```text
 sbatch compile-pipeline.slurm
-```
-
-Run a one-node, two-rank smoke test:
-
-```text
 sbatch --nodes=1 --ntasks=2 --ntasks-per-node=2 mpi-smoke-test.slurm
-```
-
-Then run the default multi-node smoke test:
-
-```text
 sbatch mpi-smoke-test.slurm
 ```
 
-The smoke job compiles self-contained MPI and scientific-stack probes in a
-unique directory below `HPC_SHARED_SCRATCH_HOST`. It requires at least two
-ranks and removes only its own temporary directory.
+Only after these checks, launch the pipeline:
 
-After reviewing catalogue paths and the exposure list, launch the pipeline:
-
-```text
-sbatch cpppipeline.slurm
+```bash
+sbatch cpppipeline.slurm \
+  --config /workspace/src_pipe/pipeline.ini
 ```
 
-Without script arguments, the executable receives
-`${PROCESS_DATA_CONTAINER}/expo_list.list`. Additional arguments after the
-script name are passed to `Fourier_Quad_Pipe`.
+Arguments after the script name are passed unchanged to
+`Fourier_Quad_Pipe`. With no arguments, the runner passes
+`CPP_EXPO_LIST_CONTAINER` as the legacy exposure-list argument.
 
-For a chained initialization and numerical run, pass the named workflow options,
-for example `--run-init true --run-main true --science-root
-/data/archive/science --dq-root /data/archive/dqmask --output-root
-/data/DataProcess --dataset g2013:c4d_13 --dataset g2014:c4d_14 --contains v1`.
-Repeated datasets run sequentially; repeated contains tokens use OR matching.
+The source bind is writable because compilation products stay there. Do not
+compile the same source copy concurrently. Catalog/calibration binds are
+read-only and processing/output binds are writable.
 
-## Scheduler templates
+Slurm resource directives are templates. Override partition, account, nodes,
+tasks, CPUs, memory, time, and logs according to the target site without
+changing the `srun --mpi=pmi2` process boundary.
 
-The `#SBATCH` resources are conservative templates. Override node, task,
-CPU, memory, partition, account, and time values together according to local
-policy. If a site requires centralized logs, pass absolute `--output` and
-`--error` paths to every `sbatch` command.
-
-Do not compile the same source copy concurrently. Source and processing binds
-are writable; catalogue and calibration binds are read-only. Science, DQMask,
-and four pipeline output mounts are optional (bound only when `*_HOST` is set).
+For `process_astrocat`, expose the raw Gaia directory as a read-only entry in
+`HPC_EXTRA_BINDS`, then write the generated tiles below the writable
+`PROCESS_DATA_CONTAINER` or another explicit writable bind. Use those
+container paths in `[astrocat]` or the corresponding CLI options. The producer
+output is independent of `[lensing].astrometry_cat`; configure that consumer
+path and `[lensing].astrometry_cat_type = 2` separately.

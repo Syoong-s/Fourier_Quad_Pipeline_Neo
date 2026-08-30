@@ -1,5 +1,5 @@
 #include "LensingConfig.hpp"
-#include "NoisePlaneFit.hpp"
+#include "process_main/NoisePlaneFit.hpp"
 
 #include <algorithm>
 #include <cmath>

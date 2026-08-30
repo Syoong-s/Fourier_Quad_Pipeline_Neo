@@ -1,4 +1,4 @@
-#include "NumericalRecipes.hpp"
+#include "general/NumericalRecipes.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -10,11 +10,19 @@
 
 namespace NumericalRecipes {
 
-    static thread_local int ran1_idum = -123;
-    static thread_local int ran1_iy = 0;
-    static thread_local std::array<int, 32> ran1_iv = {};
-    static thread_local int gasdev_iset = 0;
-    static thread_local float gasdev_gset = 0.0f;
+    namespace {
+
+    struct RngState {
+        int idum = -123;
+        int iy = 0;
+        std::array<int, 32> iv{};
+        int gasdev_iset = 0;
+        float gasdev_gset = 0.0f;
+    };
+
+    thread_local RngState rng_state;
+
+    }  // namespace
 
     // ==========================================
     // Function: Initialize a distinct ran1 stream for one MPI rank
@@ -71,11 +79,11 @@ namespace NumericalRecipes {
         constexpr unsigned int max_valid_seed = 2147483646u;
         const unsigned int normalized_seed =
             (seed == 0u) ? 1u : ((seed - 1u) % max_valid_seed) + 1u;
-        ran1_idum = -static_cast<int>(normalized_seed);
-        ran1_iy = 0;
-        ran1_iv.fill(0);
-        gasdev_iset = 0;
-        gasdev_gset = 0.0f;
+        rng_state.idum = -static_cast<int>(normalized_seed);
+        rng_state.iy = 0;
+        rng_state.iv.fill(0);
+        rng_state.gasdev_iset = 0;
+        rng_state.gasdev_gset = 0.0f;
     }
 
     // ==========================================
@@ -94,24 +102,24 @@ namespace NumericalRecipes {
         constexpr float RNMX = 1.0f - EPS;
 
         int k = 0;
-        if (ran1_idum <= 0 || ran1_iy == 0) {
-            ran1_idum = std::max(-ran1_idum, 1);
+        if (rng_state.idum <= 0 || rng_state.iy == 0) {
+            rng_state.idum = std::max(-rng_state.idum, 1);
             for (int j = NTAB + 7; j >= 0; --j) {
-                k = ran1_idum / IQ;
-                ran1_idum = IA * (ran1_idum - k * IQ) - IR * k;
-                if (ran1_idum < 0) ran1_idum += IM;
-                if (j < NTAB) ran1_iv[static_cast<size_t>(j)] = ran1_idum;
+                k = rng_state.idum / IQ;
+                rng_state.idum = IA * (rng_state.idum - k * IQ) - IR * k;
+                if (rng_state.idum < 0) rng_state.idum += IM;
+                if (j < NTAB) rng_state.iv[static_cast<size_t>(j)] = rng_state.idum;
             }
-            ran1_iy = ran1_iv[0];
+            rng_state.iy = rng_state.iv[0];
         }
 
-        k = ran1_idum / IQ;
-        ran1_idum = IA * (ran1_idum - k * IQ) - IR * k;
-        if (ran1_idum < 0) ran1_idum += IM;
-        int j = ran1_iy / NDIV;
-        ran1_iy = ran1_iv[static_cast<size_t>(j)];
-        ran1_iv[static_cast<size_t>(j)] = ran1_idum;
-        float value = std::min(AM * static_cast<float>(ran1_iy), RNMX);
+        k = rng_state.idum / IQ;
+        rng_state.idum = IA * (rng_state.idum - k * IQ) - IR * k;
+        if (rng_state.idum < 0) rng_state.idum += IM;
+        int j = rng_state.iy / NDIV;
+        rng_state.iy = rng_state.iv[static_cast<size_t>(j)];
+        rng_state.iv[static_cast<size_t>(j)] = rng_state.idum;
+        float value = std::min(AM * static_cast<float>(rng_state.iy), RNMX);
         return static_cast<double>(value);
     }
 
@@ -120,7 +128,7 @@ namespace NumericalRecipes {
     // Method: Exact Box-Muller cache logic from F77 press.f gasdev using REAL intermediates.
     // ==========================================
     double gasdev() {
-        if (gasdev_iset == 0) {
+        if (rng_state.gasdev_iset == 0) {
             float v1 = 0.0f;
             float v2 = 0.0f;
             float rsq = 0.0f;
@@ -131,13 +139,13 @@ namespace NumericalRecipes {
             } while (rsq >= 1.0f || rsq == 0.0f);
 
             float fac = std::sqrt(-2.0f * std::log(rsq) / rsq);
-            gasdev_gset = v1 * fac;
-            gasdev_iset = 1;
+            rng_state.gasdev_gset = v1 * fac;
+            rng_state.gasdev_iset = 1;
             return static_cast<double>(v2 * fac);
         }
 
-        gasdev_iset = 0;
-        return static_cast<double>(gasdev_gset);
+        rng_state.gasdev_iset = 0;
+        return static_cast<double>(rng_state.gasdev_gset);
     }
 
     // ==========================================

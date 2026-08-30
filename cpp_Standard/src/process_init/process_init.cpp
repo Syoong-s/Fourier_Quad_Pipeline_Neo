@@ -1,6 +1,7 @@
 #include "process_init/process_init.hpp"
 
 #include "process_init/Initializer.hpp"
+#include "general/MPIScheduler.hpp"
 
 #include <mpi.h>
 
@@ -17,8 +18,7 @@
 int process_init(const RuntimeConfig& runtime_config,
                  const InitConfig::DatasetSpec& dataset,
                  std::string& generated_expo_list) {
-    int rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    const int rank = MPIScheduler::state.rank;
     generated_expo_list.clear();
 
     fqinit::Config config;
@@ -56,7 +56,8 @@ int process_init(const RuntimeConfig& runtime_config,
     }
 
     int global_config_ok = 0;
-    MPI_Allreduce(&local_config_ok, &global_config_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_config_ok, &global_config_ok, 1, MPI_INT, MPI_MIN,
+                  MPIScheduler::state.communicator);
     if (global_config_ok == 0) {
         if (rank == 0) {
             std::cerr << "Initializer argument error: "
@@ -67,7 +68,7 @@ int process_init(const RuntimeConfig& runtime_config,
         return 2;
     }
 
-    const int return_code = fqinit::runInitializer(config, MPI_COMM_WORLD);
+    const int return_code = fqinit::runInitializer(config);
     if (return_code != 0) {
         return return_code;
     }
@@ -76,7 +77,8 @@ int process_init(const RuntimeConfig& runtime_config,
                                             / ("expo_" + config.target + ".list");
     int local_list_ok = std::filesystem::is_regular_file(list_path) ? 1 : 0;
     int global_list_ok = 0;
-    MPI_Allreduce(&local_list_ok, &global_list_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_list_ok, &global_list_ok, 1, MPI_INT, MPI_MIN,
+                  MPIScheduler::state.communicator);
     if (global_list_ok == 0) {
         if (rank == 0) {
             std::cerr << "Initializer completed without a readable exposure list: "

@@ -1,7 +1,7 @@
 #ifndef CATALOG_ROW_COUNT_HPP
 #define CATALOG_ROW_COUNT_HPP
 
-#include "MPIFailure.hpp"
+#include "process_main/MPIFailure.hpp"
 
 #include <cstddef>
 #include <fstream>

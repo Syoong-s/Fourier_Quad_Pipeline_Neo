@@ -80,25 +80,26 @@ void clearMagnitudeColumns(RuntimeConfig& options) {
 }
 
 // ==========================================
-// Function: Verify the legacy pass-through schema
-// Method: Check the 18 + 1 + 29 contract and its terminal source field.
+// Function: Verify the default pass-through schema
+// Method: Check the 18 + 2 + 29 contract and its terminal source field.
 // ==========================================
-void testLegacyLayout(int& failures) {
+void testDefaultLayout(int& failures) {
     RuntimeConfig options = makeDefaultRuntimeConfig();
     PipelineCatalog::CatalogLayout layout;
     std::string error;
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
-           "legacy layout should resolve: " + error, failures);
+           "default layout should resolve: " + error, failures);
     expect(layout.external_columns == 18, "legacy external width should be 18",
            failures);
-    expect(layout.ccd == 18, "legacy CCD index should be 18", failures);
-    expect(layout.source_base == 19, "legacy source base should be 19",
+    expect(layout.expo == 18, "default exposure index should be 18", failures);
+    expect(layout.ccd == 19, "default CCD index should be 19", failures);
+    expect(layout.source_base == 20, "default source base should be 20",
            failures);
     expect(layout.source_columns == 29,
            "process_main suffix should contain 29 fields", failures);
-    expect(layout.all_columns == 48, "legacy row width should be 48", failures);
-    expect(layout.source.chi2 == 47, "legacy chi2 index should be 47", failures);
-    expect(PipelineCatalog::describeCatalogLayout(layout).find("all_columns=48")
+    expect(layout.all_columns == 49, "default row width should be 49", failures);
+    expect(layout.source.chi2 == 48, "default chi2 index should be 48", failures);
+    expect(PipelineCatalog::describeCatalogLayout(layout).find("all_columns=49")
                != std::string::npos,
            "layout description should contain the total width", failures);
 }
@@ -125,10 +126,11 @@ void testCompactPassThroughLayout(int& failures) {
            "compact pass-through layout should resolve: " + error, failures);
     expect(layout.external_columns == 8,
            "compact pass-through external width should be 8", failures);
-    expect(layout.ccd == 8 && layout.source_base == 9,
-           "compact pass-through CCD/source offsets should be 8/9", failures);
-    expect(layout.all_columns == 38,
-           "compact pass-through row width should be 38", failures);
+    expect(layout.expo == 8 && layout.ccd == 9 && layout.source_base == 10,
+           "compact pass-through exposure/CCD/source offsets should be 8/9/10",
+           failures);
+    expect(layout.all_columns == 39,
+           "compact pass-through row width should be 39", failures);
     expect(layout.external.ra == 0 && layout.external.dec == 1
                && layout.external.mag_g == std::size_t{2}
                && layout.external.mag_r == std::size_t{3}
@@ -158,9 +160,10 @@ void testRequiredOnlyPassThroughLayout(int& failures) {
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
            "RA/Dec/ZP-only pass-through layout should resolve: " + error,
            failures);
-    expect(layout.external_columns == 3 && layout.ccd == 3
-               && layout.source_base == 4 && layout.all_columns == 33,
-           "required-only layout should derive 3 + 1 + 29 columns", failures);
+    expect(layout.external_columns == 3 && layout.expo == 3
+               && layout.ccd == 4 && layout.source_base == 5
+               && layout.all_columns == 34,
+           "required-only layout should derive 3 + 2 + 29 columns", failures);
     expect(!layout.external.mag_g.has_value()
                && !layout.external.mag_r.has_value()
                && !layout.external.mag_i.has_value()
@@ -186,12 +189,12 @@ void testOrderedProjection(int& failures) {
            "ordered projection should resolve: " + error, failures);
     expect(layout.external_columns == 8,
            "ordered projection external width should be 8", failures);
-    expect(layout.ccd == 8, "ordered projection CCD index should be 8",
+    expect(layout.expo == 8, "ordered projection exposure index should be 8",
            failures);
-    expect(layout.source_base == 9,
-           "ordered projection source base should be 9", failures);
-    expect(layout.all_columns == 38,
-           "ordered projection row width should be 38", failures);
+    expect(layout.ccd == 9 && layout.source_base == 10,
+           "ordered projection CCD/source offsets should be 9/10", failures);
+    expect(layout.all_columns == 39,
+           "ordered projection row width should be 39", failures);
     expect(layout.external.ra == 0 && layout.external.dec == 1
                && layout.external.zp == 7,
            "ordered projection should map RA/Dec/ZP to 0/1/7", failures);
@@ -242,7 +245,7 @@ void testExtraUnmodeledColumns(int& failures) {
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
            "projection with extra unmodeled columns should resolve: " + error,
            failures);
-    expect(layout.external_columns == 10 && layout.all_columns == 40,
+    expect(layout.external_columns == 10 && layout.all_columns == 41,
            "extra fields should affect width but require no layout members",
            failures);
     expect(layout.external.zp == 0 && layout.external.ra == 1
@@ -363,6 +366,7 @@ void testSelectedMagnitudeReader(int& failures) {
     row[layout.external.zp] = 0.5f;
     row[layout.external.mag_g.value()] = 5.0f;
     row[layout.external.mag_z.value()] = 22.5f;
+    row[layout.expo] = 7.0f;
     row[layout.ccd] = 1.0f;
     row[layout.source.pixx] = 1000.0f;
     row[layout.source.pixy] = 1000.0f;
@@ -411,8 +415,8 @@ void testFdRowWidth(int& failures) {
     std::string error;
     expect(PipelineCatalog::resolveCatalogLayout(options, layout, error),
            "row-width test layout should resolve: " + error, failures);
-    expect(layout.all_columns == 38,
-           "eight-field FD row width should be 38", failures);
+    expect(layout.all_columns == 39,
+           "eight-field FD row width should be 39", failures);
 
     std::vector<float> values;
     expect(ShearCatalogReader::parseCatalogRow(
@@ -442,7 +446,7 @@ int main() {
            "runtime store should initialize for FD reader coverage: " +
                store_error,
            failures);
-    testLegacyLayout(failures);
+    testDefaultLayout(failures);
     testCompactPassThroughLayout(failures);
     testRequiredOnlyPassThroughLayout(failures);
     testOrderedProjection(failures);

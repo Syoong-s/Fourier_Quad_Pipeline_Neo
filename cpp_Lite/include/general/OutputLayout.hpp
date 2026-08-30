@@ -1,5 +1,5 @@
-#ifndef OUTPUT_LAYOUT_HPP
-#define OUTPUT_LAYOUT_HPP
+#ifndef GENERAL_OUTPUT_LAYOUT_HPP
+#define GENERAL_OUTPUT_LAYOUT_HPP
 
 #include <array>
 #include <stdexcept>
@@ -74,4 +74,4 @@ inline std::string chipPath(const std::string& output_root,
 
 }  // namespace OutputLayout
 
-#endif  // OUTPUT_LAYOUT_HPP
+#endif  // GENERAL_OUTPUT_LAYOUT_HPP

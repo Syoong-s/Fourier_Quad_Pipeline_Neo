@@ -1,4 +1,4 @@
-#include "ExternalCatalogReader.hpp"
+#include "process_main/ExternalCatalogReader.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -20,7 +20,11 @@ struct ColumnSelection {
     std::size_t zp_column_one_based = 0;
 };
 
-ColumnSelection active_columns;
+struct ReaderState {
+    ColumnSelection active_columns;
+};
+
+ReaderState state;
 
 // ==========================================
 // Function: Convert one selected catalog token to a finite double
@@ -59,9 +63,9 @@ bool configure(const PipelineCatalog::CatalogLayout& layout,
         error = "external-catalog reader RA, Dec, and ZP positions must be distinct";
         return false;
     }
-    active_columns.ra_column_one_based = layout.external.ra + 1;
-    active_columns.dec_column_one_based = layout.external.dec + 1;
-    active_columns.zp_column_one_based = layout.external.zp + 1;
+    state.active_columns.ra_column_one_based = layout.external.ra + 1;
+    state.active_columns.dec_column_one_based = layout.external.dec + 1;
+    state.active_columns.zp_column_one_based = layout.external.zp + 1;
     error.clear();
     return true;
 }
@@ -73,9 +77,9 @@ bool configure(const PipelineCatalog::CatalogLayout& layout,
 // ==========================================
 bool parseRecord(const std::string& line, Record& record) {
     const std::size_t final_column = std::max(
-        active_columns.ra_column_one_based,
-        std::max(active_columns.dec_column_one_based,
-                 active_columns.zp_column_one_based));
+        state.active_columns.ra_column_one_based,
+        std::max(state.active_columns.dec_column_one_based,
+                 state.active_columns.zp_column_one_based));
     if (final_column == 0) {
         return false;
     }
@@ -87,15 +91,15 @@ bool parseRecord(const std::string& line, Record& record) {
         if (!(input >> token)) {
             return false;
         }
-        if (column == active_columns.ra_column_one_based
+        if (column == state.active_columns.ra_column_one_based
             && !parseFiniteDouble(token, parsed.ra)) {
             return false;
         }
-        if (column == active_columns.dec_column_one_based
+        if (column == state.active_columns.dec_column_one_based
             && !parseFiniteDouble(token, parsed.dec)) {
             return false;
         }
-        if (column == active_columns.zp_column_one_based
+        if (column == state.active_columns.zp_column_one_based
             && !parseFiniteDouble(token, parsed.zp)) {
             return false;
         }

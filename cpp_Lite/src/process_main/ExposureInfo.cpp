@@ -1,9 +1,10 @@
-#include "ExposureInfo.hpp"
-#include "OutputFile.hpp"
-#include "MPIFailure.hpp"
+#include "process_main/ExposureInfo.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/OutputFile.hpp"
+#include "process_main/MPIFailure.hpp"
 #include "LensingConfig.hpp"
-#include "UniversalUtils.hpp"
-#include "Astrometry.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/Astrometry.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -11,11 +12,10 @@
 #include <sstream>
 #include <iomanip>
 
-extern std::vector<std::string> EXPO_FILE;
 
 namespace ExposureInfo {
 
-std::vector<float> expo_para;
+State state;
 
 // ==========================================
 // Function: Aggregate exposure-level chip diagnostics
@@ -112,11 +112,11 @@ void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const st
 //         exposure's six-value slot when the orchestrator buffer is absent.
 // ==========================================
 void procInfo(int iexpo) {
-    if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
+    if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
         std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
         return;
     }
-    std::string expo_file_path = EXPO_FILE[iexpo - 1];
+    std::string expo_file_path = ProcessMain::state.exposure_files[iexpo - 1];
     std::vector<std::string> image_files;
     std::string dir_output;
     UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
@@ -126,14 +126,14 @@ void procInfo(int iexpo) {
 
     const std::size_t required_parameter_count =
         static_cast<std::size_t>(iexpo) * 6;
-    if (expo_para.size() < required_parameter_count) {
-        expo_para.resize(required_parameter_count, 0.0f);
+    if (state.parameters.size() < required_parameter_count) {
+        state.parameters.resize(required_parameter_count, 0.0f);
     }
 
     for (int i = 0; i < 6; ++i) {
         // F77: expo_para(i,iexpo)=para(i)
         // Memory index: (iexpo - 1) * 6 + i
-        expo_para[(iexpo - 1) * 6 + i] = para[i];
+        state.parameters[(iexpo - 1) * 6 + i] = para[i];
     }
 }
 

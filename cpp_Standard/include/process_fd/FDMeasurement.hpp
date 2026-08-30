@@ -1,7 +1,7 @@
 #ifndef FD_MEASUREMENT_HPP
 #define FD_MEASUREMENT_HPP
 
-#include "FDData.hpp"
+#include "process_fd/FDData.hpp"
 
 #include <vector>
 
@@ -14,7 +14,7 @@
 // ==========================================
 class FDMeasurement {
 public:
-    FDMeasurement(int rank, int num_procs);
+    FDMeasurement();
 
     // plot_comparison_MPI: bin sources by gf, measure per bin
     // arr[nb][4]: {gf_center, c_best, sigma, ntot}
@@ -27,8 +27,6 @@ public:
                         std::vector<float>& arr);
 
 private:
-    int rank_;
-    int num_procs_;
     std::vector<float> xbin_;  // equal-probability bin boundaries (chi2_mpi_pass)
 
     // statis_MPI: compute best-fit c and uncertainty dc

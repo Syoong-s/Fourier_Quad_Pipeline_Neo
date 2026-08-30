@@ -7,15 +7,15 @@
 #include "process_fd/StarCutCalculator.hpp"
 #include "process_fd/KMeansClusterer.hpp"
 #include "process_fd/FDMeasurement.hpp"
-#include "process_main/MPIScheduler.hpp"
-#include "process_main/NumericalRecipes.hpp"
+#include "general/ExposureList.hpp"
+#include "general/MPIScheduler.hpp"
+#include "general/MPIUtils.hpp"
 #include "process_main/OutputFile.hpp"
 
 #include <mpi.h>
 
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <system_error>
@@ -32,21 +32,9 @@ bool loadExposureList(const std::string& path, std::vector<std::string>& files,
                       int rank) {
     files.clear();
     if (rank == 0) {
-        std::ifstream input(path);
-        if (!input.is_open()) {
-            std::cerr << "EXPO_LIST reading error: " << path << std::endl;
-            return false;
-        }
-        std::string name;
-        while (input >> name) {
-            if (name.size() >= 2 && name.front() == '"'
-                && name.back() == '"') {
-                name = name.substr(1, name.size() - 2);
-            }
-            files.push_back(name);
-        }
-        if (files.empty()) {
-            std::cerr << "EXPO_LIST contains no exposures: " << path << std::endl;
+        std::string error;
+        if (!ExposureList::loadPathList(path, files, 0, error)) {
+            std::cerr << "EXPO_LIST error: " << error << std::endl;
             return false;
         }
         std::cout << "Total number of EXPOSURE: " << files.size() << std::endl;
@@ -54,17 +42,9 @@ bool loadExposureList(const std::string& path, std::vector<std::string>& files,
     return true;
 }
 
-void broadcastExposureList(std::vector<std::string>& files, int rank) {
-    int n_expo = static_cast<int>(files.size());
-    MPI_Bcast(&n_expo, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank != 0) files.resize(n_expo);
-    for (int i = 0; i < n_expo; ++i) {
-        int len = (rank == 0) ? static_cast<int>(files[i].size()) : 0;
-        MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        if (rank != 0) files[i].resize(len);
-        if (len > 0)
-            MPI_Bcast(files[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
-    }
+bool broadcastExposureList(std::vector<std::string>& files,
+                           std::string& error) {
+    return MPIUtils::broadcastStrings(files, 0, error);
 }
 
 }  // namespace
@@ -80,8 +60,7 @@ int process_fd(const std::string& exposure_list,
                const RuntimeConfig& runtime_config,
                const std::string& dataset_root,
                const PipelineCatalog::CatalogLayout& layout) {
-    const int rank = MPIScheduler::my_id;
-    const int num_procs = MPIScheduler::num_procs;
+    const int rank = MPIScheduler::state.rank;
     if (!RuntimeConfigStore::isInitialized()) {
         std::string store_error;
         if (!RuntimeConfigStore::initialize(runtime_config, store_error)) {
@@ -107,7 +86,7 @@ int process_fd(const std::string& exposure_list,
             : 0;
     int global_magnitude_ok = 0;
     MPI_Allreduce(&local_magnitude_ok, &global_magnitude_ok, 1, MPI_INT,
-                  MPI_MIN, MPI_COMM_WORLD);
+                  MPI_MIN, MPIScheduler::state.communicator);
     if (global_magnitude_ok == 0) {
         if (rank == 0) {
             std::cerr << "FD magnitude selection error: "
@@ -130,14 +109,16 @@ int process_fd(const std::string& exposure_list,
     bool ok = loadExposureList(exposure_list, expo_files, rank);
     int global_ok = 0;
     int local_ok = ok ? 1 : 0;
-    MPI_Allreduce(&local_ok, &global_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_ok, &global_ok, 1, MPI_INT, MPI_MIN,
+                  MPIScheduler::state.communicator);
     if (global_ok == 0) return 1;
-    broadcastExposureList(expo_files, rank);
+    std::string broadcast_error;
+    if (!broadcastExposureList(expo_files, broadcast_error)) {
+        std::cerr << "FD exposure-list broadcast error on rank " << rank << ": "
+                  << broadcast_error << std::endl;
+        return 1;
+    }
     int n_expo = static_cast<int>(expo_files.size());
-
-    // Initialize RNG
-    NumericalRecipes::initializeRan1Seed(rank, num_procs);
-    MPIScheduler::barrier();
 
     // 2. Allocate data arrays and read catalogs
     FDData data;
@@ -162,14 +143,14 @@ int process_fd(const std::string& exposure_list,
     // 3. Calculate star cut
     if (fc::FD_PER_EXPOSURE_STAR_BAR) {
         std::vector<float> S_mean_arr, S_std_arr, S_cut_arr;
-        StarCutCalculator::calculateGlobalStarCutAuto(data, rank, num_procs,
+        StarCutCalculator::calculateGlobalStarCutAuto(data,
                                                       S_mean_arr, S_std_arr,
                                                       S_cut_arr);
         // Apply advanced cuts (per-exposure star cut + SNR cuts)
         StarCutCalculator::applyAdvancedCuts(data, S_cut_arr);
     } else {
         float S_mean = 0.0, S_std = 0.0, S_cut = 0.0;
-        StarCutCalculator::calculateGlobalStarCut(data, rank, num_procs,
+        StarCutCalculator::calculateGlobalStarCut(data,
                                                    S_mean, S_std, S_cut);
         StarCutCalculator::applySingleStarCut(data, S_cut);
     }
@@ -182,8 +163,7 @@ int process_fd(const std::string& exposure_list,
     //      (skipped in PDF_SIGMA mode where jackknife is not used)
     if constexpr (fc::FD_USE_JACKKNIFE) {
         std::vector<float> centers;
-        KMeansClusterer::runMPI(data.ng, data.rra, data.ddec, rank, num_procs,
-                                centers);
+        KMeansClusterer::runMPI(data.ng, data.rra, data.ddec, centers);
         MPIScheduler::barrier();
 
         for (int idx = 0; idx < data.ng; ++idx) {
@@ -207,7 +187,7 @@ int process_fd(const std::string& exposure_list,
     }
 
     // 6. Run shear measurement for g1 and g2
-    FDMeasurement measurer(rank, num_procs);
+    FDMeasurement measurer;
     int nbin = fc::fd_num;
 
     // g1 component

@@ -1,6 +1,6 @@
-#include "ImageProcessing.hpp"
-#include "NumericalRecipes.hpp"
-#include "UniversalUtils.hpp"
+#include "process_main/ImageProcessing.hpp"
+#include "general/NumericalRecipes.hpp"
+#include "process_main/UniversalUtils.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cmath>

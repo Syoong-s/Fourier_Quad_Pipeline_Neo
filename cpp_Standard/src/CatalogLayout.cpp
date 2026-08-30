@@ -226,13 +226,16 @@ bool resolveCatalogLayout(const RuntimeConfig& config,
     resolved.source_columns =
         static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
     if (resolved.source_columns == 0
+        || resolved.source_columns
+               > std::numeric_limits<std::size_t>::max() - 2
         || resolved.external_columns
                > std::numeric_limits<std::size_t>::max()
-                     - 1 - resolved.source_columns) {
+                     - 2 - resolved.source_columns) {
         error = "complete _all.cat column count overflows size_t";
         return false;
     }
-    resolved.ccd = resolved.external_columns;
+    resolved.expo = resolved.external_columns;
+    resolved.ccd = resolved.expo + 1;
     resolved.source_base = resolved.ccd + 1;
     resolved.all_columns = resolved.source_base + resolved.source_columns;
 
@@ -269,7 +272,8 @@ bool resolveCatalogLayout(const RuntimeConfig& config,
         resolved.source_base + LensingConfig::iorth_ext;
     resolved.source.chi2 = resolved.source_base + LensingConfig::ichi2;
 
-    if (resolved.ccd != resolved.external_columns
+    if (resolved.expo != resolved.external_columns
+        || resolved.ccd != resolved.expo + 1
         || resolved.source_base != resolved.ccd + 1
         || resolved.source.chi2 + 1 != resolved.all_columns) {
         error = "resolved catalog layout is internally inconsistent";
@@ -283,8 +287,8 @@ bool resolveCatalogLayout(const RuntimeConfig& config,
 
 // ==========================================
 // Function: Resolve process_rearr's minimal runtime schema
-// Method: Reuse the external layout when enabled or derive the 30-field internal
-//         `[CCD_NUM]+28 Stage-7 fields+Chi2` contract directly from fixed indices.
+// Method: Reuse the external layout when enabled or derive the 31-field internal
+//         `[EXPO_NUM]+[CCD_NUM]+28 Stage-7 fields+Chi2` contract from fixed indices.
 // ==========================================
 bool resolveRearrCatalogSchema(const RuntimeConfig& config,
                                const CatalogLayout* external_layout,
@@ -300,10 +304,10 @@ bool resolveRearrCatalogSchema(const RuntimeConfig& config,
         resolved.ra_column = external_layout->external.ra;
         resolved.dec_column = external_layout->external.dec;
     } else {
-        resolved.all_columns = 1U
+        resolved.all_columns = 2U
             + static_cast<std::size_t>(LensingConfig::expo_cat_ncols);
-        resolved.ra_column = 1U + static_cast<std::size_t>(LensingConfig::ira);
-        resolved.dec_column = 1U + static_cast<std::size_t>(LensingConfig::idec);
+        resolved.ra_column = 2U + static_cast<std::size_t>(LensingConfig::ira);
+        resolved.dec_column = 2U + static_cast<std::size_t>(LensingConfig::idec);
     }
     if (resolved.all_columns == 0
         || resolved.ra_column >= resolved.all_columns
@@ -337,6 +341,7 @@ std::string describeCatalogLayout(const CatalogLayout& layout) {
            << " external_mag_y="
            << describeOptionalColumn(layout.external.mag_y)
            << " external_zp=" << layout.external.zp
+           << " expo=" << layout.expo
            << " ccd=" << layout.ccd
            << " source_base=" << layout.source_base
            << " source_columns=" << layout.source_columns

@@ -1,4 +1,4 @@
-#include "PointSourceStatistics.hpp"
+#include "process_main/PointSourceStatistics.hpp"
 #include "LensingConfig.hpp"
 
 #include <cmath>

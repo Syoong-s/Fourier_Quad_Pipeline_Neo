@@ -44,7 +44,8 @@ bool parseArguments(const std::vector<std::string>& arguments,
 // ==========================================
 void testDefaults(int& failures) {
     const RuntimeConfig config = makeDefaultRuntimeConfig();
-    expect(!config.process.run_process_extcat
+    expect(!config.process.run_process_astrocat
+               && !config.process.run_process_extcat
                && config.process.run_process_init
                && config.process.run_process_main
                && !config.process.run_process_rearr
@@ -69,6 +70,7 @@ void testIniSectionsAndTypes(int& failures) {
     const std::string text = R"ini(
 # full parser coverage
 [process]
+run_process_astrocat = true
 run_process_extcat = yes
 run_process_init = false
 run_process_main = on
@@ -82,6 +84,12 @@ rearranged_expo_list_directory = /tmp/lists
 fd_expo_list = /tmp/fd.list
 fd_output_directory = fd-selected
 fd_output_base_directory = /tmp/fd
+
+[astrocat]
+input_directory = /data/raw-gaia
+output_directory = /data/gaia-tiles
+add_header = false
+existing_policy = overwrite
 
 [extcat]
 input_directory = /data/raw
@@ -130,12 +138,18 @@ chipny = 4500
     std::string error;
     expect(applyRuntimeConfigText(text, "test.ini", config, error),
            "valid full INI should parse: " + error, failures);
-    expect(config.process.run_process_extcat
+    expect(config.process.run_process_astrocat
+               && config.process.run_process_extcat
                && !config.process.run_process_init
                && config.process.run_process_main
                && config.process.run_process_rearr
                && !config.process.run_process_fd,
            "INI booleans should accept yes/no/on/numeric forms", failures);
+    expect(config.astrocat.input_directory == "/data/raw-gaia"
+               && config.astrocat.output_directory == "/data/gaia-tiles"
+               && !config.astrocat.add_header
+               && config.astrocat.existing_policy == "overwrite",
+           "dedicated astrocat INI values should parse independently", failures);
     expect(config.process.expo_list == "/data/catalog path/expo.list",
            "quoted path and inline comment should decode", failures);
     expect(config.extcat.filename_tokens.size() == 2
@@ -215,11 +229,13 @@ void testPrecedenceAndConfigScan(int& failures) {
     expect(parseArguments(
                {"fq", "--config", "precedence.ini", "--run-main=true",
                 "--dataset", "cli:prefix", "--contains=cli-token",
-                "--expo-list", "cli.list"},
+                "--expo-list", "cli.list", "--astrocat-output",
+                "/cli/gaia-tiles"},
                config, error),
            "CLI overrides should parse: " + error, failures);
     expect(config.process.run_process_main
-               && config.process.expo_list == "cli.list",
+               && config.process.expo_list == "cli.list"
+               && config.astrocat.output_directory == "/cli/gaia-tiles",
            "CLI scalar values should override INI values", failures);
     expect(config.init.datasets.size() == 1
                && config.init.datasets[0].target == "cli"
@@ -251,15 +267,31 @@ void testValidationAndSchemas(int& failures) {
            "compiled defaults should validate: " + error, failures);
 
     config.process.run_process_extcat = false;
+    config.process.run_process_astrocat = false;
     config.process.run_process_init = false;
     config.process.run_process_main = false;
     config.process.run_process_rearr = false;
     config.process.run_process_fd = false;
     config.extcat.output_directory.clear();
+    expect(!validateRuntimeConfig(config, error)
+               && error.find("cannot be disabled") != std::string::npos,
+           "an all-disabled configuration should fail phase validation: " + error,
+           failures);
+
+    config.process.run_process_astrocat = true;
+    config.astrocat.input_directory = "/raw/gaia";
+    config.astrocat.output_directory = "/independent/tiles";
+    config.astrocat.existing_policy = "overwrite";
+    config.lensing.astrometry_cat = "/different/main-input";
+    config.init.datasets.clear();
     expect(validateRuntimeConfig(config, error),
-           "an all-disabled configuration should support parse-only dry runs: "
+           "astrocat-only mode should not require datasets or match lensing.astrometry_cat: "
                + error,
            failures);
+    config.astrocat.output_directory.clear();
+    expect(!validateRuntimeConfig(config, error)
+               && error.find("output directory") != std::string::npos,
+           "enabled astrocat should reject an empty output directory", failures);
     config = makeDefaultRuntimeConfig();
 
     config.lensing.nmax_chip = 1000;

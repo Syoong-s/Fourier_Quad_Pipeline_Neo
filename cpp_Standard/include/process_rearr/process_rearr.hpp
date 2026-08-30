@@ -3,8 +3,6 @@
 
 #include "CatalogLayout.hpp"
 
-#include <mpi.h>
-
 #include <string>
 
 // ==========================================
@@ -14,7 +12,6 @@
 // ==========================================
 int process_rearr(const std::string& exposure_list,
                   const RuntimeConfig& runtime_config,
-                  const PipelineCatalog::RearrCatalogSchema& schema,
-                  MPI_Comm communicator = MPI_COMM_WORLD);
+                  const PipelineCatalog::RearrCatalogSchema& schema);
 
 #endif  // PROCESS_REARR_PROCESS_REARR_HPP

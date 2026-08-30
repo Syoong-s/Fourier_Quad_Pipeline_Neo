@@ -1,5 +1,5 @@
 #include "process_fd/QuadraticFitting.hpp"
-#include "process_main/NumericalRecipes.hpp"
+#include "general/NumericalRecipes.hpp"
 
 #include <algorithm>
 

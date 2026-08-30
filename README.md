@@ -1,230 +1,241 @@
 # Fourier_Quad C++ Pipeline
 
-Modern C++17 and MPI implementation of the Fourier_Quad weak-lensing shear
-measurement pipeline. It can prepare exposure lists, process CCD images through
-the nine-stage shear pipeline, rearrange output catalogs, and perform the
-field-distortion shear test from one executable.
+> 中文版：[README_CN.md](README_CN.md)
 
-> 中文使用说明见 [CPP_GUIDE_CN.md](CPP_GUIDE_CN.md). The complete English
-> reference is [CPP_GUIDE.md](CPP_GUIDE.md), and every configuration option is
-> listed in [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md).
+MPI-parallel C++17 implementation of the Fourier_Quad weak-lensing pipeline for
+DECam data. One executable, `Fourier_Quad_Pipe`, can repartition an external
+catalog, initialize compressed Science/DQ archives, run the nine numerical
+stages, rearrange the resulting catalogs, and perform the field-distortion (FD)
+shear test.
 
-## Choose a version
+Chinese users can start with [CPP_GUIDE_CN.md](CPP_GUIDE_CN.md).
 
-| Version | Recommended for |
+## Choose a variant
+
+| Variant | Use it when |
 |---|---|
-| `cpp_Standard/` | New users and the complete feature set, including optional PCA PSF reconstruction |
-| `cpp_Lite/` | A smaller frozen production variant with unused feature branches removed |
+| [`cpp_Standard`](cpp_Standard/) | You need optional flat, mask, astrometry, external-PSF, hybrid-PSF, or PCA PSF branches. |
+| [`cpp_Lite`](cpp_Lite/) | You use the fixed production path: Gaia astrometry, DQ masks, external source catalogs, local-polynomial PSF, and no PCA. |
 
-Both versions build `Fourier_Quad_Pipe` and use the same command-line options.
-Start with `cpp_Standard` unless you specifically need the Lite configuration.
+Both variants share the executable name and command-line interface. Lite omits
+the unused branches from its source; it is not Standard with different defaults.
 
-Clone the repository with the URL shown by GitHub's **Code** button, or download
-the selected source and Docker archives from the repository's **Releases**
-page. The Docker quick start requires both the source tree and `cpp_docker/`.
+## Quick start
 
-## Quick start with Docker
+### 1. Download a Release source package
 
-The published image provides a reproducible G++/OpenMPI scientific stack. It
-does not contain the pipeline source or observation data; both are mounted from
-the host when the container starts.
+Open [GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases)
+and download only the source package for the variant you plan to run:
 
-Requirements: Docker with Compose support and an x86-64 Linux host.
+| Variant | Release source package |
+|---|---|
+| C++ Lite | `cpp-lite-<tag>.zip` |
+| C++ Standard | `cpp-standard-<tag>.zip` |
 
-### 1. Prepare an exposure list
+Use a fixed Release so the software version used for an analysis can be
+recorded and reproduced.
 
-For a first run, use an isolated writable processing tree rather than the raw
-archive. A top-level exposure list contains one per-exposure list and its chip
-count on each line:
+### 2. Prepare the environment
+
+Install the dependencies in [Environment prerequisites](#environment-prerequisites).
+
+### 3. Prepare input data
+
+Prepare the four input classes described in
+[Input data requirements](#input-data-requirements). Science images, the Gaia
+catalog, and the external source catalog are required. DQ masks depend on the
+selected variant and configuration.
+
+### 4. Configure the pipeline
+
+From the extracted `cpp_Lite` or `cpp_Standard` directory, copy the complete
+run-time template and edit paths, datasets, phases, and run-time science choices:
+
+```bash
+cp pipeline.example.ini pipeline.ini
+```
+
+The configuration precedence is:
 
 ```text
-"/data/DataProcess/g2019/stamps/exposure_001.list" 5
+compiled defaults < --config INI < command-line options
 ```
 
-The referenced per-exposure list contains one Science FITS path per line. All
-paths must be valid inside the container. The integrated initializer can create
-this tree and both list types automatically; see
-[Starting from compressed archives](#starting-from-compressed-archives).
+Fixed numerical settings that are not represented in the INI remain in
+`config/*.hpp` and require rebuilding after changes. The complete run-time and
+compile-time reference is [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md).
 
-### 2. Configure catalog paths and stages
-
-In `cpp_Standard/config/` or `cpp_Lite/config/`:
-
-- set the astrometry catalog, source catalog, and flat-field paths in
-  `LensingConfig.hpp` to their container paths;
-- review the nine-stage `PROCESS_stage` switch and science parameters;
-- review the default process switches in `ProcessConfig.hpp`.
-
-Command-line options override the process switches for each run. Use
-`./Fourier_Quad_Pipe --help` after compiling to see the effective interface.
-
-### 3. Configure the container mounts
-
-From the repository root:
+### 5. Build and run
 
 ```bash
-cd cpp_docker
-cp .env.example .env
-```
-
-Edit `.env` and set:
-
-- `IMAGE_NAME=ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest`;
-- `CPP_SOURCE_HOST` to the absolute host path of `cpp_Standard/` or
-  `cpp_Lite/`;
-- the catalog, flat-field, and writable processing-data host paths;
-- `HOST_UID` and `HOST_GID` to your numeric user and group IDs when necessary.
-
-The catalog `*_CONTAINER` destinations must match the paths compiled into
-`LensingConfig.hpp`.
-
-### 4. Compile and run the numerical pipeline
-
-Pull the image and enter the container:
-
-```bash
-docker compose pull
-docker compose run --rm FourierQuad-CPP
-```
-
-Inside the container:
-
-```bash
-make clean
 make -j4
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-extcat false \
-  --run-init false \
-  --run-main true \
-  --run-rearr false \
-  --run-fd false \
-  --expo-list /data/DataProcess/expo_g2019.list
+./Fourier_Quad_Pipe --help
+mpirun -np 4 ./Fourier_Quad_Pipe --config pipeline.ini
 ```
 
-This explicit command runs only the numerical nine-stage pipeline, regardless
-of the defaults in `ProcessConfig.hpp`. Increase or reduce the MPI rank count to
-match the number of exposures and available resources.
+See [CPP_GUIDE.md](CPP_GUIDE.md) for complete build variables, phase selection,
+run modes, inputs, outputs, and failure rules.
 
-### 5. Find the results
+## Environment prerequisites
 
-The primary products are written below the dataset root derived from the FITS
-paths:
+| Category | Prerequisite | Regular Linux | HPC / Slurm | Notes |
+|---|---|---:|---:|---|
+| Operating system | 64-bit Linux | Required | Required | A modern Linux distribution is recommended. |
+| C++ compiler | MPI C++ wrapper with C++17 support | Required | Required | The pinned container uses GCC 12.3.0. |
+| MPI | OpenMPI or a compatible MPI implementation | Required | Required | The pinned container uses OpenMPI 4.1.8. |
+| CFITSIO | CFITSIO development library | Required | Required | FITS/FZ I/O; container version 4.6.4. |
+| FFTW3 | Double- and single-precision FFTW3 libraries | Required | Required | Fourier transforms; container version 3.3.11. |
+| Eigen3 | Eigen3 headers | Required | Required | C++ numerical operations; container version 3.4.0. |
+| BLAS / LAPACK | BLAS and LAPACK libraries | Required | Required | The container uses LAPACK 3.11.0 with OpenBLAS 0.3.33. |
+| Build tools | `make`, shell, standard GNU tools | Required | Required | Builds and helper scripts. |
+| Shared filesystem | All ranks/nodes see the same inputs and outputs | No | Required | Required for multi-node jobs. |
+| Slurm | Site scheduler and `srun` | No | Required for Slurm jobs | Batch allocation and launch. |
+| PMI2-compatible launch | Slurm `pmi2` support and compatible MPI | No | Required for the repository HPC container path | Used for direct Slurm MPI launch. |
+| Apptainer / Singularity | Rootless container runtime | No | Required when using the repository HPC container path | Must be available on compute nodes. |
+| Writable processing directory | Shared output/work directory writable by all ranks | Required | Required | Source data and outputs should not be mixed. |
 
-- `result/<EXPOSURE>_all.cat`: combined per-exposure shear catalog;
-- `stamps/`: type-specific intermediate products;
-- `expo_info.dat`: exposure-level diagnostics.
+## Input data requirements
 
-If catalog rearrangement is enabled, spatially partitioned catalogs and
-`catalog_summary.txt` are also written below the configured rearrangement
-output directory.
+| Input | Required | Purpose | Minimum requirement |
+|---|---:|---|---|
+| Science images | Yes | Exposures on which the pipeline performs source detection, shape measurement, and weak-lensing processing. | Supported Science FITS/FZ data whose file organization matches the configured exposure and CCD recognition rules. |
+| Gaia catalog | Yes | High-precision sky-coordinate reference for source matching and astrometric calibration. | Covers the Science-image footprint; each file has one header line followed by rows whose first two fields are numeric `ra` and `dec`. |
+| External source catalog | Yes | Supplies sky positions, `zp`, and photometry for external-source matching and downstream processing. | Contains `ra`, `dec`, `zp`, and a magnitude in at least one observed band. |
+| DQ masks | Configuration-dependent (optional input class) | Marks bad, saturated, defective, or otherwise invalid pixels. | May be omitted only when the selected variant and configuration do not read DQ masks. |
 
-## Starting from compressed archives
+### Science images
 
-The initializer reads Science and DQ `.fits.fz` archives, creates an isolated
-processing tree, extracts chip images, and generates `expo_<target>.list`.
-With the Science and DQ archives mounted, a chained run is:
+Science images are the primary scientific exposures, not calibration catalogs or
+an output directory. They must use a FITS/FZ format supported by the selected
+variant, be readable through its FITS logic, and follow the exposure/CCD naming
+and list conventions described in the detailed guide.
 
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe \
-  --run-extcat false \
-  --run-init true \
-  --run-main true \
-  --run-rearr true \
-  --run-fd false \
-  --science-root /data/archive/science \
-  --dq-root /data/archive/dqmask \
-  --output-root /data/DataProcess \
-  --dataset g2019:c4d_19 \
-  --contains v1 \
-  --existing fail
+### Gaia catalog
+
+The Gaia catalog supplies accurate RA/Dec reference positions for object
+matching and astrometric calibration. It must cover the actual Science-image
+footprint and be stored directly under `[lensing].astrometry_cat` (whose
+compiled default is `ASTROMETRY_CAT`). Every tile consumed by the pipeline
+must have one header line, followed by rows whose first two numeric fields are
+RA and Dec. Rows may be comma- or whitespace-separated; additional fields are
+ignored. `[lensing].astrometry_cat_type` selects one of two layouts:
+
+The RA and Dec used in the following lookup formula are the WCS reference
+coordinates read from the current Science CCD header.
+
+**Type 1 (legacy large tiles, the default):**
+
+- `|Dec| < 80°`: `gaia_<p|m><D>_<RR>.cat`, where
+  `D = floor(|Dec| / 10) + 1` (1-8) and `RR = floor(RA / 10)` (00-35,
+  zero-padded).
+- `|Dec| >= 80°`: `gaia_<p|m>9.cat`, without an RA suffix.
+- `p` denotes nonnegative Dec; `m` denotes negative Dec.
+- Each file must contain one header line.
+
+> Examples:
+>
+> 1. `gaia_p1_00.cat` covers `0° <= RA < 10°` and `0° <= Dec < 10°`.
+> 2. `gaia_m3_12.cat` covers `120° <= RA < 130°` and `-30° < Dec <= -20°`.
+> 3. `gaia_p9.cat` covers `0° <= RA < 360°` and `80° <= Dec <= 90°`.
+
+*To ensure that stars can still be selected for exposures located at the edges
+of the 10° × 10° grid, it is recommended to expand a single catalog's upper and
+lower Dec limits by 2°. Around absolute-Dec ranges beginning at 0°, 30°, and
+60°, respectively, expand its upper and lower RA limits by 2°, 4°, and 6°.*
+
+**Type 2 (one-degree tiles):**
+
+- `des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`, with three-digit RA
+  boundaries and signed two-digit Dec boundaries.
+- Example: `des_y6_RA_123_124_Dec_m05_m04.dat` covers
+  `123° <= RA < 124°` and `-5° <= Dec < -4°`.
+
+The optional `process_astrocat` phase converts direct regular files from a raw
+Gaia directory to Type 2 tiles, removes coordinate pairs that are exact or
+within one ULP in both RA and Dec (including tile boundaries), and writes the
+required `RA    DEC` header. Its `[astrocat].output_directory` or
+`--astrocat-output` setting controls only the producer output directory; it is
+not checked against and does not update `[lensing].astrometry_cat`. To consume
+the result later, set `[lensing].astrometry_cat` to that directory and set
+`[lensing].astrometry_cat_type = 2` separately.
+
+### External source catalog
+
+The minimum schema is survey- and band-independent:
+
+| Field | Meaning |
+|---|---|
+| `ra` | Right Ascension. |
+| `dec` | Declination. |
+| `zp` | The photometric-redshift quantity consumed by the selected pipeline configuration. |
+| One observed-band magnitude | A magnitude in any one band used by the selected analysis. |
+
+Additional colors, redshifts, object classes, shapes, and flags may be retained,
+but they are not part of this minimum input contract. Configure the actual
+column positions, delimiter, header handling, and projection in the `[extcat]`
+INI section, through the corresponding command-line options, or with their
+compiled defaults in `config/ExtCatConfig.hpp`.
+
+**Filename convention:**
+
+- 1° × 1° tile: `des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`.
+- RA boundaries use three digits. Dec boundaries use `p` or `m` plus a two-digit
+  absolute value. Each upper boundary is one degree above its lower boundary.
+- Each file must contain one header line.
+
+> Example: `des_y6_RA_123_124_Dec_m05_m04.dat` covers
+> `123° <= RA < 124°` and `-5° <= Dec < -4°`.
+
+### DQ masks (optional)
+
+DQ masks identify pixels that must not participate in scientific measurements,
+including bad pixels, saturation, detector defects, and other invalid regions.
+They are optional only when the chosen variant and configuration disable DQ
+access. Standard users can select the relevant mask mode with
+`[lensing].include_mask`;
+Lite is fixed to per-chip DQ masks, so Lite runs must provide them. If DQ masks
+are omitted, verify that no active branch or configured path still reads them.
+
+## Pipeline
+
+Top-level phases always run in this order:
+
+```text
+process_astrocat -> process_extcat -> process_init -> process_main -> process_rearr -> process_fd
 ```
 
-Repeat `--dataset TARGET:PREFIX` to process multiple datasets sequentially and
-repeat `--contains TOKEN` to accept any matching archive basename. Use
-`--existing resume` only after reviewing an interrupted output tree.
+`process_astrocat` publishes deduplicated one-degree Gaia tiles. Its output
+directory is independent of the Gaia directory later consumed through
+`[lensing].astrometry_cat`.
 
-For Docker, define the optional host paths in `cpp_docker/.env` and include
-`compose.optional.yaml` when starting the container. The optional Compose file
-also exposes mounts for external-catalog input, rearranged catalogs, exposure
-lists, and field-distortion output:
+`process_main` contains nine prime-gated stages from preprocessing through
+catalog combination. The full stage and data contracts are in
+[CPP_GUIDE.md](CPP_GUIDE.md); run-time and compile-time settings are separated
+in [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md).
 
-```bash
-docker compose -f compose.yaml -f compose.optional.yaml \
-  run --rm FourierQuad-CPP
-```
+Principal outputs are generated exposure lists, per-exposure `*_all.cat`
+catalogs, rearranged `subcat_*.cat` catalogs, and `fdout/FD_test_comb.dat`.
+Input archives and catalogs are read in place.
 
-Every host variable referenced by `compose.optional.yaml` must name an existing
-directory. Point unused writable outputs to dedicated empty directories rather
-than to scientific input data.
+## Containers and HPC
 
-See [the initializer output contract](CPP_GUIDE.md#initializer-output-contract)
-before processing a new archive layout.
-
-## Build from source
-
-Required software:
-
-- a C++17 compiler and MPI with `mpicxx`;
-- CFITSIO, FFTW3/FFTW3F, Eigen3, LAPACK, and BLAS;
-- GNU Make.
-
-When the headers and libraries share one prefix:
-
-```bash
-export SCIENCE_PREFIX=/path/to/scientific-stack
-make -C cpp_Standard -j4 STACK_PREFIX="$SCIENCE_PREFIX"
-mpirun -np 4 ./cpp_Standard/Fourier_Quad_Pipe \
-  --run-extcat false --run-init false --run-main true \
-  --run-rearr false --run-fd false \
-  --expo-list /path/to/expo_list.list
-```
-
-Replace `cpp_Standard` with `cpp_Lite` for the Lite variant. If Eigen is in a
-different prefix, also pass `EIGEN_INCLUDE=/path/to/eigen3`.
-
-## Run on a Slurm cluster
-
-The included Apptainer/Singularity runner uses the same image and executable:
-
-```bash
-cd cpp_docker/runner
-cp cpppipeline.env.example cpppipeline.env
-```
-
-Edit `cpppipeline.env` with the GHCR image, SIF destination, source/data mounts,
-site modules, and Slurm settings. Then validate in order:
-
-*Note:* GHCR image is available as `ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest`.
-
-```bash
-bash pull-sif.sh
-bash run-apptainer.sh --check
-sbatch compile-pipeline.slurm
-sbatch mpi-smoke-test.slurm
-sbatch cpppipeline.slurm \
-  --run-extcat false --run-init false --run-main true \
-  --run-rearr false --run-fd false \
-  --expo-list /data/DataProcess/expo_g2019.list
-```
-
-Pin `OCI_IMAGE_URI` by digest for production. The supplied runtime expects a
-Slurm site with PMI2 support; verify the cluster interface before a multi-node
-science run. See [the runner guide](cpp_docker/runner/README.md) for resource
-templates and site-specific configuration.
-
-## Manual for AI
-
-Here also provides a manual wraped as a codex/claude code plugin, which gives agent abilities to help you build environment, switch parameters and run pipeline. For more details, please refer to the [Codex/Claude Code Plugin](https://github.com/Syoong-s/FQNeoAIManual).
-
+[`cpp_docker`](cpp_docker/) provides an x86_64 Docker toolchain image. The
+image contains compilers and libraries, not pipeline source or observation
+data; both remain bind-mounted. For Slurm, use the production
+[Apptainer runner](cpp_docker/runner/README.md) after confirming that the site
+provides the PMI2 launch plugin.
 
 ## Documentation
 
-- [C++ source, run modes, Docker, and runner guide](CPP_GUIDE.md)
-- [中文完整指南](CPP_GUIDE_CN.md)
-- [Complete parameter reference](CPP_PIPELINE_PARAMETERS.md)
-- [Container environment](cpp_docker/README.md)
-- [HPC runner](cpp_docker/runner/README.md)
+| Document | Purpose |
+|---|---|
+| [C++ guide](CPP_GUIDE.md) / [中文指南](CPP_GUIDE_CN.md) | Build, configure, run, inputs, outputs, and failure rules |
+| [Parameter reference](CPP_PIPELINE_PARAMETERS.md) | One complete Standard/Lite table per configuration header, including INI/CLI overrides |
+| [Container guide](cpp_docker/README.md) / [中文](cpp_docker/README-CN.md) | Docker image and local container workflow |
+| [Slurm runner](cpp_docker/runner/README.md) / [中文](cpp_docker/runner/README-CN.md) | Apptainer/Singularity deployment |
 
 ## License
 
-Distributed under the [MIT License](LICENSE).
+Repository-authored code is distributed under the [MIT License](LICENSE).
+Container dependencies retain their upstream licenses; see
+[third-party notices](cpp_docker/THIRD_PARTY_NOTICES.md).

@@ -1,13 +1,18 @@
 #include "CatalogLayout.hpp"
+#include "AstroCatConfig.hpp"
 #include "ExtCatConfig.hpp"
 #include "InitConfig.hpp"
 #include "ProcessConfig.hpp"
 #include "RuntimeConfig.hpp"
+#include "process_astrocat/process_astrocat.hpp"
 #include "process_extcat/process_extcat.hpp"
 #include "process_fd/process_fd.hpp"
 #include "process_init/process_init.hpp"
-#include "process_main/MPIScheduler.hpp"
-#include "process_main/NumericalRecipes.hpp"
+#include "general/ExposureList.hpp"
+#include "general/MPIScheduler.hpp"
+#include "general/MPIUtils.hpp"
+#include "general/NumericalRecipes.hpp"
+#include "general/PathUtils.hpp"
 #include "process_main/process_main.hpp"
 #include "process_rearr/process_rearr.hpp"
 
@@ -16,41 +21,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 
 namespace {
-
-// ==========================================
-// Function: broadcastString
-// Method: Broadcast one length-prefixed startup string from rank zero while
-//         rejecting text that cannot fit an MPI int count.
-// ==========================================
-bool broadcastString(std::string& value, int rank, std::string& error) {
-    int length = 0;
-    if (rank == 0) {
-        if (value.size() > static_cast<std::size_t>(
-                               std::numeric_limits<int>::max())) {
-            error = "runtime config text exceeds the MPI broadcast count range";
-            length = -1;
-        } else {
-            length = static_cast<int>(value.size());
-        }
-    }
-    MPI_Bcast(&length, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (length < 0) {
-        return false;
-    }
-    if (rank != 0) {
-        value.resize(static_cast<std::size_t>(length));
-    }
-    if (length > 0) {
-        MPI_Bcast(value.data(), length, MPI_CHAR, 0, MPI_COMM_WORLD);
-    }
-    return true;
-}
 
 // ==========================================
 // Function: loadAndBroadcastConfigText
@@ -76,11 +51,11 @@ bool loadAndBroadcastConfigText(const std::string& path, int rank,
             }
         }
     }
-    MPI_Bcast(&read_ok, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&read_ok, 1, MPI_INT, 0, MPIScheduler::state.communicator);
     if (read_ok == 0) {
         return false;
     }
-    return broadcastString(text, rank, error);
+    return MPIUtils::broadcastString(text, 0, error);
 }
 
 // ==========================================
@@ -134,6 +109,13 @@ void printUsage(const char* program_name) {
     std::cout
         << "Usage: " << program_name << " [options] [LEGACY_EXPO_LIST]\n"
         << "  --config PATH         Load an INI runtime config before CLI overrides\n"
+        << "  --run-astrocat BOOL   Repartition raw Gaia catalogs before process_extcat (default: "
+        << (ProcessConfig::RUN_PROCESS_ASTROCAT ? "true" : "false") << ")\n"
+        << "  --astrocat-input PATH Directory containing raw two-column Gaia catalogs\n"
+        << "  --astrocat-output P   Independent output directory for one-degree Gaia tiles (default: "
+        << AstroCatConfig::ASTROCAT_OUTPUT_DIRECTORY << ")\n"
+        << "  --astrocat-add-header B  true: raw files start with data; false: skip first line\n"
+        << "  --astrocat-existing P fail or overwrite generated Gaia tiles\n"
         << "  --run-extcat BOOL     Repartition raw external catalogs first (default: "
         << (ProcessConfig::RUN_PROCESS_EXTCAT ? "true" : "false") << ")\n"
         << "  --run-init BOOL       Run initializer (default: "
@@ -185,7 +167,7 @@ void printUsage(const char* program_name) {
            "--name value and --name=value; duplicate scalars use the last value.\n"
         << "The first CLI --dataset, --contains, or --extcat-contains replaces its "
            "configured list; repeats append. Lite stage, geometry, smoothing, "
-           "and Gaia-path controls are set in the INI [lensing] section.\n";
+           "and Gaia layout/path controls are set in the INI [lensing] section.\n";
 }
 
 // ==========================================
@@ -206,8 +188,7 @@ std::string resolveExposureList(const RuntimeConfig& config,
         path = std::filesystem::path(config.init.output_root)
                / ("expo_" + dataset.target + ".list");
     }
-    return std::filesystem::weakly_canonical(
-               std::filesystem::absolute(path)).string();
+    return PathUtils::normalizedAbsolute(path).string();
 }
 
 // ==========================================
@@ -216,32 +197,21 @@ std::string resolveExposureList(const RuntimeConfig& config,
 //         matching process_main's dataset-root convention.
 // ==========================================
 std::string deriveDatasetRootFromExpoList(const std::string& exposure_list) {
-    std::ifstream expo_input(exposure_list);
-    if (!expo_input.is_open()) return "";
-    std::string path;
-    int chip_count = 0;
-    while (expo_input >> path >> chip_count) {
-        if (path.size() >= 2 && path.front() == '"' && path.back() == '"') {
-            path = path.substr(1, path.size() - 2);
+    std::vector<ExposureList::Entry> exposures;
+    std::string error;
+    if (!ExposureList::loadPipelineList(exposure_list, exposures, 0, error)) {
+        return "";
+    }
+    for (const ExposureList::Entry& exposure : exposures) {
+        std::vector<std::string> image_paths;
+        if (!ExposureList::loadPathList(exposure.path, image_paths, 0, error)) {
+            continue;
         }
-        std::ifstream list_input(path);
-        if (!list_input.is_open()) continue;
-        std::string line;
-        while (std::getline(list_input, line)) {
-            const std::size_t first = line.find_first_not_of(" \t\r\n");
-            if (first == std::string::npos) continue;
-            const std::size_t last = line.find_last_not_of(" \t\r\n");
-            line = line.substr(first, last - first + 1);
-            if (line.size() >= 2 && line.front() == '"' && line.back() == '"') {
-                line = line.substr(1, line.size() - 2);
-            }
-            const std::filesystem::path image_path(line);
-            const std::filesystem::path root = image_path.parent_path()
-                                                   .parent_path()
-                                                   .parent_path();
-            if (root.empty()) return "";
-            return std::filesystem::absolute(root).lexically_normal().string();
+        std::filesystem::path root;
+        if (!PathUtils::parentAtLevel(image_paths.front(), 3, root, error)) {
+            continue;
         }
+        return PathUtils::normalizedAbsolute(root).string();
     }
     return "";
 }
@@ -252,11 +222,11 @@ std::string deriveDatasetRootFromExpoList(const std::string& exposure_list) {
 // Function: main
 // Method: Read one rank-zero INI, apply identical text and CLI on all ranks,
 //         freeze RuntimeConfig, resolve only required schemas, then dispatch the
-//         five pipeline phases in their fixed order.
+//         six pipeline phases in their fixed order.
 // ==========================================
 int main(int argc, char* argv[]) {
     MPIScheduler::init(argc, argv);
-    const int rank = MPIScheduler::my_id;
+    const int rank = MPIScheduler::state.rank;
     if (rank == 0) std::cout << "MPI Init Done..." << std::endl;
 
     int return_code = 0;
@@ -267,7 +237,7 @@ int main(int argc, char* argv[]) {
         argc, argv, config_path, phase_a_help, startup_error) ? 1 : 0;
     int global_scan_ok = 0;
     MPI_Allreduce(&local_scan_ok, &global_scan_ok, 1, MPI_INT, MPI_MIN,
-                  MPI_COMM_WORLD);
+                  MPIScheduler::state.communicator);
 
     RuntimeConfig config = makeDefaultRuntimeConfig();
     std::string config_text;
@@ -276,12 +246,12 @@ int main(int argc, char* argv[]) {
         const int local_load_ok = loadAndBroadcastConfigText(
             config_path, rank, config_text, startup_error) ? 1 : 0;
         MPI_Allreduce(&local_load_ok, &global_config_ok, 1, MPI_INT, MPI_MIN,
-                      MPI_COMM_WORLD);
+                      MPIScheduler::state.communicator);
         if (global_config_ok != 0) {
             const int local_apply_ok = applyRuntimeConfigText(
                 config_text, config_path, config, startup_error) ? 1 : 0;
             MPI_Allreduce(&local_apply_ok, &global_config_ok, 1, MPI_INT,
-                          MPI_MIN, MPI_COMM_WORLD);
+                          MPI_MIN, MPIScheduler::state.communicator);
         }
     }
 
@@ -290,7 +260,7 @@ int main(int argc, char* argv[]) {
         const int local_parse_ok = parseRuntimeCommandLine(
             argc, argv, config, startup_error) ? 1 : 0;
         MPI_Allreduce(&local_parse_ok, &global_parse_ok, 1, MPI_INT, MPI_MIN,
-                      MPI_COMM_WORLD);
+                      MPIScheduler::state.communicator);
     }
 
     int global_validation_ok = global_parse_ok;
@@ -298,7 +268,7 @@ int main(int argc, char* argv[]) {
         const int local_validation_ok = validateRuntimeConfig(
             config, startup_error) ? 1 : 0;
         MPI_Allreduce(&local_validation_ok, &global_validation_ok, 1, MPI_INT,
-                      MPI_MIN, MPI_COMM_WORLD);
+                      MPI_MIN, MPIScheduler::state.communicator);
     }
 
     if (global_scan_ok == 0 || global_config_ok == 0
@@ -320,7 +290,7 @@ int main(int argc, char* argv[]) {
             config, store_error) ? 1 : 0;
         int global_store_ok = 0;
         MPI_Allreduce(&local_store_ok, &global_store_ok, 1, MPI_INT, MPI_MIN,
-                      MPI_COMM_WORLD);
+                      MPIScheduler::state.communicator);
         if (global_store_ok == 0) {
             if (rank == 0) {
                 std::cerr << "Runtime config error: "
@@ -338,7 +308,7 @@ int main(int argc, char* argv[]) {
                 runtime_config, external_layout, schema_error) ? 1 : 0;
             int global_schema_ok = 0;
             MPI_Allreduce(&local_schema_ok, &global_schema_ok, 1, MPI_INT,
-                          MPI_MIN, MPI_COMM_WORLD);
+                          MPI_MIN, MPIScheduler::state.communicator);
 
             if (global_schema_ok == 0) {
                 if (rank == 0) {
@@ -355,13 +325,21 @@ int main(int argc, char* argv[]) {
                                      external_layout)
                               << std::endl;
                 }
-                if (runtime_config.process.run_process_extcat) {
+                if (runtime_config.process.run_process_astrocat) {
+                    if (rank == 0) {
+                        std::cout << "Running process_astrocat before process_extcat"
+                                  << std::endl;
+                    }
+                    return_code = process_astrocat(runtime_config);
+                    if (return_code == 0) MPIScheduler::barrier();
+                }
+                if (return_code == 0
+                    && runtime_config.process.run_process_extcat) {
                     if (rank == 0) {
                         std::cout << "Running process_extcat before all dataset phases"
                                   << std::endl;
                     }
-                    return_code = process_extcat(runtime_config,
-                                                 MPI_COMM_WORLD);
+                    return_code = process_extcat(runtime_config);
                     if (return_code == 0) MPIScheduler::barrier();
                 }
 
@@ -413,7 +391,8 @@ int main(int argc, char* argv[]) {
                             }
                             int global_path_ok = 0;
                             MPI_Allreduce(&local_path_ok, &global_path_ok, 1,
-                                          MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+                                          MPI_INT, MPI_MIN,
+                                          MPIScheduler::state.communicator);
                             if (global_path_ok == 0) {
                                 if (rank == 0) {
                                     std::cerr << "Exposure-list error: "
@@ -432,7 +411,7 @@ int main(int argc, char* argv[]) {
                         if (!rng_initialized) {
                             const unsigned int seed =
                                 NumericalRecipes::initializeRan1Seed(
-                                    rank, MPIScheduler::num_procs);
+                                    rank, MPIScheduler::state.size);
                             std::cout << "RNG_SEED rank seed: " << rank << " "
                                       << seed << std::endl;
                             MPIScheduler::barrier();
@@ -449,7 +428,7 @@ int main(int argc, char* argv[]) {
                         if (rank == 0) std::cout << "Running process_rearr" << std::endl;
                         return_code = process_rearr(
                             selected_exposure_list, runtime_config,
-                            external_layout, MPI_COMM_WORLD);
+                            external_layout);
                     }
 
                     if (return_code == 0
@@ -457,7 +436,7 @@ int main(int argc, char* argv[]) {
                         MPIScheduler::barrier();
                         if (!rng_initialized) {
                             NumericalRecipes::initializeRan1Seed(
-                                rank, MPIScheduler::num_procs);
+                                rank, MPIScheduler::state.size);
                             MPIScheduler::barrier();
                             rng_initialized = true;
                         }

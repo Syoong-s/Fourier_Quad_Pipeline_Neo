@@ -1,5 +1,9 @@
 #include "process_extcat/process_extcat.hpp"
 
+#include "general/MPIUtils.hpp"
+#include "general/MPIScheduler.hpp"
+#include "general/PathUtils.hpp"
+
 #include <mpi.h>
 
 #include <algorithm>
@@ -130,29 +134,6 @@ void stripUtf8Bom(std::vector<std::string>& tokens) {
 }
 
 // ==========================================
-// Function: Normalize a path for deterministic discovery and safety checks
-// Method: Resolve existing components while permitting a not-yet-created output tail.
-// ==========================================
-fs::path normalizedAbsolute(const fs::path& path) {
-    return fs::weakly_canonical(fs::absolute(path));
-}
-
-// ==========================================
-// Function: Test whether one normalized path is equal to or below another
-// Method: Compare complete path components instead of raw string prefixes.
-// ==========================================
-bool pathIsWithin(const fs::path& candidate, const fs::path& parent) {
-    auto candidate_iterator = candidate.begin();
-    auto parent_iterator = parent.begin();
-    for (; parent_iterator != parent.end(); ++parent_iterator, ++candidate_iterator) {
-        if (candidate_iterator == candidate.end() || *candidate_iterator != *parent_iterator) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// ==========================================
 // Function: Test a basename against repeatable substring filters
 // Method: Select every file when no filters exist, otherwise apply case-sensitive OR semantics.
 // ==========================================
@@ -180,24 +161,10 @@ bool isGeneratedTileName(const std::string& basename) {
 // Function: Broadcast one dynamically sized string
 // Method: Send an integer byte count followed by the contiguous character payload.
 // ==========================================
-void broadcastString(std::string& value, int root_rank, MPI_Comm communicator) {
-    int rank = 0;
-    MPI_Comm_rank(communicator, &rank);
-    int length = 0;
-    if (rank == root_rank) {
-        length = value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())
-                     ? -1
-                     : static_cast<int>(value.size());
-    }
-    MPI_Bcast(&length, 1, MPI_INT, root_rank, communicator);
-    if (length < 0) {
-        throw std::runtime_error("MPI string exceeds int length range");
-    }
-    if (rank != root_rank) {
-        value.resize(static_cast<std::size_t>(length));
-    }
-    if (length > 0) {
-        MPI_Bcast(value.data(), length, MPI_CHAR, root_rank, communicator);
+void broadcastString(std::string& value, int root_rank) {
+    std::string error;
+    if (!MPIUtils::broadcastString(value, root_rank, error)) {
+        throw std::runtime_error(error);
     }
 }
 
@@ -205,14 +172,12 @@ void broadcastString(std::string& value, int root_rank, MPI_Comm communicator) {
 // Function: Report the first processing error from every failed MPI rank
 // Method: Broadcast each rank's optional message in rank order and print only on rank zero.
 // ==========================================
-void reportRankErrors(const std::string& local_error, MPI_Comm communicator) {
-    int rank = 0;
-    int world_size = 1;
-    MPI_Comm_rank(communicator, &rank);
-    MPI_Comm_size(communicator, &world_size);
+void reportRankErrors(const std::string& local_error) {
+    const int rank = MPIScheduler::state.rank;
+    const int world_size = MPIScheduler::state.size;
     for (int source_rank = 0; source_rank < world_size; ++source_rank) {
         std::string message = rank == source_rank ? local_error : std::string();
-        broadcastString(message, source_rank, communicator);
+        broadcastString(message, source_rank);
         if (rank == 0 && !message.empty()) {
             std::cerr << "process_extcat rank " << source_rank << ": " << message << '\n';
         }
@@ -550,7 +515,7 @@ std::vector<fs::path> discoverInputFiles(const ProcessExtcat::Config& config) {
             }
             if (regular
                 && matchesFilenameTokens(entry.path().filename().string(), config.filename_tokens)) {
-                unique_paths.insert(normalizedAbsolute(entry.path()));
+                unique_paths.insert(PathUtils::normalizedAbsolute(entry.path()));
             }
             iterator.increment(iterator_error);
             if (iterator_error) {
@@ -573,7 +538,7 @@ std::vector<fs::path> discoverInputFiles(const ProcessExtcat::Config& config) {
             }
             if (regular
                 && matchesFilenameTokens(entry.path().filename().string(), config.filename_tokens)) {
-                unique_paths.insert(normalizedAbsolute(entry.path()));
+                unique_paths.insert(PathUtils::normalizedAbsolute(entry.path()));
             }
             iterator.increment(iterator_error);
             if (iterator_error) {
@@ -721,10 +686,9 @@ void validateCompatibleOutputSchemas(const std::vector<FileMetadata>& metadata) 
 //         delimiter enums, and raw coordinate indices.
 // ==========================================
 void broadcastMetadata(std::vector<FileMetadata>& metadata,
-                       int root_rank,
-                       MPI_Comm communicator) {
-    int rank = 0;
-    MPI_Comm_rank(communicator, &rank);
+                       int root_rank) {
+    const int rank = MPIScheduler::state.rank;
+    const MPI_Comm communicator = MPIScheduler::state.communicator;
     int count = 0;
     if (rank == root_rank) {
         count = metadata.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())
@@ -742,7 +706,7 @@ void broadcastMetadata(std::vector<FileMetadata>& metadata,
     for (int item = 0; item < count; ++item) {
         FileMetadata& file = metadata[static_cast<std::size_t>(item)];
         std::string path_text = rank == root_rank ? file.path.string() : std::string();
-        broadcastString(path_text, root_rank, communicator);
+        broadcastString(path_text, root_rank);
         if (rank != root_rank) {
             file.path = path_text;
         }
@@ -1202,15 +1166,16 @@ void normalizeAndValidateConfig(Config& config) {
     if (config.output_directory.empty()) {
         throw std::runtime_error("output directory must be provided");
     }
-    config.input_directory = normalizedAbsolute(config.input_directory);
-    config.output_directory = normalizedAbsolute(config.output_directory);
+    config.input_directory = PathUtils::normalizedAbsolute(config.input_directory);
+    config.output_directory = PathUtils::normalizedAbsolute(config.output_directory);
 
     if (!fs::exists(config.input_directory) || !fs::is_directory(config.input_directory)) {
         throw std::runtime_error("input path is not a directory: "
                                  + config.input_directory.string());
     }
     if (config.input_directory == config.output_directory
-        || pathIsWithin(config.output_directory, config.input_directory)) {
+        || PathUtils::isPathWithin(config.output_directory,
+                                   config.input_directory)) {
         throw std::runtime_error("output directory must not equal or be below the input directory");
     }
     if (fs::exists(config.output_directory) && !fs::is_directory(config.output_directory)) {
@@ -1359,11 +1324,10 @@ ProcessExtcat::Config buildIntegratedConfig(const RuntimeConfig& runtime_config)
 // Method: Discover and inspect inputs on rank zero, preserve or project arbitrary columns,
 //         process byte ranges across MPI ranks, and publish deterministic tiles.
 // ==========================================
-int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
-    int rank = 0;
-    int world_size = 1;
-    MPI_Comm_rank(communicator, &rank);
-    MPI_Comm_size(communicator, &world_size);
+int process_extcat(ProcessExtcat::Config config) {
+    const int rank = MPIScheduler::state.rank;
+    const int world_size = MPIScheduler::state.size;
+    const MPI_Comm communicator = MPIScheduler::state.communicator;
 
     int local_config_ok = 1;
     std::string local_error;
@@ -1376,7 +1340,7 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
     int global_config_ok = 0;
     MPI_Allreduce(&local_config_ok, &global_config_ok, 1, MPI_INT, MPI_MIN, communicator);
     if (global_config_ok == 0) {
-        reportRankErrors(local_error, communicator);
+        reportRankErrors(local_error);
         return 2;
     }
 
@@ -1412,7 +1376,7 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
     }
 
     MPI_Bcast(&root_preparation_ok, 1, MPI_INT, 0, communicator);
-    broadcastString(root_error, 0, communicator);
+    broadcastString(root_error, 0);
     if (root_preparation_ok == 0) {
         if (rank == 0) {
             std::cerr << "process_extcat preparation error: " << root_error << '\n';
@@ -1421,11 +1385,11 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
     }
 
     std::string staging_text = rank == 0 ? staging_directory.string() : std::string();
-    broadcastString(staging_text, 0, communicator);
+    broadcastString(staging_text, 0);
     if (rank != 0) {
         staging_directory = staging_text;
     }
-    broadcastMetadata(metadata, 0, communicator);
+    broadcastMetadata(metadata, 0);
 
     std::vector<Task> tasks;
     int local_task_build_ok = 1;
@@ -1440,7 +1404,7 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
     MPI_Allreduce(&local_task_build_ok, &global_task_build_ok, 1, MPI_INT, MPI_MIN,
                   communicator);
     if (global_task_build_ok == 0) {
-        reportRankErrors(local_error, communicator);
+        reportRankErrors(local_error);
         if (rank == 0) {
             std::error_code cleanup_error;
             fs::remove_all(staging_directory, cleanup_error);
@@ -1472,7 +1436,7 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
     MPI_Allreduce(&local_processing_ok, &global_processing_ok, 1, MPI_INT, MPI_MIN,
                   communicator);
     if (global_processing_ok == 0) {
-        reportRankErrors(local_error, communicator);
+        reportRankErrors(local_error);
         if (rank == 0) {
             std::error_code cleanup_error;
             fs::remove_all(staging_directory, cleanup_error);
@@ -1503,7 +1467,7 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
         }
     }
     MPI_Bcast(&merge_ok, 1, MPI_INT, 0, communicator);
-    broadcastString(merge_error, 0, communicator);
+    broadcastString(merge_error, 0);
     if (merge_ok == 0) {
         if (rank == 0) {
             std::cerr << "process_extcat merge error: " << merge_error << '\n';
@@ -1527,8 +1491,8 @@ int process_extcat(ProcessExtcat::Config config, MPI_Comm communicator) {
 // Method: Translate and check configuration against the startup layout collectively, then
 //         call the reusable implementation without owning MPI initialization or finalization.
 // ==========================================
-int process_extcat(const RuntimeConfig& runtime_config,
-                   MPI_Comm communicator) {
+int process_extcat(const RuntimeConfig& runtime_config) {
+    const MPI_Comm communicator = MPIScheduler::state.communicator;
     ProcessExtcat::Config config;
     int local_adapter_ok = 1;
     std::string local_error;
@@ -1550,8 +1514,8 @@ int process_extcat(const RuntimeConfig& runtime_config,
     MPI_Allreduce(&local_adapter_ok, &global_adapter_ok, 1, MPI_INT, MPI_MIN,
                   communicator);
     if (global_adapter_ok == 0) {
-        reportRankErrors(local_error, communicator);
+        reportRankErrors(local_error);
         return 2;
     }
-    return process_extcat(config, communicator);
+    return process_extcat(config);
 }

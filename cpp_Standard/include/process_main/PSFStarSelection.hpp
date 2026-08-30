@@ -109,6 +109,54 @@ struct NeighborEdge {
 };
 
 // ==========================================
+// Structure: Identify one exposure-level minChi reference candidate
+// Method: Carry deterministic chip/star keys and the FWHM-locus size ranking.
+// ==========================================
+struct MinChiReferenceCandidate {
+    int chip_index = -1;
+    int star_index = -1;
+    double size = 0.0;
+};
+
+// ==========================================
+// Function: Select capped exposure-wide large-size minChi references
+// Method: Sort the top fraction by size/chip/star, then apply a per-chip cap
+//         without filling from candidates below the exposure-wide pool.
+// ==========================================
+std::vector<MinChiReferenceCandidate> selectMinChiReferenceStars(
+    const std::vector<MinChiReferenceCandidate>& locus_candidates,
+    double reference_fraction,
+    int maximum_per_chip);
+
+// ==========================================
+// Structure: View one candidate during the same-chip minChi pair pass
+// Method: Borrow its normalized chi window and carry locus/reference labels.
+// ==========================================
+struct MinChiCandidateView {
+    const std::vector<float>* chi_window = nullptr;
+    bool in_fwhm_locus = false;
+    bool is_reference = false;
+};
+
+// ==========================================
+// Structure: Return nearest-neighbour distances and reference-pair samples
+// Method: Align minChi with input candidates and retain every qualifying
+//         unordered pair distance exactly once for exposure thresholding.
+// ==========================================
+struct MinChiPairResult {
+    std::vector<float> min_chi;
+    std::vector<float> threshold_pair_chi;
+};
+
+// ==========================================
+// Function: Compute one chip's minChi values and threshold-pair sample
+// Method: Visit every unordered locus-locus pair once, update both endpoints,
+//         and sample the distance when either endpoint is a reference.
+// ==========================================
+MinChiPairResult computeMinChiAndThresholdPairs(
+    const std::vector<MinChiCandidateView>& candidates);
+
+// ==========================================
 // Function: Compute the exact normalized PSF chi distance
 // Method: Apply the legacy sqrt(sum squared difference / mean signed flux)
 //         directly to two cached central windows.
@@ -223,6 +271,37 @@ bool computeAnalyticLOO(
     double minimum_denominator,
     double& loo_residual,
     double& loo_model);
+
+// ==========================================
+// Function: Convert raw analytic PRESS to its leverage-standardized score
+// Method: Multiply by sqrt(1-h) after the same finite denominator guard used
+//         by the analytic leave-one-out calculation.
+// ==========================================
+bool computeLeverageStandardizedPress(
+    double raw_press,
+    double leverage,
+    double minimum_denominator,
+    double& standardized_press);
+
+enum class PressRemovalDecision {
+    Disabled,
+    NoOutliers,
+    TooManyOutliers,
+    WouldUnderrunMinimum,
+    Apply
+};
+
+// ==========================================
+// Function: Decide whether an optional PRESS removal may be attempted
+// Method: Apply the rejection switch, outlier count, removal cap, and minimum
+//         retained-star guard without mutating any fitting or selection state.
+// ==========================================
+PressRemovalDecision decidePressRemoval(
+    bool rejection_enabled,
+    int initial_count,
+    int flagged_count,
+    int minimum_count,
+    int maximum_removals);
 
 }  // namespace Internal
 }  // namespace PSFModel

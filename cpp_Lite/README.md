@@ -1,217 +1,47 @@
 # cpp_Lite
 
-The frozen-branch simplified C++17 Fourier_Quad pipeline build (`PSFRecons`
-removed). See `REFACTOR_NOTES.md` for the Lite change log.
+Reduced C++17 Fourier_Quad pipeline for the fixed production path: Gaia
+astrometry, no super-flat, per-chip DQ mask, external source catalog, enabled
+deblending, local-polynomial PSF, and no PCA reconstruction. The alternate
+Standard branches are absent from this source tree.
 
-The complete C++ pipeline guide lives in
-[`../CPP_GUIDE.md`](../CPP_GUIDE.md). The full parameter reference is
-[`../CPP_PIPELINE_PARAMETERS.md`](../CPP_PIPELINE_PARAMETERS.md).
-
-## Stage-3 outer-noise plane fitting
-
-For covariance noise products (`NstampType=2`), Stage 3 fits the source and
-noise residual plane from the configurable square shell between
-`noise_region_size` and `noise_inner_size`. It rejects masked, non-finite,
-out-of-chip, and opposite-amplifier samples using the same runtime `ccd_split`
-value as the downstream stamp and covariance checks. This retained path does
-not restore any Lite-deleted PSF/PCA branch. The synthetic regression is
-independent of the Makefile and can be compiled with the production solver:
+## Build and run
 
 ```bash
-"${MPI_PREFIX}/bin/mpicxx" -O2 -std=c++17 -Wall -Wextra \
-  -ffunction-sections -fdata-sections \
-  -Iinclude -Iconfig -Iinclude/process_main -Isrc/process_main \
-  -I"${STACK_PREFIX}/include" -I"${EIGEN_INCLUDE}" \
-  tests/NoisePlaneFitTest.cpp src/process_main/UniversalUtils.cpp \
-  src/process_main/LinearSolve.cpp -Wl,--gc-sections \
-  -L"${STACK_PREFIX}/lib" -Wl,-rpath,"${STACK_PREFIX}/lib" \
-  -llapack -lblas -lm -o /tmp/NoisePlaneFitTest
-/tmp/NoisePlaneFitTest
+make -j4
+cp pipeline.example.ini pipeline.ini
+# Edit pipeline.ini with paths and datasets.
+mpirun -np 4 ./Fourier_Quad_Pipe --config pipeline.ini
 ```
 
-## Stage-5 PSF star-selection redesign
+For a nonstandard library prefix, pass `STACK_PREFIX`; pass `EIGEN_INCLUDE`
+when Eigen is elsewhere. The current Makefile exposes only the `all` and
+`clean` targets. Focused tests are compiled explicitly rather than through
+named Make targets.
 
-Stage 5 now applies a positive signed central-chi-window quality gate, reads
-matched image positions from each chip's Gaia `_astro.dat`, estimates one
-Gaia-assisted exposure FWHM stellar locus, and compares Fourier windows only
-within the same chip. Compile-time `LensingConfig::PsfGroupingType` selects the
-legacy chi-threshold graph (`1`) or the default exact mutual-KNN graph (`2`).
-Both share the exposure-pooled per-star `minChi` cut and retain the largest
-component plus only secondary components satisfying both the relative-size and
-Gaia-support cuts. Type 2 rebuilds its exact top-K lists only among candidates
-that survive the shared `minChi` cut, so rejected neighbours cannot occupy stale
-KNN slots; Type 1 retains its existing private threshold sample and graph
-behavior. The candidate-count-squared chi matrix has been removed.
+Local focused verification uses the MPI C++ wrapper from GCC 15.2.0, with
+CFITSIO 4.6.3 and FFTW3 3.3.10 available. The local full build uses Eigen3 from
+`/usr/include/eigen3`; other sites must provide equivalent C++17 MPI, Eigen3,
+LAPACK, and BLAS dependencies.
 
-Each retained chip then receives one analytic leave-one-out PRESS pass. Raw
-central-window LOO RMS is pooled exposure-wide, rejection happens once, and
-only a chip whose selected set changes is refitted. The final normalized local
-polynomial coefficients and leverage are cached, and `msshape_*` is measured
-from the final analytic LOO model. Lite continues to use runtime `chipnx` and
-`chipny` plus direct catalog-shaped 3D stamp cubes. Its frozen Gaia-only,
-local-only behavior remains intact; no astrometry-trivial, PCA, hybrid,
-multi-scale, or rescaling branch was restored.
+Lite defaults to `process_init` and `process_main` enabled, with
+`process_rearr` and `process_fd` disabled. It rejects Standard-only `[lensing]`
+keys rather than silently ignoring them.
+`[lensing].astrometry_cat_type` selects legacy large Gaia tiles (`1`) or
+1-degree Gaia tiles (`2`); both layouts remain rooted at
+`[lensing].astrometry_cat` and use the same RA/Dec row format.
 
-The new scientific thresholds are compile-time constants in
-`config/LensingConfig.hpp`, so changing them requires rebuilding. Run the
-focused selection, survivor-only KNN refill, quality, state, and analytic-LOO
-tests with:
+The optional one-time `process_astrocat` phase runs before `process_extcat` and
+publishes deduplicated one-degree Gaia tiles. `[astrocat].output_directory` is
+independent of `[lensing].astrometry_cat`; configure the consumer path
+separately and set `[lensing].astrometry_cat_type = 2` when consuming those
+tiles.
 
-```bash
-make test-psf-star-selection CXX=mpicxx \
-     STACK_PREFIX=/path/to/dependency-prefix \
-     EIGEN_INCLUDE=/path/to/eigen3
-```
+The current tree keeps shared infrastructure in `include/general/` and
+`src/general/`. Stage 7 writes 28 fields; Stage 9 inserts `EXPO_NUM` immediately
+before `ccD_NUM` and appends exposure chi-square. The default Lite row now has
+49 fields; regenerate older 48-field products before rearrangement or FD.
+Full-row `-99999` sentinels remain the invalid numerical-source contract.
 
-Representative real exposures are still required to inspect PRESS against
-brightness/SNR/FWHM and to benchmark Stage-5 wall time.
-
-## Runtime configuration
-
-`RuntimeConfig` owns every run-selectable Process, ExtCat, Init, and surviving
-Lite Lensing value. Start from [`pipeline.example.ini`](pipeline.example.ini):
-
-```bash
-./Fourier_Quad_Pipe --config pipeline.ini
-```
-
-Precedence is compiled defaults, then INI values, then CLI overrides. Rank 0
-alone reads the file and broadcasts its exact text; every MPI rank parses and
-validates that text before the write-once store is initialized. Unknown keys,
-sections, or malformed values fail startup transactionally with structured
-diagnostics. `source_cat` aliases the authoritative
-`extcat.output_directory`.
-
-Lite exposes only `process_stage`, `astrometry_cat`, `ccd_split`, `gal_smooth`,
-`star_smooth`, `pixel_size`, `nmax_chip`, `chipnx`, and `chipny` in
-`[lensing]`. Its frozen Gaia/DQ/external-catalog/frame-star/deblending/local-PSF
-behaviors remain implemented directly; Standard-only selector and path keys are
-rejected instead of silently pretending to work. The removed `npx`, `npy`, and
-`NMAX_EXPO` settings are not accepted.
-
-## Stamp-cube format
-
-Stage 3--7 stamp collections are contiguous three-dimensional FITS images with
-axes `(x, y, stamp)`. Their in-memory layout is `[stamp][row][col]`, with flat
-index `((stamp * ny) + row) * nx + col`. Writers add
-`FQFMT='STAMP_CUBE'` and `FQORDER='X,Y,STAMP'`; readers derive all dimensions
-from the FITS header, and consumers verify them against the configured stamp
-size and the matching catalog count.
-
-This intentionally breaks compatibility with legacy two-dimensional stamp
-mosaics. Regenerate intermediate stamp products from Stage 3 onward. Lite keeps
-its frozen `PSF_Ms=0` behavior and does not add Standard's PCA reconstruction.
-
-## Norm FITS background and sigma metadata
-
-Stage 1 writes the final background and sigma-plane coefficients into the
-existing `*_norm.fits` primary header together with the normalized pixels. For
-`ccd_split=1`, the logical long-string keywords are `BGCO` and `SIGCO`; for
-`ccd_split=2`, they are `BG1CO`, `BG2CO`, `SIG1CO`, and `SIG2CO`. Coefficients
-are serialized with scientific precision 17, and Stage 3 reads the image and
-all coefficient keywords through one FITS handle.
-
-Stage 3 reconstructs the sigma plane from the header and subtracts the Stage-1
-background model once per amplifier before the existing Lite source/stamp flow.
-The old sigma metadata pixels are no longer read or written; missing or
-malformed header metadata is a chip failure with no legacy-pixel fallback.
-
-## Build and focused verification
-
-Use the portable Makefile inputs described in the main guide. For example:
-
-```bash
-make clean
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" -j4
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-stamp-cube-io
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-point-source-statistics
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-universalblock
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-layout
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-catalog-row-count
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-psf-star-selection
-make CXX="${MPI_PREFIX}/bin/mpicxx" \
-  STACK_PREFIX="${STACK_PREFIX}" \
-  EIGEN_INCLUDE="${EIGEN_INCLUDE}" test-runtime-config
-./Fourier_Quad_Pipe --help
-```
-
-The stamp-cube test verifies a non-square `5 x 3 x 4` round trip, raw FITS axes
-and metadata, and dense selected-plane ordering. The catalog-row-count test
-covers equal 100-row catalogs, both mismatch directions, and paired header-only
-catalogs. The PSF selection target covers the shared chi window/quality gate,
-FWHM/Gaia locus, `_astro.dat` parser and matching, exact mutual-KNN/groups,
-analytic LOO equivalence, and actual candidate counts through 2301 using
-aligned linear metadata without pairwise square-matrix allocation.
-
-The runtime-config test covers Lite defaults, all four INI sections, strict
-rejection of deleted-branch keys, default/file/CLI precedence, geometry and
-stage validation, transactional failures, and the immutable store.
-
-The current local WSL2 stack is GCC/G++ 15.2.0, Open MPI 5.0.10, CFITSIO 4.6.3,
-FFTW 3.3.10, Eigen 3.4.0, and OpenBLAS/LAPACK 0.3.33; portable cluster versions
-are recorded in
-[`../CPP_GUIDE.md`](../CPP_GUIDE.md#compiler-and-libraries).
-
-## Dynamic catalog and PSF capacities
-
-`LensingConfig::ngal_max` (4000) and `LensingConfig::nstar_max` (2000) are
-initial metadata-vector reservation capacities, not hard catalog limits. Stage
-3 appends every accepted source and star candidate, while the large stamp
-buffers continue to grow on demand rather than reserving the full hint size.
-
-Stage 5 creates empty state for the exposure's live chips, loads each chip's
-complete candidate catalog, retains one central window per quality-valid
-candidate, and keeps at most bounded top-K neighbours instead of an
-`actual_nstar x actual_nstar` matrix. Stage 9 requires the physical data-row
-counts after the shear and external catalog headers to match before
-combination; a mismatch aborts the MPI world, while the existing row parsing,
-cuts, calibration, and pairing order remain unchanged.
-
-## Runtime catalog layout
-
-Lite uses the same startup-resolved external `CatalogLayout` contract as
-Standard. `main` passes one immutable layout to `process_main`,
-`process_rearr`, and `process_fd`; `process_extcat` consumes the same runtime
-extcat section directly. Pass-through mode takes the external
-prefix width from `EXTCAT_TOTAL_COLUMNS`; explicit projection uses the
-projection length. CCD, source-suffix, and complete-row offsets are derived
-from that effective width, while the process-main suffix remains 29 fields.
-
-RA, Dec, and ZP are mandatory. Each g/r/i/z/y magnitude is optional: raw
-configured column `0`, or omission of a positive configured identity from an
-explicit projection, marks the band absent. Non-required physical extcat
-columns contribute only to row width and have no layout member. At FD startup,
-Lite selects i -> z -> r -> g -> y; the selected band drives the magnitude cut
-and size-magnitude star bar, and FD fails before catalog I/O when no band is
-available. `test-catalog-layout` covers layout mapping, fallback selection,
-selected-band ingestion, and exact runtime row widths.
-
-## Invalid norm chip gate
-
-`namespace Universalblock` classifies the first pixel of each sharded
-`*_norm.fits` as `Valid`, `Invalid`, `Missing`, or `ReadError`. Stages 3, 4, 5,
-6, 7, and 9 check this status before opening their chip-level downstream inputs.
-Only `Invalid` is a silent skip; missing or malformed norm FITS files remain
-reported input errors, and valid chips retain their existing downstream-file
-error paths.
-
-Stage 5 keeps its established zero-star PSF placeholder behavior after an
-invalid chip is skipped during candidate loading. Stage 9 leaves external-catalog
-header discovery file-driven and applies the norm gate only in the data loop,
-before opening `_shear.dat` or `_orig.cat`. The focused `test-universalblock`
-target covers path derivation, valid and invalid sentinels, invalid-path silence,
-missing norm files, and malformed FITS input.
+See the [main guide](../CPP_GUIDE.md) and
+[parameter reference](../CPP_PIPELINE_PARAMETERS.md).

@@ -27,7 +27,8 @@ struct ExternalFields {
 
 // ==========================================
 // Structure: Describe process_main fields in complete _all.cat rows
-// Method: Store zero-based absolute positions after the runtime external prefix and CCD field.
+// Method: Store zero-based absolute positions after the runtime external prefix
+//         and fixed exposure/CCD identity fields.
 // ==========================================
 struct SourceFields {
     std::size_t polychi2 = 0;
@@ -64,11 +65,13 @@ struct SourceFields {
 
 // ==========================================
 // Structure: Define the shared runtime schema for every downstream catalog phase
-// Method: Combine effective external fields, CCD position, process_main suffix, and row widths.
+// Method: Combine effective external fields, exposure/CCD positions,
+//         process_main suffix, and row widths.
 // ==========================================
 struct CatalogLayout {
     std::size_t external_columns = 0;
     ExternalFields external;
+    std::size_t expo = 0;
     std::size_t ccd = 0;
     std::size_t source_base = 0;
     std::size_t source_columns = 0;
@@ -99,7 +102,7 @@ struct RearrCatalogSchema {
 // ==========================================
 // Function: resolveRearrCatalogSchema
 // Method: Derive rearr fields from the external layout when ext_cat=1 or from
-//         the fixed internal `[CCD_NUM]+source` schema when ext_cat=0.
+//         the fixed internal `[EXPO_NUM]+[CCD_NUM]+source` schema when ext_cat=0.
 // ==========================================
 bool resolveRearrCatalogSchema(const RuntimeConfig& config,
                                const CatalogLayout* external_layout,

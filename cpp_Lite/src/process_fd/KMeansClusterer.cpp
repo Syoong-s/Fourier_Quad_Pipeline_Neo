@@ -1,7 +1,8 @@
 #include "process_fd/KMeansClusterer.hpp"
 #include "FDConfig.hpp"
 #include "LensingConfig.hpp"
-#include "process_main/NumericalRecipes.hpp"
+#include "general/NumericalRecipes.hpp"
+#include "general/MPIScheduler.hpp"
 
 #include <mpi.h>
 
@@ -101,14 +102,16 @@ void simpleKmeans(int n_gal, const std::vector<float>& pos,
 //         k-means on rank 0, broadcast the resulting cluster centers.
 // ==========================================
 void KMeansClusterer::runMPI(int ng, const std::vector<float>& ra,
-                            const std::vector<float>& dec, int rank,
-                            int num_procs,
+                            const std::vector<float>& dec,
                             std::vector<float>& centers) {
+    const int rank = MPIScheduler::state.rank;
+    const int num_procs = MPIScheduler::state.size;
+    const MPI_Comm communicator = MPIScheduler::state.communicator;
     centers.assign(3 * fc::N_jack, 0.0);
 
     // Gather per-rank source counts
     std::vector<int> ng_all(num_procs, 0);
-    MPI_Allgather(&ng, 1, MPI_INT, ng_all.data(), 1, MPI_INT, MPI_COMM_WORLD);
+    MPI_Allgather(&ng, 1, MPI_INT, ng_all.data(), 1, MPI_INT, communicator);
 
     // Determine sample size (min across non-zero ranks)
     int min_ng = ng_all[0];
@@ -131,9 +134,9 @@ void KMeansClusterer::runMPI(int ng, const std::vector<float>& ra,
     }
 
     MPI_Gather(ra_select.data(), n_select, MPI_FLOAT,
-               ra_tot.data(), n_select, MPI_FLOAT, 0, MPI_COMM_WORLD);
+               ra_tot.data(), n_select, MPI_FLOAT, 0, communicator);
     MPI_Gather(dec_select.data(), n_select, MPI_FLOAT,
-               dec_tot.data(), n_select, MPI_FLOAT, 0, MPI_COMM_WORLD);
+               dec_tot.data(), n_select, MPI_FLOAT, 0, communicator);
 
     if (rank == 0) {
         // Convert to 3D unit vectors (skip rank-0 samples which are zeros)
@@ -151,6 +154,6 @@ void KMeansClusterer::runMPI(int ng, const std::vector<float>& ra,
         std::cout << "simple_kmeans_MPI done!" << std::endl;
     }
 
-    MPI_Bcast(centers.data(), 3 * fc::N_jack, MPI_FLOAT, 0, MPI_COMM_WORLD);
-    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Bcast(centers.data(), 3 * fc::N_jack, MPI_FLOAT, 0, communicator);
+    MPI_Barrier(communicator);
 }

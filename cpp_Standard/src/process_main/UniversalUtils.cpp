@@ -1,8 +1,8 @@
-#include "UniversalUtils.hpp"
-#include "PSFStarSelection.hpp"
-#include "FitsIO.hpp"
-#include "LinearSolve.hpp"
-#include "MPIFailure.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/PSFStarSelection.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/LinearSolve.hpp"
+#include "process_main/MPIFailure.hpp"
 #include <cmath>
 #include <iostream>
 #include <fstream>

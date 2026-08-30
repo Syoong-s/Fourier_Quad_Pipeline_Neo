@@ -5,7 +5,7 @@
 #include <vector>
 #include <array>
 #include "LensingConfig.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/LinearSolve.hpp"
 
 namespace PSFModel {
     // cpp_lite: the global PSF PCA storage (global_components / global_mean_psf /

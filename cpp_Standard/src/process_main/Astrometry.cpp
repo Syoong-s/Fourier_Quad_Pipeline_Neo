@@ -1,11 +1,12 @@
-#include "Astrometry.hpp"
-#include "OutputFile.hpp"
-#include "OutputLayout.hpp"
+#include "process_main/Astrometry.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/OutputFile.hpp"
+#include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
-#include "UniversalUtils.hpp"
-#include "FitsIO.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/LinearSolve.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 #include <fstream>
@@ -16,7 +17,6 @@
 #include <utility>
 
 // Global/extern variables representing exposure filenames list (defined in main.cpp)
-extern std::vector<std::string> EXPO_FILE;
 
 namespace Astrometry {
 
@@ -991,6 +991,126 @@ namespace Astrometry {
     }
 
     // ==========================================
+    // Function: Generate matched astrometry calibration data from multiple Gaia tiles
+    // Method: Accumulate readable two-column Gaia tiles with dynamic storage, then run
+    //         the current matching and 17-digit output workflow once.
+    // ==========================================
+    void genAstrometryDataMulti(const std::vector<std::string>& catStandards, int nx, int ny,
+                                const std::vector<float>& map, const std::vector<int>& weight,
+                                WCSParams& wcs, const std::string& filename, int& procError) {
+        if (procError == 1) {
+            MainIO::OutputFile ofs(filename);
+            if (ofs) {
+                ofs << std::setprecision(17) << wcs.crpix[0] << " " << wcs.crpix[1] << " "
+                    << wcs.crval[0] << " " << wcs.crval[1] << "\n";
+                ofs << std::setprecision(17) << wcs.cd[0][0] << " " << wcs.cd[0][1] << " "
+                    << wcs.cd[1][0] << " " << wcs.cd[1][1] << "\n";
+                ofs << "0 0 0\n";
+            }
+            return;
+        }
+
+        constexpr double astrometry_shift_ratio = 0.2;
+        double ra = 0.0, dra = 0.0;
+        double dec[2] = {0.0, 0.0};
+
+        getRaDecRange(nx, ny, ra, dec, dra, wcs.crpix, wcs.cd, wcs.crval,
+                      astrometry_shift_ratio);
+
+        std::vector<double> ra_r;
+        std::vector<double> dec_r;
+        std::vector<double> xr;
+        std::vector<double> yr;
+        ra_r.reserve(initial_astrometry_rows);
+        dec_r.reserve(initial_astrometry_rows);
+        xr.reserve(initial_astrometry_rows);
+        yr.reserve(initial_astrometry_rows);
+
+        std::string line;
+        std::istringstream iss;
+        for (const std::string& catStandard : catStandards) {
+            std::ifstream ifs(catStandard);
+            if (!ifs.is_open()) {
+                continue;
+            }
+
+            std::string header;
+            std::getline(ifs, header); // skip first line of each tile
+
+            while (std::getline(ifs, line)) {
+                std::replace(line.begin(), line.end(), ',', ' ');
+                iss.clear();
+                iss.str(line);
+
+                double a = 0.0, d = 0.0;
+                if (!(iss >> a >> d)) {
+                    continue;
+                }
+
+                if (std::abs(diffra(a, ra)) > dra * 0.5) continue;
+                if (d < dec[0] || d > dec[1]) continue;
+
+                ra_r.push_back(a);
+                dec_r.push_back(d);
+                double x_pixel = 0.0, y_pixel = 0.0;
+                coordinateTransferSimple(a, d, x_pixel, y_pixel, -1,
+                                         wcs.crpix, wcs.cd, wcs.crval);
+                xr.push_back(x_pixel);
+                yr.push_back(y_pixel);
+            }
+        }
+        const int n_ref = static_cast<int>(ra_r.size());
+
+        int n_user = 0;
+        std::vector<double> xs, ys;
+        getAstrometryCatalog(nx, ny, map, weight, n_user, xs, ys);
+
+        // Apply the scientific selection only after the complete dynamic catalog has been
+        // detected and sorted by flux. This preserves dynamic storage and F77 top-ranked
+        // matching semantics without turning n_user_max into a detection-capacity limit.
+        const std::size_t n_user_selected = std::min(
+            xs.size(), static_cast<std::size_t>(LensingConfig::n_user_max));
+        xs.resize(n_user_selected);
+        ys.resize(n_user_selected);
+        n_user = static_cast<int>(n_user_selected);
+
+        int astrometry_shift_range = static_cast<int>(
+            std::max(nx, ny) * astrometry_shift_ratio);
+        std::vector<int> box(n_ref, 0);
+
+        patternMatching(n_ref, xr, yr, n_user, xs, ys, astrometry_shift_range, box);
+
+        int nss = 0;
+        std::vector<double> ra2, dec2, x2, y2;
+        ra2.reserve(initial_astrometry_rows);
+        dec2.reserve(initial_astrometry_rows);
+        x2.reserve(initial_astrometry_rows);
+        y2.reserve(initial_astrometry_rows);
+        for (int i = 0; i < n_ref; ++i) {
+            if (box[i] == 0) continue;
+            nss++;
+            ra2.push_back(ra_r[i]);
+            dec2.push_back(dec_r[i]);
+            int j = box[i] - 1; // back to 0-based
+            x2.push_back(xs[j]);
+            y2.push_back(ys[j]);
+        }
+
+        MainIO::OutputFile ofs(filename);
+        if (ofs) {
+            ofs << std::setprecision(17) << wcs.crpix[0] << " " << wcs.crpix[1] << " "
+                << wcs.crval[0] << " " << wcs.crval[1] << "\n";
+            ofs << std::setprecision(17) << wcs.cd[0][0] << " " << wcs.cd[0][1] << " "
+                << wcs.cd[1][0] << " " << wcs.cd[1][1] << "\n";
+            ofs << nss << " " << n_user << " " << n_ref << "\n";
+            for (int i = 0; i < nss; ++i) {
+                ofs << std::setprecision(17) << ra2[i] << " " << dec2[i] << " "
+                    << x2[i] << " " << y2[i] << "\n";
+            }
+        }
+    }
+
+    // ==========================================
     // Function: Solve the global exposure astrometry with failure status
     // Method: Assemble the original least-squares design matrix and solve both coordinate RHS columns with one pivoted QR.
     // ==========================================
@@ -1608,11 +1728,11 @@ namespace Astrometry {
     }
 
     void procAstrometry(int iexpo) {
-        if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
+        if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
             return;
         }
-        std::string expo_file_path = EXPO_FILE[iexpo - 1];
+        std::string expo_file_path = ProcessMain::state.exposure_files[iexpo - 1];
         std::vector<std::string> image_files;
         std::string dir_output;
         UniversalUtils::getImageList(expo_file_path, image_files, dir_output);

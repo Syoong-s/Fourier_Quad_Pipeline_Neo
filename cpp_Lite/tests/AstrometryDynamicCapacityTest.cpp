@@ -1,6 +1,7 @@
-#include "Astrometry.hpp"
+#include "process_main/Astrometry.hpp"
+#include "process_main/ProcessMainState.hpp"
 #include "LensingConfig.hpp"
-#include "OutputLayout.hpp"
+#include "general/OutputLayout.hpp"
 
 #include <chrono>
 #include <algorithm>
@@ -13,7 +14,7 @@
 #include <string>
 #include <vector>
 
-std::vector<std::string> EXPO_FILE;
+ProcessMain::State ProcessMain::state;
 
 namespace {
 

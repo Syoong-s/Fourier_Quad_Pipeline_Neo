@@ -1,5 +1,5 @@
-#include "FitsIO.hpp"
-#include "OutputFile.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/OutputFile.hpp"
 #include <fitsio.h>
 #include <iostream>
 #include <cstdio>

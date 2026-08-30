@@ -2,10 +2,11 @@
 #define PSF_MODEL_STATE_HPP
 
 #include "LensingConfig.hpp"
-#include "PSFStarSelection.hpp"
+#include "process_main/PSFStarSelection.hpp"
 
 #include <array>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 namespace PSFModel {
@@ -24,7 +25,8 @@ struct StarSelectionState {
     double full_power_sum = 0.0;
     double chi_window_sum = 0.0;
     float min_chi = 0.0f;
-    double press_score = 0.0;
+    double press_raw_score = 0.0;
+    double press_standardized_score = 0.0;
     double leverage = 0.0;
     std::vector<float> chi_window;
     std::vector<NeighborEdge> knn;
@@ -54,6 +56,29 @@ struct ChipPSFFitState {
         star_indices.clear();
         coefficients.clear();
         leverage.clear();
+    }
+
+    // ==========================================
+    // Function: Commit a successful optional PRESS refit transaction
+    // Method: Leave the cached first fit byte-for-byte unchanged unless the
+    //         refit is valid and its final index/leverage dimensions agree.
+    // ==========================================
+    bool tryCommitPressRefit(
+        bool refit_valid,
+        std::vector<int> refit_star_indices,
+        std::vector<double> refit_coefficients,
+        std::vector<double> refit_leverage) {
+        if (!refit_valid || refit_star_indices.empty()
+            || refit_coefficients.empty()
+            || refit_star_indices.size() != refit_leverage.size()) {
+            return false;
+        }
+        valid = true;
+        press_removed_any = true;
+        star_indices = std::move(refit_star_indices);
+        coefficients = std::move(refit_coefficients);
+        leverage = std::move(refit_leverage);
+        return true;
     }
 };
 

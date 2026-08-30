@@ -1,16 +1,15 @@
-#include "MPIScheduler.hpp"
-#include <mpi.h>
+#include "general/MPIScheduler.hpp"
 #include <iostream>
 #include <algorithm>
 
 namespace MPIScheduler {
-    int my_id = 0;
-    int num_procs = 1;
+    State state;
 
     void init(int& argc, char**& argv) {
         MPI_Init(&argc, &argv);
-        MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
-        MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+        state.communicator = MPI_COMM_WORLD;
+        MPI_Comm_rank(state.communicator, &state.rank);
+        MPI_Comm_size(state.communicator, &state.size);
     }
 
     void finalize() {
@@ -18,31 +17,31 @@ namespace MPIScheduler {
     }
 
     void barrier() {
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(state.communicator);
     }
 
     void distribute(int num_jobs, const std::function<void(int)>& job_func, const std::string& message) {
-        if (num_procs <= 1) {
+        if (state.size <= 1) {
             for (int i = 1; i <= num_jobs; ++i) {
                 job_func(i);
             }
             return;
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(state.communicator);
         int complete = 0;
         int i = 0;
         int j = 0;
-        if (my_id == 0) {
+        if (state.rank == 0) {
             i = 1;
             j = num_jobs;
         }
 
         while (complete == 0) {
-            if (my_id != 0) {
+            if (state.rank != 0) {
                 // Workers request a job by sending their status (initially 0, later the job index they completed)
-                MPI_Send(&i, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                MPI_Recv(&i, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Send(&i, 1, MPI_INT, 0, 0, state.communicator);
+                MPI_Recv(&i, 1, MPI_INT, 0, 0, state.communicator, MPI_STATUS_IGNORE);
                 if (i == 0) {
                     complete = 1;
                 } else {
@@ -52,12 +51,12 @@ namespace MPIScheduler {
                 // Master coordinates job distribution
                 int k = 0;
                 MPI_Status status;
-                MPI_Recv(&k, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+                MPI_Recv(&k, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, state.communicator, &status);
                 int source = status.MPI_SOURCE;
                 int tag = status.MPI_TAG;
                 
                 // Send current job index i to worker
-                MPI_Send(&i, 1, MPI_INT, source, tag, MPI_COMM_WORLD);
+                MPI_Send(&i, 1, MPI_INT, source, tag, state.communicator);
                 if (k > 0) {
                     j--;
                 }
@@ -86,40 +85,40 @@ namespace MPIScheduler {
                 }
             }
         }
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(state.communicator);
     }
 
     void forcecov(int ppn, int work_pn, int num_jobs, const std::function<void(int, int)>& job_func, const std::string& message, int nexpo) {
-        if (num_procs <= 1) {
+        if (state.size <= 1) {
             for (int i = 1; i <= num_jobs; ++i) {
                 job_func(i, nexpo);
             }
             return;
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(state.communicator);
         
         // Throttling mechanism: only a subset of processes per node are active workers
         int complete = 1;
-        int id_innode = my_id % ppn;
+        int id_innode = state.rank % ppn;
         if (id_innode > 0 && id_innode <= work_pn) {
             complete = 0;
         }
-        if (my_id == 0) {
+        if (state.rank == 0) {
             complete = 0; // Master is active to coordinate
         }
 
         int i = 0;
         int j = 0;
-        if (my_id == 0) {
+        if (state.rank == 0) {
             i = 1;
             j = num_jobs;
         }
 
         while (complete == 0) {
-            if (my_id != 0) {
-                MPI_Send(&i, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
-                MPI_Recv(&i, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if (state.rank != 0) {
+                MPI_Send(&i, 1, MPI_INT, 0, 0, state.communicator);
+                MPI_Recv(&i, 1, MPI_INT, 0, 0, state.communicator, MPI_STATUS_IGNORE);
                 if (i == 0) {
                     complete = 1;
                 } else {
@@ -128,11 +127,11 @@ namespace MPIScheduler {
             } else {
                 int k = 0;
                 MPI_Status status;
-                MPI_Recv(&k, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+                MPI_Recv(&k, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, state.communicator, &status);
                 int source = status.MPI_SOURCE;
                 int tag = status.MPI_TAG;
                 
-                MPI_Send(&i, 1, MPI_INT, source, tag, MPI_COMM_WORLD);
+                MPI_Send(&i, 1, MPI_INT, source, tag, state.communicator);
                 if (k > 0) {
                     j--;
                 }
@@ -158,6 +157,6 @@ namespace MPIScheduler {
                 }
             }
         }
-        MPI_Barrier(MPI_COMM_WORLD);
+        MPI_Barrier(state.communicator);
     }
 }

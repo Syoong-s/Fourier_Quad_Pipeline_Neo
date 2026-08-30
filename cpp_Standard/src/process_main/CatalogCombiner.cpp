@@ -1,13 +1,14 @@
-#include "CatalogCombiner.hpp"
-#include "CatalogRowCount.hpp"
-#include "OutputFile.hpp"
-#include "MPIFailure.hpp"
-#include "OutputLayout.hpp"
+#include "process_main/CatalogCombiner.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/CatalogRowCount.hpp"
+#include "process_main/OutputFile.hpp"
+#include "process_main/MPIFailure.hpp"
+#include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
-#include "UniversalUtils.hpp"
-#include "Universalblock.hpp"
-#include "ExposureInfo.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/Universalblock.hpp"
+#include "process_main/ExposureInfo.hpp"
 #include <iostream>
 #include <vector>
 #include <string>
@@ -19,7 +20,6 @@
 #include <system_error>
 #include <cstddef>
 
-extern std::vector<std::string> EXPO_FILE;
 
 namespace CatalogCombiner {
 
@@ -105,7 +105,7 @@ bool passesCombinedCatalogCuts(const std::vector<float>& cat) {
         cat[LensingConfig::i_jmax] >= LensingConfig::ns) {
         return false;
     }
-    return !std::isnan(cat[0]) && cat[0] >= -900.0f;
+    return cat[0] >= -900.0f;
 }
 
 // ==========================================
@@ -144,7 +144,8 @@ void applyCombinedCatalogCalibration(std::vector<float>& cat,
 //         create the exposure catalog from the first contributing chip's live headers.
 // ==========================================
 void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
-                        const std::string& dirOutput, float chi2) {
+                        const std::string& dirOutput, int expo_index,
+                        float chi2) {
     const bool use_external_catalog =
         RuntimeConfigStore::get().lensing.ext_cat == 1;
     const std::string prefix_expo =
@@ -240,10 +241,11 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             fout20.open(out_filename);
             fout20 << std::setprecision(10);
             if (use_external_catalog) {
-                fout20 << original_header << " ccD_NUM "
+                fout20 << original_header << " EXPO_NUM ccD_NUM "
                        << shear_probe.header << " Chi2\n";
             } else {
-                fout20 << " ccD_NUM " << shear_probe.header << " Chi2\n";
+                fout20 << " EXPO_NUM ccD_NUM "
+                       << shear_probe.header << " Chi2\n";
             }
             output_opened = true;
         }
@@ -274,7 +276,7 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                 fout20 << cat_content << " ";
             }
 
-            fout20 << chip_index;
+            fout20 << expo_index << " " << chip_index;
 
             for (int u = 0; u < num_cols; ++u) {
                 fout20 << " " << cat[u];
@@ -301,21 +303,22 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
 //         shared external/non-external catalog combiner.
 // ==========================================
 void procComb(int iexpo) {
-    if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
+    if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
         std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
         return;
     }
-    std::string expo_file_path = EXPO_FILE[iexpo - 1];
+    std::string expo_file_path = ProcessMain::state.exposure_files[iexpo - 1];
     std::vector<std::string> image_files;
     std::string dir_output;
     UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
 
     float chi2 = 0.0f;
-    if (ExposureInfo::expo_para.size() >= static_cast<size_t>(iexpo) * 6) {
-        chi2 = ExposureInfo::expo_para[(iexpo - 1) * 6 + 2]; // 3rd element in Fortran, index 2
+    if (ExposureInfo::state.parameters.size() >= static_cast<size_t>(iexpo) * 6) {
+        chi2 = ExposureInfo::state.parameters[(iexpo - 1) * 6 + 2]; // 3rd element in Fortran, index 2
     }
 
-    combineExpoCatalog(static_cast<int>(image_files.size()), image_files, dir_output, chi2);
+    combineExpoCatalog(static_cast<int>(image_files.size()), image_files,
+                       dir_output, iexpo, chi2);
 }
 
 } // namespace CatalogCombiner

@@ -1,5 +1,5 @@
-#include "FitsIO.hpp"
-#include "Universalblock.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/Universalblock.hpp"
 
 #include <cstdlib>
 #include <filesystem>

@@ -1,5 +1,5 @@
-#ifndef NUMERICAL_RECIPES_HPP
-#define NUMERICAL_RECIPES_HPP
+#ifndef GENERAL_NUMERICAL_RECIPES_HPP
+#define GENERAL_NUMERICAL_RECIPES_HPP
 
 #include <vector>
 
@@ -30,4 +30,4 @@ namespace NumericalRecipes {
     double gammq(double a, double x);
 }
 
-#endif // NUMERICAL_RECIPES_HPP
+#endif // GENERAL_NUMERICAL_RECIPES_HPP

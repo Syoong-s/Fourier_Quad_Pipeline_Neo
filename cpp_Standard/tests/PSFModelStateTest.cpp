@@ -1,8 +1,9 @@
-#include "PSFModelState.hpp"
+#include "process_main/PSFModelState.hpp"
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -59,6 +60,35 @@ void testDynamicChipSizes() {
     }
 }
 
+// ==========================================
+// Function: Verify failed PRESS refits preserve the cached first fit
+// Method: Attempt an invalid transactional commit and compare every original
+//         fit field before also checking a valid replacement can be committed.
+// ==========================================
+void testPressRefitTransaction() {
+    PSFModel::Internal::ChipPSFFitState fit;
+    fit.valid = true;
+    fit.press_removed_any = false;
+    fit.initial_star_count = 3;
+    fit.star_indices = {1, 2, 3};
+    fit.coefficients = {10.0, 20.0};
+    fit.leverage = {0.1, 0.2, 0.3};
+    require(!fit.tryCommitPressRefit(false, {1, 3}, {30.0, 40.0}, {0.15, 0.25}),
+            "failed PRESS refit must not commit");
+    require(fit.valid && !fit.press_removed_any && fit.initial_star_count == 3
+                && fit.star_indices == std::vector<int>({1, 2, 3})
+                && fit.coefficients == std::vector<double>({10.0, 20.0})
+                && fit.leverage == std::vector<double>({0.1, 0.2, 0.3}),
+            "failed PRESS refit must preserve all first-fit cache fields");
+    require(fit.tryCommitPressRefit(true, {1, 3}, {30.0, 40.0}, {0.15, 0.25}),
+            "valid PRESS refit must commit");
+    require(fit.valid && fit.press_removed_any && fit.initial_star_count == 3
+                && fit.star_indices == std::vector<int>({1, 3})
+                && fit.coefficients == std::vector<double>({30.0, 40.0})
+                && fit.leverage == std::vector<double>({0.15, 0.25}),
+            "successful PRESS refit must retain the original first-fit count");
+}
+
 }  // namespace
 
 // ==========================================
@@ -67,6 +97,7 @@ void testDynamicChipSizes() {
 // ==========================================
 int main() {
     testDynamicChipSizes();
+    testPressRefitTransaction();
     std::cout << "PSFModelState tests passed\n";
     return EXIT_SUCCESS;
 }

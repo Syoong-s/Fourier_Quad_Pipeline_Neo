@@ -1,20 +1,21 @@
-#include "PSFModel.hpp"
-#include "PSFModelState.hpp"
-#include "PSFCandidateQuality.hpp"
-#include "PSFStarSelection.hpp"
-#include "OutputFile.hpp"
-#include "MPIFailure.hpp"
-#include "OutputLayout.hpp"
+#include "process_main/PSFModel.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/PSFModelState.hpp"
+#include "process_main/PSFCandidateQuality.hpp"
+#include "process_main/PSFStarSelection.hpp"
+#include "process_main/OutputFile.hpp"
+#include "process_main/MPIFailure.hpp"
+#include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
-#include "FitsIO.hpp"
-#include "Astrometry.hpp"
-#include "NumericalRecipes.hpp"
-#include "UniversalUtils.hpp"
-#include "Universalblock.hpp"
-#include "ImageProcessing.hpp"
-#include "ExStar.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/Astrometry.hpp"
+#include "general/NumericalRecipes.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/Universalblock.hpp"
+#include "process_main/ImageProcessing.hpp"
+#include "process_main/ExStar.hpp"
+#include "process_main/LinearSolve.hpp"
 #include <mpi.h>
 #include <Eigen/Dense>
 #include <iostream>
@@ -31,7 +32,6 @@
 #include <limits>
 
 // Extern variables defined elsewhere (e.g. main.cpp)
-extern std::vector<std::string> EXPO_FILE;
 
 namespace PSFModel {
 
@@ -125,11 +125,11 @@ namespace PSFModel {
     //         and the sole normalized polynomial fit with runtime geometry.
     // ==========================================
     void procPSF(int iexpo) {
-        if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
+        if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
             return;
         }
-        std::string expo_file_path = EXPO_FILE[iexpo - 1];
+        std::string expo_file_path = ProcessMain::state.exposure_files[iexpo - 1];
         std::vector<std::string> imageFiles;
         std::string dirOutput;
         UniversalUtils::getImageList(expo_file_path, imageFiles, dirOutput);
@@ -414,39 +414,73 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Build exposure-thresholded same-chip minChi survivor lists
-    // Method: Compute exact pair distances only for FWHM-locus candidates,
-    //         pool finite nearest distances, and apply one shared upper cut.
+    // Method: Select capped exposure-wide large-size references, compute every
+    //         same-chip locus pair once, and threshold from reference-all pairs.
     // ==========================================
     static ActiveIndicesByChip buildMinChiActiveIndices(
         int nchip,
         ExposurePSFState& state) {
-        std::vector<float> pooled_min_chi;
+        std::vector<Internal::MinChiReferenceCandidate> reference_candidates;
+        int locus_count = 0;
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
-            ChipPSFState& chip = state.chips[chip_index];
-            for (int first = 0; first < state.getNStar(chip_index) - 1; ++first) {
-                if (!chip.selection[first].in_fwhm_locus) continue;
-                for (int second = first + 1;
-                     second < state.getNStar(chip_index); ++second) {
-                    if (!chip.selection[second].in_fwhm_locus) continue;
-                    const float chi = Internal::normalizedChiDistance(
-                        chip.selection[first].chi_window,
-                        chip.selection[second].chi_window);
-                    if (!std::isfinite(chi)) continue;
-                    chip.selection[first].min_chi =
-                        std::min(chip.selection[first].min_chi, chi);
-                    chip.selection[second].min_chi =
-                        std::min(chip.selection[second].min_chi, chi);
-                }
-            }
-            for (const Internal::StarSelectionState& selection : chip.selection) {
-                if (selection.in_fwhm_locus && std::isfinite(selection.min_chi)) {
-                    pooled_min_chi.push_back(selection.min_chi);
-                }
+            const ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                if (!chip.selection[star_index].in_fwhm_locus) continue;
+                locus_count++;
+                reference_candidates.push_back({
+                    chip_index, star_index,
+                    state.getStarPara(chip_index, star_index, 7)});
             }
         }
 
+        const std::vector<Internal::MinChiReferenceCandidate> references =
+            Internal::selectMinChiReferenceStars(
+                reference_candidates,
+                LensingConfig::psf_minchi_reference_fraction,
+                LensingConfig::psf_minchi_reference_max_per_chip);
+        std::vector<std::vector<bool>> is_reference(static_cast<std::size_t>(nchip));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            is_reference[chip_index].assign(
+                static_cast<std::size_t>(state.getNStar(chip_index)), false);
+        }
+        for (const Internal::MinChiReferenceCandidate& reference : references) {
+            if (reference.chip_index >= 0 && reference.chip_index < nchip
+                && reference.star_index >= 0
+                && reference.star_index < state.getNStar(reference.chip_index)) {
+                is_reference[reference.chip_index][reference.star_index] = true;
+            }
+        }
+
+        std::vector<float> threshold_pair_chi;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            std::vector<Internal::MinChiCandidateView> candidates;
+            candidates.reserve(chip.selection.size());
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                candidates.push_back({
+                    &chip.selection[star_index].chi_window,
+                    chip.selection[star_index].in_fwhm_locus,
+                    is_reference[chip_index][star_index]});
+            }
+            Internal::MinChiPairResult pair_result =
+                Internal::computeMinChiAndThresholdPairs(candidates);
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                chip.selection[star_index].min_chi = pair_result.min_chi[star_index];
+            }
+            threshold_pair_chi.insert(
+                threshold_pair_chi.end(), pair_result.threshold_pair_chi.begin(),
+                pair_result.threshold_pair_chi.end());
+        }
+
         const float min_chi_threshold = estimateUpperTailThreshold(
-            pooled_min_chi, LensingConfig::psf_minchi_sigma_cut);
+            threshold_pair_chi, LensingConfig::psf_minchi_sigma_cut);
+        std::cout << "PSF_MINCHI exposure locus=" << locus_count
+                  << " references=" << references.size()
+                  << " threshold_pairs=" << threshold_pair_chi.size()
+                  << " threshold=" << min_chi_threshold << std::endl;
         ActiveIndicesByChip active_indices(static_cast<std::size_t>(nchip));
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             const ChipPSFState& chip = state.chips[chip_index];
@@ -804,9 +838,25 @@ namespace PSFModel {
     }
 
     // ==========================================
-    // Function: Apply exposure-wide analytic PRESS rejection
-    // Method: Fit each group-selected chip once, pool raw central-window LOO
-    //         RMS scores, reject once, and refit only chips whose set changed.
+    // Function: Name one non-mutating PRESS removal decision
+    // Method: Map the pure safeguard result to a stable diagnostic label.
+    // ==========================================
+    static const char* pressRemovalDecisionName(
+        Internal::PressRemovalDecision decision) {
+        switch (decision) {
+            case Internal::PressRemovalDecision::Disabled: return "DISABLED";
+            case Internal::PressRemovalDecision::NoOutliers: return "NO_OUTLIER";
+            case Internal::PressRemovalDecision::TooManyOutliers: return "TOO_MANY_OUTLIERS";
+            case Internal::PressRemovalDecision::WouldUnderrunMinimum: return "WOULD_UNDERRUN_MINIMUM";
+            case Internal::PressRemovalDecision::Apply: return "APPLY";
+        }
+        return "UNKNOWN";
+    }
+
+    // ==========================================
+    // Function: Apply optional exposure-wide standardized PRESS cleanup
+    // Method: Preserve a valid first fit, propose removals from leverage-corrected
+    //         scores, guard them, refit in temporary state, and commit on success.
     // ==========================================
     void applyPressSelection(
         int nchip,
@@ -819,7 +869,7 @@ namespace PSFModel {
         const int pixel_count = ns * ns;
         const Internal::PSFChiWindow chi_window =
             Internal::getPSFChiWindow(ns);
-        std::vector<float> exposure_press_scores;
+        std::vector<float> exposure_standardized_scores;
 
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             ChipPSFState& chip = state.chips[chip_index];
@@ -827,6 +877,9 @@ namespace PSFModel {
             std::vector<int> selected_indices;
             for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
                 chip.selection[star_index].selected_press = false;
+                chip.selection[star_index].press_raw_score = 0.0;
+                chip.selection[star_index].press_standardized_score = 0.0;
+                chip.selection[star_index].leverage = 0.0;
                 if (chip.selection[star_index].selected_group) {
                     selected_indices.push_back(star_index);
                 }
@@ -867,8 +920,8 @@ namespace PSFModel {
             }
 
             bool loo_valid = true;
-            std::vector<float> chip_press_scores;
-            chip_press_scores.reserve(samples.star_indices.size());
+            std::vector<float> chip_standardized_scores;
+            chip_standardized_scores.reserve(samples.star_indices.size());
             for (int local_index = 0;
                  local_index < static_cast<int>(samples.star_indices.size());
                  ++local_index) {
@@ -904,16 +957,21 @@ namespace PSFModel {
                     }
                 }
                 if (!loo_valid) break;
-                const double press_score = std::sqrt(
+                const double raw_press_score = std::sqrt(
                     squared_sum / static_cast<double>(chi_window.pixelCount()));
-                if (!std::isfinite(press_score)) {
+                double standardized_press_score = 0.0;
+                if (!Internal::computeLeverageStandardizedPress(
+                        raw_press_score, leverage[local_index],
+                        LensingConfig::psf_loo_min_denom,
+                        standardized_press_score)) {
                     loo_valid = false;
                     break;
                 }
                 const int original_index = samples.star_indices[local_index];
-                chip.selection[original_index].press_score = press_score;
+                chip.selection[original_index].press_raw_score = raw_press_score;
+                chip.selection[original_index].press_standardized_score = standardized_press_score;
                 chip.selection[original_index].leverage = leverage[local_index];
-                chip_press_scores.push_back(static_cast<float>(press_score));
+                chip_standardized_scores.push_back(static_cast<float>(standardized_press_score));
             }
             if (!loo_valid) {
                 LinearSolve::reportFailure(
@@ -925,56 +983,78 @@ namespace PSFModel {
                 continue;
             }
 
-            exposure_press_scores.insert(
-                exposure_press_scores.end(),
-                chip_press_scores.begin(), chip_press_scores.end());
+            exposure_standardized_scores.insert(
+                exposure_standardized_scores.end(),
+                chip_standardized_scores.begin(), chip_standardized_scores.end());
 
             chip.fit.valid = true;
             chip.fit.initial_star_count = static_cast<int>(samples.star_indices.size());
             chip.fit.star_indices = samples.star_indices;
             chip.fit.coefficients = std::move(coefficients);
             chip.fit.leverage = std::move(leverage);
+            for (int star_index : chip.fit.star_indices) {
+                chip.selection[star_index].selected_press = true;
+                state.getStarPara(chip_index, star_index, 4) = 1.0;
+            }
         }
 
         const float press_threshold = estimateUpperTailThreshold(
-            exposure_press_scores, LensingConfig::psf_press_sigma_cut);
+            exposure_standardized_scores, LensingConfig::psf_press_sigma_cut);
+        std::cout << "PSF_PRESS exposure standardized_scores="
+                  << exposure_standardized_scores.size()
+                  << " threshold=" << press_threshold << std::endl;
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             ChipPSFState& chip = state.chips[chip_index];
             if (!chip.fit.valid) continue;
 
+            const std::vector<int> first_fit_indices = chip.fit.star_indices;
+            std::vector<int> rejected_indices;
             std::vector<int> retained_indices;
             retained_indices.reserve(chip.fit.star_indices.size());
             for (int star_index : chip.fit.star_indices) {
-                const bool retained = std::isfinite(chip.selection[star_index].press_score)
-                    && chip.selection[star_index].press_score <= press_threshold;
-                chip.selection[star_index].selected_press = retained;
-                state.getStarPara(chip_index, star_index, 4) = retained ? 1.0 : -1.0;
+                const bool retained = std::isfinite(
+                        chip.selection[star_index].press_standardized_score)
+                    && chip.selection[star_index].press_standardized_score <= press_threshold;
                 if (retained) {
                     retained_indices.push_back(star_index);
                 } else {
-                    std::vector<float>().swap(
-                        chip.selection[star_index].chi_window);
+                    rejected_indices.push_back(star_index);
                 }
             }
 
-            const bool removed_any =
-                retained_indices.size() != chip.fit.star_indices.size();
-            chip.fit.press_removed_any = removed_any;
-            if (!removed_any) continue;
-            if (static_cast<int>(retained_indices.size())
-                < LensingConfig::nstar_min_local) {
-                invalidatePressChip(chip_index, state);
+            const Internal::PressRemovalDecision decision = Internal::decidePressRemoval(
+                LensingConfig::psf_press_rejection_enabled,
+                static_cast<int>(first_fit_indices.size()),
+                static_cast<int>(rejected_indices.size()),
+                LensingConfig::nstar_min_local,
+                LensingConfig::psf_press_max_removals);
+            if (decision != Internal::PressRemovalDecision::Apply) {
+                chip.fit.press_removed_any = false;
+                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                          << " first_fit=" << first_fit_indices.size()
+                          << " flagged=" << rejected_indices.size()
+                          << " decision=" << pressRemovalDecisionName(decision)
+                          << " final=" << first_fit_indices.size() << std::endl;
                 continue;
             }
 
-            const int initial_star_count = chip.fit.initial_star_count;
             const std::vector<float> all_power = readChipCandidatePower(
                 chip_index, imageFiles, dirOutput, state);
             ChipFitSamples retained_samples;
             if (!buildChipFitSamples(
                     chip_index, retained_indices, all_power, state,
                     retained_samples)) {
-                invalidatePressChip(chip_index, state);
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelectionRefit",
+                    LinearSolve::SolveStatus::FailedSolver,
+                    "chip=" + std::to_string(chip_index + 1)
+                        + " reason=INVALID_RETAINED_SAMPLE action=PRESS_REFIT_FALLBACK");
+                chip.fit.press_removed_any = false;
+                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                          << " first_fit=" << first_fit_indices.size()
+                          << " flagged=" << rejected_indices.size()
+                          << " decision=PRESS_REFIT_FALLBACK final="
+                          << first_fit_indices.size() << std::endl;
                 continue;
             }
 
@@ -988,22 +1068,46 @@ namespace PSFModel {
                     "PSFModel::applyPressSelectionRefit", status,
                     "chip=" + std::to_string(chip_index + 1) + " "
                         + LinearSolve::diagnosticsContext(diagnostics)
-                        + " action=MARK_CHIP_INVALID");
-                invalidatePressChip(chip_index, state);
+                        + " action=PRESS_REFIT_FALLBACK");
+                chip.fit.press_removed_any = false;
+                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                          << " first_fit=" << first_fit_indices.size()
+                          << " flagged=" << rejected_indices.size()
+                          << " decision=PRESS_REFIT_FALLBACK final="
+                          << first_fit_indices.size() << std::endl;
                 continue;
             }
 
-            chip.fit.valid = true;
-            chip.fit.press_removed_any = true;
-            chip.fit.initial_star_count = initial_star_count;
-            chip.fit.star_indices = retained_samples.star_indices;
-            chip.fit.coefficients = std::move(coefficients);
-            chip.fit.leverage = std::move(leverage);
+            if (!chip.fit.tryCommitPressRefit(
+                    true, retained_samples.star_indices,
+                    std::move(coefficients), std::move(leverage))) {
+                LinearSolve::reportFailure(
+                    "PSFModel::applyPressSelectionRefit",
+                    LinearSolve::SolveStatus::FailedSolver,
+                    "chip=" + std::to_string(chip_index + 1)
+                        + " reason=INVALID_REFIT_CACHE action=PRESS_REFIT_FALLBACK");
+                chip.fit.press_removed_any = false;
+                continue;
+            }
+            std::vector<bool> retained_mask(
+                static_cast<std::size_t>(state.getNStar(chip_index)), false);
+            for (int star_index : chip.fit.star_indices) retained_mask[star_index] = true;
+            for (int star_index : first_fit_indices) {
+                const bool retained = retained_mask[star_index];
+                chip.selection[star_index].selected_press = retained;
+                state.getStarPara(chip_index, star_index, 4) = retained ? 1.0 : -1.0;
+                if (!retained) std::vector<float>().swap(chip.selection[star_index].chi_window);
+            }
             for (std::size_t local_index = 0;
                  local_index < chip.fit.star_indices.size(); ++local_index) {
                 const int original_index = chip.fit.star_indices[local_index];
                 chip.selection[original_index].leverage = chip.fit.leverage[local_index];
             }
+            std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                      << " first_fit=" << first_fit_indices.size()
+                      << " flagged=" << rejected_indices.size()
+                      << " decision=REMOVAL_APPLIED final="
+                      << chip.fit.star_indices.size() << std::endl;
         }
     }
 

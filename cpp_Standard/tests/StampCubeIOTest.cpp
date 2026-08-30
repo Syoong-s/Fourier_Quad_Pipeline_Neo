@@ -1,4 +1,4 @@
-#include "FitsIO.hpp"
+#include "process_main/FitsIO.hpp"
 
 #include <fitsio.h>
 

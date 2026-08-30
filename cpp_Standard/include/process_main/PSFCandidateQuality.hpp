@@ -1,7 +1,7 @@
 #ifndef PSF_CANDIDATE_QUALITY_HPP
 #define PSF_CANDIDATE_QUALITY_HPP
 
-#include "PSFStarSelection.hpp"
+#include "process_main/PSFStarSelection.hpp"
 
 #include <algorithm>
 #include <array>

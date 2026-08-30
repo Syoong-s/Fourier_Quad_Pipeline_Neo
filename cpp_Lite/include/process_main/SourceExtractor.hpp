@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include "LensingConfig.hpp"
-#include "FitsIO.hpp"
+#include "process_main/FitsIO.hpp"
 
 namespace SourceExtractor {
     void procSource(int iexpo);

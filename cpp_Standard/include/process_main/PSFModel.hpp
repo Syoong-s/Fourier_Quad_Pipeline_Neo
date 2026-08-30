@@ -5,17 +5,31 @@
 #include <vector>
 #include <array>
 #include "LensingConfig.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/LinearSolve.hpp"
 
 namespace PSFModel {
-    // Global PSF PCA components and coefficients loaded from disk (replacing psf_storage_mod)
-    extern std::vector<double> global_components; // [runtime chips][nsns][n_pcs]
-    extern std::vector<double> global_mean_psf;   // [runtime chips][nsns]
-    extern std::vector<float> global_poly_coefs;  // [runtime chips][2][2][n_pcs][npp6th]
-    extern bool is_data_loaded;
+    struct PcaCacheState {
+        std::vector<double> components;
+        std::vector<double> mean_psf;
+        std::vector<float> poly_coefs;
+        bool data_loaded = false;
+
+        // ==========================================
+        // Function: Release the loaded PCA model cache
+        // Method: Clear every aligned array and reset the load marker together.
+        // ==========================================
+        void clear() {
+            components.clear();
+            mean_psf.clear();
+            poly_coefs.clear();
+            data_loaded = false;
+        }
+    };
+
+    extern PcaCacheState pca_cache;
 
     // Load and broadcast PSF PCA components
-    void initAndLoadAllPSF(const std::string& dirOutput, int myRank);
+    void initAndLoadAllPSF(const std::string& dirOutput);
     void freePSFMemory();
 
     // Stage 5 main entry

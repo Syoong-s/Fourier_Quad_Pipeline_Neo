@@ -1,16 +1,17 @@
-#include "PSFRecons.hpp"
-#include "PCAImageLayout.hpp"
-#include "OutputFile.hpp"
-#include "MPIFailure.hpp"
-#include "OutputLayout.hpp"
+#include "process_main/PSFRecons.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "process_main/PCAImageLayout.hpp"
+#include "process_main/OutputFile.hpp"
+#include "process_main/MPIFailure.hpp"
+#include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
-#include "PSFModel.hpp"
-#include "FitsIO.hpp"
-#include "UniversalUtils.hpp"
-#include "MPIScheduler.hpp"
-#include "NumericalRecipes.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/PSFModel.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "general/MPIScheduler.hpp"
+#include "general/NumericalRecipes.hpp"
+#include "process_main/LinearSolve.hpp"
 #include <Eigen/Dense>
 #include <mpi.h>
 #include <iostream>
@@ -23,7 +24,6 @@
 
 
 // Extern exposures defined in main
-extern std::vector<std::string> EXPO_FILE;
 
 namespace PSFRecons {
 
@@ -180,7 +180,7 @@ namespace PSFRecons {
     void chipPSFRecons(int nexpo) {
         std::vector<std::string> image_files;
         std::string dir_output;
-        UniversalUtils::getImageList(EXPO_FILE[0], image_files, dir_output);
+        UniversalUtils::getImageList(ProcessMain::state.exposure_files[0], image_files, dir_output);
 
         // Call forcecov to run PCA fitting on CCDs in parallel
         MPIScheduler::forcecov(
@@ -194,12 +194,12 @@ namespace PSFRecons {
             nexpo
         );
 
-        if (MPIScheduler::my_id == 0) {
+        if (MPIScheduler::state.rank == 0) {
             std::cout << "PSF PCA fitting completed for all chips." << std::endl;
         }
 
         MPIScheduler::barrier();
-        PSFModel::initAndLoadAllPSF(dir_output, MPIScheduler::my_id);
+        PSFModel::initAndLoadAllPSF(dir_output);
         MPIScheduler::barrier();
 
         // Map modified residuals distributed across exposures
@@ -239,7 +239,7 @@ namespace PSFRecons {
         for (int i = 1; i <= nexpo; ++i) {
             std::vector<std::string> image_files;
             std::string dir_out;
-            UniversalUtils::getImageList(EXPO_FILE[i - 1], image_files, dir_out);
+            UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
             std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
             
             std::string filename_xy = OutputLayout::chipPath(
@@ -310,7 +310,7 @@ namespace PSFRecons {
 
         std::vector<std::string> dummy_image_files;
         std::string dirOutput;
-        UniversalUtils::getImageList(EXPO_FILE[0], dummy_image_files, dirOutput);
+        UniversalUtils::getImageList(ProcessMain::state.exposure_files[0], dummy_image_files, dirOutput);
 
         std::vector<double> components(static_cast<size_t>(nsns) * LensingConfig::n_pcs, 0.0);
         bool pca_failed = false;
@@ -436,7 +436,7 @@ namespace PSFRecons {
             for (int i = 1; i <= nexpo; ++i) {
                 std::vector<std::string> image_files;
                 std::string dir_out;
-                UniversalUtils::getImageList(EXPO_FILE[i - 1], image_files, dir_out);
+                UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
                 std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
                 std::string filename_xy = OutputLayout::chipPath(
                     dir_out, "stamps/dat_StarXY",
@@ -635,7 +635,7 @@ namespace PSFRecons {
     void plotResidualsV2(int iexpo) {
         std::vector<std::string> image_files;
         std::string dir_output;
-        UniversalUtils::getImageList(EXPO_FILE[iexpo - 1], image_files, dir_output);
+        UniversalUtils::getImageList(ProcessMain::state.exposure_files[iexpo - 1], image_files, dir_output);
         std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
 
         float res_factor = 1.0f;
@@ -789,7 +789,7 @@ namespace PSFRecons {
         
         psf_model.assign(ns * ns, 0.0f);
 
-        if (!PSFModel::is_data_loaded) {
+        if (!PSFModel::pca_cache.data_loaded) {
             MPIFailure::abortWorld(
                 "reconstruct hierarchical PSF",
                 "PCA data is not loaded for CCD " + std::to_string(i_ccd));
@@ -845,7 +845,7 @@ namespace PSFRecons {
             return;
         }
 
-        if (PSFModel::global_components[PSFModel::getCompIndex(i_ccd - 1, 0, 0)] < -1.0e20) {
+        if (PSFModel::pca_cache.components[PSFModel::getCompIndex(i_ccd - 1, 0, 0)] < -1.0e20) {
             psf_model = psf_layer1;
             return;
         }
@@ -855,7 +855,7 @@ namespace PSFRecons {
             vec_b[j] = UniversalUtils::fitFunc2(x_norm, y_norm, j);
         }
 
-        if (PSFModel::global_poly_coefs[PSFModel::getPolyIndex(i_ccd - 1, bx - 1, by - 1, 0, 0)] < -1.0e20f) {
+        if (PSFModel::pca_cache.poly_coefs[PSFModel::getPolyIndex(i_ccd - 1, bx - 1, by - 1, 0, 0)] < -1.0e20f) {
             psf_model = psf_layer1;
             return;
         }
@@ -864,14 +864,14 @@ namespace PSFRecons {
         for (int u = 0; u < LensingConfig::n_pcs; ++u) {
             double val = 0.0;
             for (int j = 0; j < LensingConfig::npp6th; ++j) {
-                val += PSFModel::global_poly_coefs[PSFModel::getPolyIndex(i_ccd - 1, bx - 1, by - 1, u, j)] * vec_b[j];
+                val += PSFModel::pca_cache.poly_coefs[PSFModel::getPolyIndex(i_ccd - 1, bx - 1, by - 1, u, j)] * vec_b[j];
             }
             coeff_val[u] = static_cast<float>(val);
         }
         PCAImageLayout::reconstructRowMajor(
-            PSFModel::global_mean_psf.data()
+            PSFModel::pca_cache.mean_psf.data()
                 + PSFModel::getMeanIndex(i_ccd - 1, 0),
-            PSFModel::global_components.data()
+            PSFModel::pca_cache.components.data()
                 + PSFModel::getCompIndex(i_ccd - 1, 0, 0),
             ns * ns, LensingConfig::n_pcs, coeff_val.data(),
             psf_layer2.data());

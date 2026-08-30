@@ -5,7 +5,11 @@
 #include <string>
 
 namespace CatalogCombiner {
-    void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, float chi2);
+    void combineExpoCatalog(int nchip,
+                            const std::vector<std::string>& imageFiles,
+                            const std::string& dirOutput,
+                            int expo_index,
+                            float chi2);
     void procComb(int iexpo);
 }
 

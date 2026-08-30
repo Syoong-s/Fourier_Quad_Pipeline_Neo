@@ -2,7 +2,7 @@
 #define NOISE_PLANE_FIT_HPP
 
 #include "LensingConfig.hpp"
-#include "UniversalUtils.hpp"
+#include "process_main/UniversalUtils.hpp"
 
 #include <algorithm>
 #include <cmath>

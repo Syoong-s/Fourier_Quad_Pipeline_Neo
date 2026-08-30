@@ -5,8 +5,19 @@
 #include <string>
 
 namespace ExposureInfo {
-    // Global exposure parameters array (originally /expo_para_pass/; sized to 6 * N_EXPO at runtime)
-    extern std::vector<float> expo_para;
+    struct State {
+        std::vector<float> parameters;
+
+        // ==========================================
+        // Function: Reset Stage-8 aggregate storage
+        // Method: Allocate exactly the requested number of zeroed values.
+        // ==========================================
+        void reset(std::size_t count) {
+            parameters.assign(count, 0.0f);
+        }
+    };
+
+    extern State state;
 
     void getExpoInfo(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput, float para[6]);
     void procInfo(int iexpo);

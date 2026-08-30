@@ -4,9 +4,9 @@
 #include <string>
 #include <vector>
 #include <array>
-#include "FitsIO.hpp"
+#include "process_main/FitsIO.hpp"
 #include "LensingConfig.hpp"
-#include "LinearSolve.hpp"
+#include "process_main/LinearSolve.hpp"
 
 namespace Astrometry {
     // Stage 2 drivers
@@ -51,6 +51,11 @@ namespace Astrometry {
     void genAstrometryData(const std::string& catStandard, int nx, int ny,
                            const std::vector<float>& map, const std::vector<int>& weight,
                            WCSParams& wcs, const std::string& filename, int& procError);
+
+    // Accumulate readable 1-degree Gaia tiles before running the unchanged matching workflow.
+    void genAstrometryDataMulti(const std::vector<std::string>& catStandards, int nx, int ny,
+                                const std::vector<float>& map, const std::vector<int>& weight,
+                                WCSParams& wcs, const std::string& filename, int& procError);
 
     void getAstrometryCatalog(int nx, int ny, const std::vector<float>& image,
                               const std::vector<int>& weight, int& ns,

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <array>
-#include "LinearSolve.hpp"
+#include "process_main/LinearSolve.hpp"
 
 struct Point3D {
     double x;

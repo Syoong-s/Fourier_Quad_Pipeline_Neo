@@ -1,12 +1,13 @@
-#include "PreProcess.hpp"
-#include "OutputLayout.hpp"
+#include "process_main/PreProcess.hpp"
+#include "process_main/ProcessMainState.hpp"
+#include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
-#include "UniversalUtils.hpp"
-#include "FitsIO.hpp"
-#include "Astrometry.hpp"
-#include "ImageProcessing.hpp"
-#include "NumericalRecipes.hpp"
+#include "process_main/UniversalUtils.hpp"
+#include "process_main/FitsIO.hpp"
+#include "process_main/Astrometry.hpp"
+#include "process_main/ImageProcessing.hpp"
+#include "general/NumericalRecipes.hpp"
 #include <Eigen/Dense>
 #include <iostream>
 #include <vector>
@@ -17,8 +18,6 @@
 #include <sstream>
 
 // Global/extern variables representing exposure filenames list (defined in main.cpp)
-extern std::vector<std::string> EXPO_FILE;
-extern int N_EXPO;
 
 namespace PreProcess {
 
@@ -379,11 +378,11 @@ namespace PreProcess {
     void preProcess(int iexpo) {
         const LensingRuntimeConfig& lensing =
             RuntimeConfigStore::get().lensing;
-        if (iexpo <= 0 || iexpo > static_cast<int>(EXPO_FILE.size())) {
+        if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
             return;
         }
-        std::string expo_file_path = EXPO_FILE[iexpo - 1];
+        std::string expo_file_path = ProcessMain::state.exposure_files[iexpo - 1];
         std::vector<std::string> image_files;
         std::string dir_output;
         UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
@@ -523,12 +522,22 @@ namespace PreProcess {
         std::string astroFilename = OutputLayout::chipPath(
             dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
+        // ==========================================
+        // Logic: Select the Gaia astrometry catalog layout
+        // Method: Preserve the legacy large-tile path or accumulate 1-degree candidates
+        //         rooted at the runtime astrometry catalog before one matching operation.
+        // ==========================================
         if (lensing.astrometry_trivial == 1) {
             Astrometry::genAstrometryDataTrivial(wcs, astroFilename);
-        } else {
+        } else if (lensing.astrometry_cat_type == 1) {
             std::string catfile = UniversalUtils::generateGaiaFileName(
                 lensing.astrometry_cat, wcs.crval, proc_error);
             Astrometry::genAstrometryData(catfile, nx, ny, normap, weight, wcs, astroFilename, proc_error);
+        } else {
+            std::vector<std::string> catfiles = UniversalUtils::generateGalCatFileNames(
+                lensing.astrometry_cat, wcs.crval);
+            Astrometry::genAstrometryDataMulti(
+                catfiles, nx, ny, normap, weight, wcs, astroFilename, proc_error);
         }
 
         locateDefects(nx, ny, array, normap, weight, LensingConfig::area_max, LensingConfig::area_thresh, proc_error);

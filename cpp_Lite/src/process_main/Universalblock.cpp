@@ -1,8 +1,8 @@
-#include "Universalblock.hpp"
+#include "process_main/Universalblock.hpp"
 
-#include "FitsIO.hpp"
-#include "OutputLayout.hpp"
-#include "UniversalUtils.hpp"
+#include "process_main/FitsIO.hpp"
+#include "general/OutputLayout.hpp"
+#include "process_main/UniversalUtils.hpp"
 
 #include <cmath>
 #include <iostream>

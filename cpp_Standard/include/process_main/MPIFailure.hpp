@@ -1,7 +1,7 @@
 #ifndef MPI_FAILURE_HPP
 #define MPI_FAILURE_HPP
 
-#include <mpi.h>
+#include "general/MPIScheduler.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -26,7 +26,7 @@ namespace MPIFailure {
         MPI_Finalized(&mpi_finalized);
     }
     if (mpi_initialized != 0 && mpi_finalized == 0) {
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        rank = MPIScheduler::state.rank;
     }
 
     std::cerr << "Fatal pipeline error"
@@ -36,7 +36,7 @@ namespace MPIFailure {
               << std::endl;
 
     if (mpi_initialized != 0 && mpi_finalized == 0) {
-        MPI_Abort(MPI_COMM_WORLD, error_code);
+        MPI_Abort(MPIScheduler::state.communicator, error_code);
     }
     std::_Exit(error_code);
 }

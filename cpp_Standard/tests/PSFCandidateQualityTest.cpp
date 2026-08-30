@@ -1,4 +1,4 @@
-#include "PSFCandidateQuality.hpp"
+#include "process_main/PSFCandidateQuality.hpp"
 
 #include <cmath>
 #include <cstdlib>
