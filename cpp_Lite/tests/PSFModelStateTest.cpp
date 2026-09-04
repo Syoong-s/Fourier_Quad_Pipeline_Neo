@@ -20,7 +20,7 @@ void require(bool condition, const std::string& message) {
 
 // ==========================================
 // Function: Verify one actual candidate count and linear selection-state dimension
-// Method: Append all rows, align explicit metadata, and cache bounded window/KNN data.
+// Method: Append all rows, align explicit metadata, and cache the Fourier window.
 // ==========================================
 void testChipSize(int star_count) {
     PSFModel::Internal::ExposurePSFState state(1);
@@ -34,7 +34,6 @@ void testChipSize(int star_count) {
     chip.selection.resize(static_cast<std::size_t>(star_count));
     for (int star = 0; star < star_count; ++star) {
         chip.selection[star].chi_window.push_back(static_cast<float>(star));
-        chip.selection[star].knn.push_back({star, 0.0f});
     }
 
     require(state.getNStar(0) == star_count,
@@ -43,8 +42,8 @@ void testChipSize(int star_count) {
             "selection metadata must align one-to-one with candidate rows");
     if (star_count > 0) {
         require(chip.selection.back().chi_window.size() == 1
-                    && chip.selection.back().knn.size() == 1,
-                "last candidate must own bounded non-square cache vectors");
+                    && chip.selection.back().bad_pair_fraction == 0.0,
+                "last candidate must own its cache and reset Type-3 state");
     }
 }
 

@@ -90,14 +90,11 @@ inline constexpr float default_s_std = 0.05;  // Default stellar-size scatter.
 inline constexpr float fallback_scut_default = 0.6;  // Fallback stellar-size cut.
 
 // ==================== Bad CCD list (DES) ====================
-inline constexpr int bad_ccds[] = {2, 31, 53, 61};  // DES CCD numbers excluded from analysis.
-inline constexpr int n_bad_ccds = 4;  // Number of excluded CCDs.
+inline constexpr int bad_ccds[] = {-1};  // DES CCD numbers excluded from analysis.
+inline constexpr int n_bad_ccds = 0;  // Number of excluded CCDs.
 
-// ==================== Chip-edge masking (DES) ====================
-inline constexpr int chip_xmin = 50;  // Minimum accepted chip x coordinate.
-inline constexpr int chip_xmax = 1990;  // Maximum accepted chip x coordinate.
-inline constexpr int chip_ymin = 100;  // Minimum accepted chip y coordinate.
-inline constexpr int chip_ymax = 3990;  // Maximum accepted chip y coordinate.
+// ==================== Chip-edge masking ====================
+inline constexpr int chip_mask_edge = 50;  // Mask this many pixels from every CCD edge.
 
 }  // namespace FDConfig
 

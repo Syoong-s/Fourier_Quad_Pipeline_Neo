@@ -163,8 +163,9 @@ chipny = 4500
                && config.init.datasets[1].target == "rband"
                && config.init.contains[1] == "release,2",
            "dataset and token lists should parse", failures);
-    expect(config.extcat.output_directory == "/catalog/source tiles",
-           "lensing.source_cat should alias the authoritative extcat output", failures);
+    expect(config.extcat.output_directory == "/data/tiles"
+               && config.lensing.source_cat == "/catalog/source tiles",
+           "main source input should remain independent from extcat output", failures);
     expect(config.lensing.astrometry_cat == "/catalog/gaia"
                && config.lensing.ccd_split == 1
                && config.lensing.gal_smooth == 3
@@ -230,12 +231,15 @@ void testPrecedenceAndConfigScan(int& failures) {
                {"fq", "--config", "precedence.ini", "--run-main=true",
                 "--dataset", "cli:prefix", "--contains=cli-token",
                 "--expo-list", "cli.list", "--astrocat-output",
-                "/cli/gaia-tiles"},
+                "/cli/gaia-tiles", "--source-cat=/cli/source-tiles",
+                "--extcat-output=/cli/generated-tiles"},
                config, error),
            "CLI overrides should parse: " + error, failures);
     expect(config.process.run_process_main
                && config.process.expo_list == "cli.list"
-               && config.astrocat.output_directory == "/cli/gaia-tiles",
+               && config.astrocat.output_directory == "/cli/gaia-tiles"
+               && config.lensing.source_cat == "/cli/source-tiles"
+               && config.extcat.output_directory == "/cli/generated-tiles",
            "CLI scalar values should override INI values", failures);
     expect(config.init.datasets.size() == 1
                && config.init.datasets[0].target == "cli"
@@ -292,6 +296,26 @@ void testValidationAndSchemas(int& failures) {
     expect(!validateRuntimeConfig(config, error)
                && error.find("output directory") != std::string::npos,
            "enabled astrocat should reject an empty output directory", failures);
+    config = makeDefaultRuntimeConfig();
+
+    config.lensing.source_cat.clear();
+    expect(!validateRuntimeConfig(config, error)
+               && error.find("input directory") != std::string::npos,
+           "enabled main should reject an empty source-catalog input", failures);
+    config = makeDefaultRuntimeConfig();
+
+    config.process.run_process_main = false;
+    config.process.run_process_init = false;
+    config.process.run_process_extcat = true;
+    config.extcat.input_directory = "/raw/external";
+    config.extcat.output_directory.clear();
+    expect(!validateRuntimeConfig(config, error)
+               && error.find("output directory") != std::string::npos,
+           "enabled extcat should reject an empty producer output", failures);
+    config.extcat.output_directory = "/tiles";
+    expect(validateRuntimeConfig(config, error),
+           "extcat-only mode should not require the main source input: " + error,
+           failures);
     config = makeDefaultRuntimeConfig();
 
     config.lensing.nmax_chip = 1000;

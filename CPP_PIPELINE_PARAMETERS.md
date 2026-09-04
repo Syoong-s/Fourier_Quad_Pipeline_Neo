@@ -25,8 +25,9 @@ namespace-qualified symbols.
 | `LensingConfig` | `ASTROMETRY_CAT`, `SOURCE_CAT`; Standard only: `FLAT_PATH`, `PSF_PATH` | These seed RuntimeConfig. `[lensing].astrometry_cat`, `source_cat`, `flat_path`, and `psf_path` can replace the surviving values at run time; Lite rejects the removed flat/PSF keys. |
 | `AstroCatConfig` | `ASTROCAT_INPUT_DIRECTORY`, `ASTROCAT_OUTPUT_DIRECTORY` | The compiled output default is deliberately initialized as `LensingConfig::ASTROMETRY_CAT`. Once RuntimeConfig is created, producer output and Stage-1 consumer input are separate fields. |
 | `ExtCatConfig` | `EXTCAT_INPUT_DIRECTORY`, `EXTCAT_OUTPUT_DIRECTORY` | `EXTCAT_OUTPUT_DIRECTORY` deliberately remains a `const std::string&` to `LensingConfig::SOURCE_CAT`. `[lensing].source_cat` and `[extcat].output_directory` address the same effective RuntimeConfig field; CLI has final precedence. |
-| `InitConfig` | `SCIENCE_ROOT`, `DQ_ROOT`, `OUTPUT_ROOT` | These seed RuntimeConfig and have INI/CLI overrides. |
+| `InitConfig` | `SCIENCE_ROOT`, `DQ_ROOT`, `OUTPUT_ROOT`, archive/FITS naming conventions | Paths seed RuntimeConfig and have INI/CLI overrides; archive/FITS conventions are header-only and require rebuilding. |
 | `ProcessConfig` | `EXPO_LIST`, `REARR_OUTPUT_DIRECTORY`, `REARR_OUTPUT_BASE_DIRECTORY`, `REARRANGED_EXPO_LIST_FILENAME`, `REARRANGED_EXPO_LIST_DIRECTORY`, `FD_EXPO_LIST`, `FD_OUTPUT_DIRECTORY`, `FD_OUTPUT_BASE_DIRECTORY` | These seed RuntimeConfig and have INI/CLI overrides. |
+| `PathConfig` | `ASTROMETRY_TILE_PREFIX`, `SOURCE_CAT_TILE_PREFIX` | Independent build-time prefixes shared by each one-degree tile producer, consumer, and generated-file recognizer. |
 | `ProcessRearrConfig` | `SKIP_DIRECTORY_NAME`, `SUBCAT_PREFIX`, `SUBCAT_EXTENSION`, `SUMMARY_FILENAME` | No RuntimeConfig field; edit the selected variant and rebuild. |
 | `OutputLayout` | `NON_CHIP_BASE_DIRECTORIES`, `CHIP_PRODUCT_DIRECTORIES` | No RuntimeConfig field; these are fixed relative directory contracts used by initialization and processing. |
 
@@ -56,6 +57,19 @@ rebuild. INI and CLI overrides change only RuntimeConfig copies according to
 The runtime option structs are mutable copies of these defaults, not a second
 source of defaults. At least one top-level phase must be enabled.
 
+## `PathConfig` (`config/pathconfig.hpp`)
+
+Both prefixes exclude the fixed `RA_` token. The complete grammar is
+`<prefix>RA_DDD_DDD_Dec_[pm]DD_[pm]DD.dat`. These settings are not represented
+in RuntimeConfig. Changing either value is an intentional hard switch: files
+carrying an older prefix are not consumed, deleted, or treated as current
+generated output.
+
+| Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
+|---|---|---|---|---|---|---|---|---|
+| `ASTROMETRY_TILE_PREFIX` | `std::string_view` | `"astra_"` | same | No | Literal filename prefix excluding `RA_` | Shared by `process_astrocat`, its output lifecycle, and Astrometry Type 2 lookup. | Change when publishing a separately named Type-2 Gaia tile set. | Yes; regenerate or rename tiles |
+| `SOURCE_CAT_TILE_PREFIX` | `std::string_view` | `"extern_"` | same | No | Literal filename prefix excluding `RA_` | Shared by `process_extcat`, its output lifecycle, and SOURCE_CAT lookup. | Change when publishing a separately named canonical source-catalog tile set. | Yes; regenerate or rename tiles |
+
 ## `InitConfig` (`config/InitConfig.hpp` and `config/pathconfig.hpp`)
 
 | Parameter | Type | Standard default | Lite default | INI / CLI override | Legal values / meaning | Function | When to change | Rebuild after change |
@@ -67,6 +81,10 @@ source of defaults. At least one top-level phase must be enabled.
 | `OUTPUT_ROOT` | `const char*` | `"/lustre/home/acct-phyzj/share/DES/g_band_v1"` | same | `[init].output_root`; `--output-root` | Writable directory path | Pipeline output root. | Change for every deployment. | No at run time; yes if editing the header |
 | `DATASETS` | `std::vector<DatasetSpec>` | `{ {"gband", "c4d_"} }` | same | `[init].datasets`; repeatable `--dataset` | Unique targets with non-empty prefixes | Datasets processed sequentially. | Change for another dataset set. | No at run time; yes if editing the header |
 | `CONTAINS` | `std::vector<std::string>` | `{"v1"}` | same | `[init].contains`; repeatable `--contains` | Non-empty case-sensitive basename tokens; OR matching | OR-matched archive basename tokens. | Change when archive naming changes. | No at run time; yes if editing the header |
+| `ARCHIVE_SUFFIX` | `const char*` | `".fits.fz"` | same, in `Initialize.hpp` | No | Non-empty, case-sensitive filename suffix | Selects initializer archives and removes the suffix from output exposure stems. | Change only when the archive filename convention changes. | Yes |
+| `CCDNUM_KEYWORD` | `const char*` | `"CCDNUM"` | same, in `Initialize.hpp` | No | FITS header keyword naming the detector/chip number | Numbers extracted DQ images, validates resumed DQ outputs, and identifies chip images in the main pipeline. | Change only when the input FITS schema uses another keyword. | Yes |
+| `DQ_STEM_REPLACE_FROM` | `const char*` | `"ood"` | same, in `Initialize.hpp` | No | Case-sensitive substring; empty disables replacement | Identifies the legacy token replaced when mapping a DQ archive stem to its science exposure stem. | Change only when Science/DQ basename conventions change. | Yes |
+| `DQ_STEM_REPLACE_TO` | `const char*` | `"ooi"` | same, in `Initialize.hpp` | No | Replacement substring, possibly empty | Replaces every `DQ_STEM_REPLACE_FROM` occurrence in the DQ output stem. | Change together with the source token when Science/DQ basename conventions change. | Yes |
 | `EXISTING` | `const char*` | `"fail"` | same | `[init].existing`; `--existing` | fail, resume, or overwrite | Existing-output policy. | Select intentionally per run. | No at run time; yes if editing the header |
 | `F77_MAX_PATH` | `int` | `0` | same | `[init].f77_max_path`; `--f77-max-path` | Non-negative; 0 disables the guard | Generated-path compatibility limit; zero disables it. | Change only for path-policy compatibility. | No at run time; yes if editing the header |
 
@@ -94,10 +112,11 @@ The input contract is finite sky coordinates with `0 <= RA <= 360` and
 `-90 <= Dec <= 90`; exactly `RA=360` is stored as zero and exactly `Dec=90`
 belongs to the last Dec tile. Exact and one-ULP duplicates in both coordinates
 are removed, including duplicates across tile boundaries. Output files use
-`des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`, always begin with `RA    DEC`,
-and contain round-trip-precision doubles. `overwrite` removes only files that
-match this generated basename contract and preserves unrelated directory
-content.
+`<ASTROMETRY_TILE_PREFIX>RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat` (default
+`astra_`), always begin with `RA    DEC`, and contain round-trip-precision
+doubles. `overwrite` removes only files that match the currently configured
+prefix and generated basename contract, preserving legacy-prefix and unrelated
+directory content.
 
 ## `ExtCatConfig` (`config/ExtCatConfig.hpp` and `config/pathconfig.hpp`)
 
@@ -156,19 +175,24 @@ magnitude and selects the first available band in i, z, r, g, y order.
 | `npl` | `int` | `10` | same | No | Non-negative coefficient-count offset | Local PSF polynomial coefficient count minus one. | Adjust local PSF model only. | Yes |
 | `nstar_min_local` | `int` | `16` | same | No | Positive count | Minimum retained stars for a local fit. | Tune only with PSF fit validation. | Yes |
 | `psf_exposure_min_candidates` | `int` | `60` | same | No | Positive count | Minimum exposure-wide PSF candidates. | Tune Stage 5 selection. | Yes |
-| `psf_fwhm_hist_bins` | `int` | `128` | same | No | Integer ≥ 3 | FWHM histogram bin count. | Tune Stage 5 selection. | Yes |
-| `psf_fwhm_locus_sigma` | `double` | `4.0` | same | No | Positive sigma multiplier | Exposure FWHM-locus sigma window. | Tune Stage 5 selection. | Yes |
-| `psf_fwhm_locus_min_samples` | `int` | `30` | same | No | Positive count | Minimum FWHM-locus samples. | Tune sparse-exposure handling. | Yes |
-| `PsfGroupingType` | `int` | `2` | same | No | 1 = threshold graph; 2 = mutual KNN | One selects threshold graph; two selects mutual KNN. | Change for controlled algorithm comparison. | Yes |
+| `psf_count_pilot_clip_sigma` | `double` | `3.0` | same | No | Positive sigma multiplier | Iterative integer-star-area pilot median/MAD clipping multiplier; a proposed clip that collapses the next MAD to zero is rejected. | Tune only with locus-tail and quantization validation. | Yes |
+| `psf_count_pilot_clip_iterations` | `int` | `3` | same | No | Positive pass count | Maximum robust star-area pilot clipping passes. | Tune only with locus-tail validation. | Yes |
+| `psf_count_zero_mad_quantile` | `double` | `0.05` | same | No | `0 <= q < 0.5` | Lower quantile for an initially zero-MAD star-area pilot; the upper quantile is `1-q`. | Tune only with integer-pilot coverage validation. | Yes |
+| `psf_count_hist_range_sigma` | `double` | `5.0` | same | No | Positive width multiplier | Positive-MAD pilot half-range in count units; an initially zero-MAD pilot uses its configured symmetric quantiles. The science/SVG histogram width is a fixed, non-configurable two integer counts per bin. | Tune Stage 5 locus search range. | Yes |
+| `psf_count_locus_sigma` | `double` | `4.0` | same | No | Positive sigma multiplier | Multiplier applied independently to re-absorbing lower/upper count-MAD refinement and its pre-guard cuts. Independent outer elbows may only widen the final strict `star_area` bounds. | Tune Stage 5 selection. | Yes |
+| `psf_count_locus_min_samples` | `int` | `30` | same | No | Positive count | Minimum samples for a valid integer star-area locus. | Tune sparse-exposure handling. | Yes |
+| `PsfGroupingType` | `int` | `3` | same | No | 1 = threshold graph; 2 = mutual KNN; 3 = adaptive pair/fraction cuts | Selects the post-minChi pre-PRESS topology; type 3 bypasses graph grouping and scales its Stage-1 FD width by the minChi-survivor star count while retaining every finite pair chi. | Change for controlled algorithm comparison. | Yes |
 | `psf_minchi_reference_fraction` | `double` | `1.0 / 3.0` | same | No | `(0, 1]` | Exposure top-size reference fraction. | Tune Stage 5 threshold estimation. | Yes |
 | `psf_minchi_reference_max_per_chip` | `int` | `5` | same | No | Positive count | Reference-star cap per chip. | Tune Stage 5 threshold estimation. | Yes |
 | `psf_minchi_sigma_cut` | `double` | `4.0` | same | No | Positive sigma multiplier | Minimum-chi rejection sigma. | Tune Stage 5 selection. | Yes |
-| `psf_knn_k` | `int` | `8` | same | No | Positive neighbor count | Neighbors retained by the PSF KNN graph. | Change with grouping validation. | Yes |
+| `psf_knn_k` | `int` | `20` | same | No | Positive neighbor count | Neighbors retained by the PSF KNN graph. | Change with grouping validation. | Yes |
 | `psf_group_merge_ratio` | `double` | `0.30` | same | No | Non-negative group-size ratio | Secondary-group relative-size threshold. | Tune Stage 5 grouping. | Yes |
-| `psf_group_merge_min_gaia` | `int` | `2` | same | No | Non-negative match count | Minimum Gaia matches in a merged group. | Tune Stage 5 grouping. | Yes |
-| `psf_gaia_match_radius_pix` | `double` | `2.5` | same | No | Positive pixels | Gaia match radius in pixels. | Change for astrometric precision/pixel scale. | Yes |
-| `psf_gaia_locus_min_matches` | `int` | `10` | same | No | Positive match count | Minimum Gaia matches for locus support. | Tune sparse fields. | Yes |
-| `psf_press_rejection_enabled` | `bool` | `true` | same | No | Boolean | Enable optional post-fit PRESS cleanup. | Disable for controlled fallback testing. | Yes |
+| `psf_group_merge_min_gaia` | `int` | `1` | same | No | Non-negative match count | Minimum Gaia matches in a merged group. | Tune Stage 5 grouping. | Yes |
+| `psf_gaia_match_radius_pix` | `double` | `2.0` | same | No | Positive pixels | Gaia match radius in pixels. | Change for astrometric precision/pixel scale. | Yes |
+| `psf_gaia_locus_min_matches` | `int` | `5` | same | No | Positive match count | Minimum Gaia matches for locus support. | Tune sparse fields. | Yes |
+| `psf_pair_chi_valid_peak_fraction` | `double` | `exp(-1)` | same | No | `(0, 1)` | Strict relative-height threshold for valid Type-3 pair-chi peaks. | Tune only with pair-histogram validation. | Yes |
+| `psf_bad_fraction_valid_peak_fraction` | `double` | `0.10` | same | No | `(0, 1)` | Strict relative-height threshold for valid Type-3 bad-fraction peaks. | Tune only with fraction-histogram validation. | Yes |
+| `psf_press_rejection_enabled` | `bool` | `false` | `true` | No | Boolean | Enable optional post-fit PRESS cleanup. | Enable only after validating the PRESS cleanup for the target data. | Yes |
 | `psf_press_sigma_cut` | `double` | `4.0` | same | No | Positive sigma multiplier | Standardized PRESS rejection sigma. | Tune only with PSF residual validation. | Yes |
 | `psf_press_max_removals` | `int` | `5` | same | No | Non-negative count | Maximum PRESS removals permitted per chip. | Tune only with PSF residual validation. | Yes |
 | `psf_loo_min_denom` | `double` | `1.0e-6` | same | No | `(0, 1)` | Minimum leave-one-out denominator. | Numerical guard; normally unchanged. | Yes |
@@ -187,8 +211,8 @@ magnitude and selects the first available band in i, z, r, g, y order.
 | `chip_edge_margin` | `int` | `chip_margin = 8` | same | No | Derived pixels | Alias used by chip-edge checks. | Derived parameter — do not edit directly. | Yes |
 | `dz_thresh` | `double` | `0.1` | same | No | Non-negative redshift difference | Redshift tolerance for catalog matching. | Tune matching for another catalog/error model. | Yes |
 | `n_user_max` | `int` | `200` | same | No | Positive count | Bright detections used for astrometric matching. | Tune astrometric pattern matching. | Yes |
-| `ngal_max` | `int` | `4000` | same | No | Positive reservation hint | Initial galaxy-vector reservation hint. | Change only for allocation tuning. | Yes |
-| `nstar_max` | `int` | `2000` | same | No | Positive reservation hint | Initial star-vector reservation hint. | Change only for allocation tuning. | Yes |
+| `ngal_max` | `int` | `2000` | same | No | Positive reservation hint | Initial galaxy-vector reservation hint. | Change only for allocation tuning. | Yes |
+| `nstar_max` | `int` | `1000` | same | No | Positive reservation hint | Initial star-vector reservation hint. | Change only for allocation tuning. | Yes |
 | `src_npara` | `int` | `12` | same | No | Numeric or derived value; keep source assertions and consumers consistent | Sets the Stage-6 source-marker field count. | Change only for a validated configuration change. | Yes |
 | `npd` | `int` | `33` | same | No | Positive coefficient count | PU astrometric distortion coefficient count. | Change only with astrometric model code. | Yes |
 | `blocksize` | `int` | `200` | same | No | Positive pixels | Target background block side length. | Tune background modeling. | Yes |
@@ -217,7 +241,7 @@ magnitude and selects the first available band in i, z, r, g, y order.
 | `noise_plane_min_valid_fraction` | `double` | `0.30` | same | No | Fraction `(0, 1]` | Minimum plane-fit shell fraction. | Tune masking tolerance. | Yes |
 | `noise_cov_padding_factor` | `double` | `2.0` | same | No | Positive; padded side must support linear autocorrelation | Covariance FFT padding multiplier. | Change only with FFT validation. | Yes |
 | `noise_cov_fft_size` | `int` | `ceil(noise_region_size * noise_cov_padding_factor) = 384` | same | No | Derived padded side | Padded covariance FFT side. | Derived parameter — do not edit directly. | Yes |
-| `noise_cov_max_lag` | `int` | `8` | same | No | `0 <= lag < noise_region_size` | Maximum retained signed covariance lag. | Tune covariance model. | Yes |
+| `noise_cov_max_lag` | `int` | `63` | same | No | `0 <= lag < noise_region_size` | Maximum retained signed covariance lag. | Tune covariance model. | Yes |
 | `noise_cov_min_valid_pixels` | `int` | `4096` | same | No | Positive count | Minimum covariance-mask pixels. | Tune masking tolerance. | Yes |
 | `noise_cov_min_pair_fraction` | `double` | `0.50` | same | No | Fraction `(0, 1]` | Minimum lag pair-count fraction. | Tune covariance reliability. | Yes |
 | `noise_cov_sigma_ratio_min` | `double` | `0.80` | same | No | Positive lower ratio | Minimum covariance sigma ratio. | Tune covariance quality. | Yes |
@@ -291,12 +315,12 @@ magnitude and selects the first available band in i, z, r, g, y order.
 | `shear_cat_ncols` | `int` | `iorth_ext + 1 = 28` | same | No | Numeric or derived value; keep source assertions and consumers consistent | Derives the 28-field Stage-7 catalog width. | Derived parameter — do not edit directly. | Yes |
 | `expo_cat_ncols` | `int` | `shear_cat_ncols + 1 = 29` | same | No | Numeric or derived value; keep source assertions and consumers consistent | Derives the 29-field exposure-catalog width. | Derived parameter — do not edit directly. | Yes |
 | `ichi2` | `int` | `shear_cat_ncols = 28` | same | No | Derived zero-based index | Exposure chi-square field index. | Derived parameter — do not edit directly. | Yes |
-| `DEFAULT_CHIP_COUNT` | `int` | `62` | same | `[lensing].nmax_chip` | Numeric or derived value; keep source assertions and consumers consistent | Seeds RuntimeConfig's CCD count limit. | Change only for a validated configuration change. | No at run time; yes if editing the header |
-| `g1_c` | `double` | `-0.001` | same | No | Additive calibration | Additive field-distortion g1 correction. | Recalibrate for another dataset/band. | Yes |
-| `g2_c` | `double` | `-0.0003` | same | No | Additive calibration | Additive field-distortion g2 correction. | Recalibrate for another dataset/band. | Yes |
-| `chi2_thresh` | `double` | `0.01` | same | No | Non-negative threshold | Maximum exposure PSF chi-square. | Adjust scientific quality selection. | Yes |
-| `chipnx` | `int` | `2046` | same | `[lensing].chipnx` | Positive pixels | Science CCD width used for PSF coordinates. | Change only for another detector. | No at run time; yes if editing the header |
-| `chipny` | `int` | `4094` | same | `[lensing].chipny` | Positive pixels | Science CCD height used for PSF coordinates. | Change only for another detector. | No at run time; yes if editing the header |
+| `DEFAULT_CHIP_COUNT` | `int` | `62` | same | `[lensing].nmax_chip` | Positive chip count | Seeds RuntimeConfig's effective CCD count used by initialization, scheduling, and Standard PCA storage. | Change for another validated camera/layout. | No at run time; yes if editing the header |
+| `g1_c` | `double` | `0.0` | same | No | Additive calibration | Additive field-distortion g1 correction. | Recalibrate for another dataset/band. | Yes |
+| `g2_c` | `double` | `0.0` | same | No | Additive calibration | Additive field-distortion g2 correction. | Recalibrate for another dataset/band. | Yes |
+| `chi2_thresh` | `double` | `0.1` | same | No | Non-negative threshold | Maximum exposure PSF chi-square. | Adjust scientific quality selection. | Yes |
+| `chipnx` | `int` | `2046` | same | `[lensing].chipnx` | Positive pixels | Effective physical CCD width used by Standard Hybrid PSF maps and FD edge bounds. Stage 1 reads each science image's actual NAXIS. | Change only for another detector. | No at run time; yes if editing the header |
+| `chipny` | `int` | `4094` | same | `[lensing].chipny` | Positive pixels | Effective physical CCD height used by Standard Hybrid PSF maps and FD edge bounds. Stage 1 reads each science image's actual NAXIS. | Change only for another detector. | No at run time; yes if editing the header |
 | `rescale_size` | `double` | `1.2` | N/A — removed in Lite | No | Positive target size | Target PSF residual rescaling size. | Change only for `PSF_Ms=1`. | Yes |
 | `procs_pn` | `int` | `40` | N/A — removed in Lite | No | Positive rank count | MPI ranks per PCA scheduling group. | Tune Standard PCA scheduling. | Yes |
 | `work_pn` | `int` | `10` | N/A — removed in Lite | No | Positive worker count | Concurrent PCA workers per group. | Tune Standard PCA scheduling. | Yes |
@@ -345,7 +369,7 @@ the runtime dataset root is prepended by the existing path helpers.
 
 | Parameter | Type | Standard / Lite compiled value | Function | Rebuild after change |
 |---|---|---|---|---|
-| `NON_CHIP_BASE_DIRECTORIES` | `std::array<const char*, 14>` | `science`, `dqmask`, `stamps`, `result`, `stamps/dat_StarInfo`, `stamps/fits_StarP`, `stamps/fits_PsfSrc`, `stamps/dat_ExpoInfo`, `stamps/dat_StarComp`, `stamps/dat_Rescale`, `stamps/dat_Pcs`, `stamps/dat_StarCompV2`, `astrometry/Head`, `astrometry/dat_Chk` | Complete fixed base-directory contract created without a chip suffix. | Yes |
+| `NON_CHIP_BASE_DIRECTORIES` | `std::array<const char*, 15>` | `science`, `dqmask`, `stamps`, `result`, `stamps/dat_StarInfo`, `stamps/svg_StarLocus`, `stamps/fits_StarP`, `stamps/fits_PsfSrc`, `stamps/dat_ExpoInfo`, `stamps/dat_StarComp`, `stamps/dat_Rescale`, `stamps/dat_Pcs`, `stamps/dat_StarCompV2`, `astrometry/Head`, `astrometry/dat_Chk` | Complete fixed base-directory contract created without a chip suffix. | Yes |
 | `CHIP_PRODUCT_DIRECTORIES` | `std::array<const char*, 16>` | `stamps/Norm`, `stamps/cat_Orig`, `stamps/dat_StarCanInfo`, `stamps/fits_StarCan`, `stamps/fits_StarCanN`, `stamps/fits_StarCanP`, `stamps/dat_SrcInfo`, `stamps/fits_Src`, `stamps/fits_Noise`, `stamps/fits_SrcP`, `stamps/dat_PsfFit`, `stamps/fits_PsfLocal`, `stamps/dat_Shear`, `stamps/dat_StarXY`, `stamps/fits_PsfResi`, `astrometry/dat_Astro` | Complete fixed per-chip product-directory contract. | Yes |
 
 `include/general/OutputLayout.hpp` now contains only the functions that derive
@@ -402,14 +426,13 @@ exposure and chip paths from these centralized arrays.
 | `min_clip_limit` | `float` | `0.015` | same | No | Positive half-width | Minimum clipping half-width. | Tune per-exposure robustness. | Yes |
 | `default_s_std` | `float` | `0.05` | same | No | Positive scatter | Default stellar-size scatter. | Recalibrate stellar locus. | Yes |
 | `fallback_scut_default` | `float` | `0.6` | same | No | Size threshold | Fallback stellar-size cut. | Recalibrate fallback behavior. | Yes |
-| `bad_ccds` | `int[]` | `{2, 31, 53, 61}` | same | No | Detector-specific CCD IDs | DES CCD numbers excluded from analysis. | Change for another detector/quality list. | Yes |
-| `n_bad_ccds` | `int` | `4` | same | No | Derived array length | Number of excluded CCDs. | Derived parameter — do not edit directly. | Yes |
-| `chip_xmin` | `int` | `50` | same | No | Pixel lower bound | Minimum accepted chip x coordinate. | Change for detector/edge-mask policy. | Yes |
-| `chip_xmax` | `int` | `1990` | same | No | Pixel upper bound | Maximum accepted chip x coordinate. | Change for detector/edge-mask policy. | Yes |
-| `chip_ymin` | `int` | `100` | same | No | Pixel lower bound | Minimum accepted chip y coordinate. | Change for detector/edge-mask policy. | Yes |
-| `chip_ymax` | `int` | `3990` | same | No | Pixel upper bound | Maximum accepted chip y coordinate. | Change for detector/edge-mask policy. | Yes |
+| `bad_ccds` | `int[]` | `{}` | same | No | Detector-specific CCD IDs | CCD numbers excluded from analysis. | Change for another detector/quality list. | Yes |
+| `n_bad_ccds` | `int` | `0` | same | No | Derived array length | Number of excluded CCDs. | Derived parameter — do not edit directly. | Yes |
+| `chip_mask_edge` | `int` | `50` | same | No | Non-negative pixels | Symmetric FD edge mask; inclusive bounds derive at run time as `[edge, chipnx-edge]` and `[edge, chipny-edge]`. | Change for detector/edge-mask policy. | Yes |
 
 FD consumes the runtime catalog layout. External-prefix and pipeline-column
 offsets are therefore not duplicated in this header; per-exposure mode reads
 the serialized `EXPO_NUM` identity rather than inferring it from file order or
-the terminal `Chi2` value.
+the terminal `Chi2` value. There is no configured exposure cap; runtime-sized
+per-exposure statistics use the MPI-global maximum valid serialized exposure
+ID.

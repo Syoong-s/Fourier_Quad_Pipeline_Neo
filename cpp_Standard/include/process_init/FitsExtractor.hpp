@@ -39,13 +39,13 @@ ExtractionResult extractArchive(const std::filesystem::path& source,
 
 // ==========================================
 // Function: Return the exposure stem used by science chip output names
-// Method: Remove the exact trailing .fits.fz suffix from the source basename.
+// Method: Remove the exact configured archive suffix from the source basename.
 // ==========================================
 std::string archiveStem(const std::filesystem::path& source);
 
 // ==========================================
 // Function: Return the DQ exposure stem expected by the pipeline
-// Method: Remove .fits.fz and replace every legacy ood token with ooi.
+// Method: Remove the archive suffix and apply the configured DQ stem replacement.
 // ==========================================
 std::string dqOutputStem(const std::filesystem::path& source);
 

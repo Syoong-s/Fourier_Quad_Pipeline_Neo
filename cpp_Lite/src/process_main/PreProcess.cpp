@@ -3,6 +3,7 @@
 #include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
 #include "RuntimeConfig.hpp"
+#include "pathconfig.hpp"
 #include "process_main/UniversalUtils.hpp"
 #include "process_main/FitsIO.hpp"
 #include "process_main/Astrometry.hpp"
@@ -403,10 +404,15 @@ namespace PreProcess {
         WCSParams wcs;
         std::string prefix = UniversalUtils::getPrefix(imageFile);
 
-        bool image_read_ok = FitsIO::readImagePara(imageFile, nx, ny, array, wcs);
-        if (!image_read_ok || (!array.empty() && array[0] < -99990.0f)) {
+        const bool image_read_ok = FitsIO::readImagePara(imageFile, nx, ny, array, wcs);
+        const bool source_image_unreadable =
+            !image_read_ok || (!array.empty() && array[0] < -99990.0f);
+        if (source_image_unreadable) {
             std::cerr << "Error reading image parameters of: " << imageFile << std::endl;
-            return;
+            proc_error = 1;
+            nx = 1;
+            ny = 1;
+            array.assign(1, -99999.0f);
         }
 
         std::vector<float> dqmask;
@@ -493,18 +499,18 @@ namespace PreProcess {
             dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
         // ==========================================
-        // Logic: Select the Gaia astrometry catalog layout
-        // Method: Preserve Lite's unconditional Gaia branch while selecting the legacy
-        //         large tile or accumulated 1-degree candidates from the runtime root.
+        // Logic: Load the fixed repartitioned Gaia astrometry catalog layout
+        // Method: Preserve the existing error sentinel, otherwise accumulate the
+        //         configured one-degree candidates rooted at the runtime Gaia path.
         // ==========================================
-        if (lensing.astrometry_cat_type == 1) {
-            std::string catfile = UniversalUtils::generateGaiaFileName(
-                lensing.astrometry_cat, wcs.crval, proc_error);
+        if (proc_error != 0) {
             Astrometry::genAstrometryData(
-                catfile, nx, ny, normap, weight, wcs, astroFilename, proc_error);
+                "", nx, ny, normap, weight, wcs, astroFilename, proc_error);
         } else {
             std::vector<std::string> catfiles = UniversalUtils::generateGalCatFileNames(
-                lensing.astrometry_cat, wcs.crval);
+                lensing.astrometry_cat,
+                wcs.crval,
+                AstroCatConfig::ASTROMETRY_TILE_PREFIX);
             Astrometry::genAstrometryDataMulti(
                 catfiles, nx, ny, normap, weight, wcs, astroFilename, proc_error);
         }
@@ -530,9 +536,12 @@ namespace PreProcess {
 
         std::string normFilename = OutputLayout::chipPath(
             dirOutput, "stamps/Norm", prefix, "_norm.fits");
-        if (!FitsIO::writeNormHDU(imageFile, normFilename, nx, ny, normap,
-                                  bg_coeffs, sig_coeffs, lensing.ccd_split,
-                                  LensingConfig::nct)) {
+        const bool norm_write_ok = source_image_unreadable
+            ? FitsIO::writeImage(normFilename, 1, 1, std::vector<float>{1.0f})
+            : FitsIO::writeNormHDU(imageFile, normFilename, nx, ny, normap,
+                                   bg_coeffs, sig_coeffs, lensing.ccd_split,
+                                   LensingConfig::nct);
+        if (!norm_write_ok) {
             std::cerr << "Error writing normalized image: " << normFilename << std::endl;
             proc_error = 1;
         }
@@ -1255,8 +1264,14 @@ namespace PreProcess {
         applySigPlane(x_start, x_end, y_start, y_end, nx, image, stored_plane);
     }
 
+    // ==========================================
+    // Function: Locate detector defects in one preprocessed CCD
+    // Method: Stop before margin indexing whenever an earlier Stage-1 error is active.
+    // ==========================================
     void locateDefects(int nx, int ny, const std::vector<float>& array, std::vector<float>& normap,
                        std::vector<int>& weight, int area_max, int area_thresh, int& ierror) {
+        if (ierror != 0) return;
+
         constexpr int margin = 10;
         constexpr double defect_halo_thresh = 1.0;
         constexpr int y_smooth = 200;
@@ -1285,8 +1300,6 @@ namespace PreProcess {
                 weight[y * nx + x] = 0;
             }
         }
-
-       if (ierror == 1) return;
 
        std::vector<float> map(nx * ny);
 

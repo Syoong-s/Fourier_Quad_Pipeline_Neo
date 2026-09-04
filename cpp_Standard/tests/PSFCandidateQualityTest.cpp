@@ -164,14 +164,14 @@ void testStructuralAndDiagnosticValidity() {
                 2, 2, std::vector<float>(4), sum_power, chi_window_sum)
                 == CandidatePowerStatus::InvalidShape,
             "image without a complete DC neighbourhood must be rejected");
-    require(candidateDiagnosticsAreFinite(1.0, 0.1, -0.1, 0.8),
+    require(candidateDiagnosticsAreFinite(1.0, 0.1, -0.1),
             "finite diagnostics must pass");
     require(!candidateDiagnosticsAreFinite(
-                1.0, std::numeric_limits<double>::quiet_NaN(), 0.0, 0.8),
+                1.0, std::numeric_limits<double>::quiet_NaN(), 0.0),
             "NaN ellipticity must be rejected before Stage 8");
     require(!candidateDiagnosticsAreFinite(
-                1.0, 0.0, 0.0, std::numeric_limits<double>::infinity()),
-            "infinite FWHM must be rejected before Stage 8");
+                std::numeric_limits<double>::infinity(), 0.0, 0.0),
+            "infinite size must be rejected before Stage 8");
 }
 
 }  // namespace

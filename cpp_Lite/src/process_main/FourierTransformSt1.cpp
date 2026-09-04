@@ -129,7 +129,7 @@ namespace FourierTransformSt1 {
                 double source_pc = 0.0;
 
                 if (!ImageProcessing::prepareNoisePower(
-                        ns, noise_product, LensingConfig::NstampType, noise_p)) {
+                        ns, noise_product, noise_p)) {
                     MPIFailure::abortWorld(
                         "prepare star-candidate noise power",
                         filename_star_can_noise);

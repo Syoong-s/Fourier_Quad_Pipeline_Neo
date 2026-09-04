@@ -2,7 +2,7 @@ CXX = mpicxx
 STACK_PREFIX ?=
 EIGEN_INCLUDE ?=
 
-CPPFLAGS = -Iinclude -Iconfig
+CPPFLAGS = -I. -Iinclude -Iconfig
 CXXFLAGS = -O3 -std=c++17 -Wall -Wextra -MMD -MP
 LDFLAGS =
 LDLIBS = -lcfitsio -lfftw3 -lfftw3f -llapack -lblas -lm
@@ -41,7 +41,6 @@ SRCS = main.cpp \
        src/process_main/PreProcess.cpp \
        src/process_main/Astrometry.cpp \
        src/process_main/SourceExtractor.cpp \
-       src/process_main/NoiseCovariance.cpp \
        src/process_main/FourierTransformSt1.cpp \
        src/process_main/FourierTransformSt2.cpp \
        src/process_main/PSFStarSelection.cpp \

@@ -453,7 +453,6 @@ bool applyIniValue(const std::string& section, const std::string& key,
     }
 
     if (section == "lensing") {
-        if (key == "astrometry_cat_type") return parseSignedInteger(raw_value, config.lensing.astrometry_cat_type, false, false) || (reason = "expected integer", false);
         if (key == "process_stage") return parseSignedInteger(raw_value, config.lensing.process_stage, true, false) || (reason = "expected positive integer", false);
         if (key == "ccd_split") return parseSignedInteger(raw_value, config.lensing.ccd_split, false, false) || (reason = "expected integer", false);
         if (key == "gal_smooth") return parseSignedInteger(raw_value, config.lensing.gal_smooth, false, true) || (reason = "expected non-negative integer", false);
@@ -464,7 +463,7 @@ bool applyIniValue(const std::string& section, const std::string& key,
         if (key == "pixel_size") return parseDouble(raw_value, config.lensing.pixel_size) || (reason = "expected finite positive number", false);
         if (!parse_string()) return false;
         if (key == "astrometry_cat") config.lensing.astrometry_cat = string_value;
-        else if (key == "source_cat") config.extcat.output_directory = string_value;
+        else if (key == "source_cat") config.lensing.source_cat = string_value;
         else { reason = "unknown key"; return false; }
         return true;
     }
@@ -527,6 +526,8 @@ bool applyNamedOption(const std::string& name, const std::string& value,
         config.extcat.input_directory = value;
     } else if (name == "--extcat-output") {
         config.extcat.output_directory = value;
+    } else if (name == "--source-cat") {
+        config.lensing.source_cat = value;
     } else if (name == "--extcat-contains") {
         if (value.empty()) error = "--extcat-contains must not be empty";
         else {
@@ -682,9 +683,9 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.init.existing = InitConfig::EXISTING;
     config.init.f77_max_path = InitConfig::F77_MAX_PATH;
 
-    config.lensing.astrometry_cat_type = LensingConfig::AstroCatType;
     config.lensing.process_stage = LensingConfig::PROCESS_stage;
     config.lensing.astrometry_cat = LensingConfig::ASTROMETRY_CAT;
+    config.lensing.source_cat = LensingConfig::SOURCE_CAT_DEFAULT;
     config.lensing.ccd_split = LensingConfig::CCD_split;
     config.lensing.gal_smooth = LensingConfig::gal_smooth;
     config.lensing.star_smooth = LensingConfig::star_smooth;
@@ -857,17 +858,16 @@ bool validateRuntimeConfig(const RuntimeConfig& config, std::string& error) {
                && astrocat.existing_policy != "fail"
                && astrocat.existing_policy != "overwrite") {
         error = "astrocat.existing_policy must be fail or overwrite";
-    } else if ((process.run_process_extcat || process.run_process_main)
-        && extcat.output_directory.empty()) {
+    } else if (process.run_process_extcat && extcat.output_directory.empty()) {
         error = "external source-catalog output directory must not be empty";
     } else if (process.run_process_extcat && extcat.input_directory.empty()) {
+        error = "external source-catalog input directory must not be empty";
+    } else if (process.run_process_main && lensing.source_cat.empty()) {
         error = "external source-catalog input directory must not be empty";
     } else if ((process.run_process_init || process.run_process_main
                 || process.run_process_rearr || process.run_process_fd)
                && init.datasets.empty()) {
         error = "at least one dataset must be configured";
-    } else if (!valueInSet(lensing.astrometry_cat_type, {1, 2})) {
-        error = "lensing.astrometry_cat_type must be 1 or 2";
     } else if (!valueInSet(lensing.ccd_split, {1, 2})) {
         error = "lensing.ccd_split must be 1 or 2";
     } else if (lensing.process_stage <= 0) {

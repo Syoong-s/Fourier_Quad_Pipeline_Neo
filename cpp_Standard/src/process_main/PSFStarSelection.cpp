@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <numeric>
+#include <stdexcept>
 
 namespace PSFModel {
 namespace Internal {
@@ -21,17 +23,21 @@ double sortedMedian(const std::vector<double>& sorted) {
 }
 
 // ==========================================
-// Function: Return a linearly interpolated quantile from sorted samples
-// Method: Interpolate between the two enclosing zero-based order statistics.
+// Function: Interpolate one quantile from a sorted finite vector
+// Method: Map the bounded fraction onto [0, N-1] and linearly blend neighbours.
 // ==========================================
-double sortedQuantile(const std::vector<double>& sorted, double quantile) {
+double sortedQuantile(
+    const std::vector<double>& sorted,
+    double fraction) {
     if (sorted.empty()) return std::numeric_limits<double>::quiet_NaN();
-    const double position = std::clamp(quantile, 0.0, 1.0)
+    fraction = std::clamp(fraction, 0.0, 1.0);
+    const double position = fraction
         * static_cast<double>(sorted.size() - 1);
     const std::size_t lower = static_cast<std::size_t>(std::floor(position));
     const std::size_t upper = static_cast<std::size_t>(std::ceil(position));
-    const double fraction = position - static_cast<double>(lower);
-    return sorted[lower] * (1.0 - fraction) + sorted[upper] * fraction;
+    if (lower == upper) return sorted[lower];
+    const double weight = position - static_cast<double>(lower);
+    return sorted[lower] * (1.0 - weight) + sorted[upper] * weight;
 }
 
 // ==========================================
@@ -55,18 +61,141 @@ bool medianAndMad(
 }
 
 // ==========================================
-// Function: Find the smallest positive sample spacing
-// Method: Scan adjacent sorted values and ignore exact duplicates.
+// Function: Estimate median and side-specific scaled median deviations
+// Method: Exclude center duplicates from both side MADs and apply the fixed
+//         one-count measurement-resolution floor independently to both sides.
 // ==========================================
-double minimumPositiveSpacing(const std::vector<double>& sorted) {
-    double spacing = std::numeric_limits<double>::infinity();
-    for (std::size_t index = 1; index < sorted.size(); ++index) {
-        const double difference = sorted[index] - sorted[index - 1];
-        if (difference > 0.0 && std::isfinite(difference)) {
-            spacing = std::min(spacing, difference);
+bool medianAndAsymmetricMad(
+    const std::vector<double>& values,
+    double& median,
+    double& lower_width,
+    double& upper_width) {
+    if (values.empty()) return false;
+    std::vector<double> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    median = sortedMedian(sorted);
+
+    std::vector<double> lower_deviations;
+    std::vector<double> upper_deviations;
+    lower_deviations.reserve(sorted.size());
+    upper_deviations.reserve(sorted.size());
+    for (double value : sorted) {
+        if (value < median) {
+            lower_deviations.push_back(median - value);
+        } else if (value > median) {
+            upper_deviations.push_back(value - median);
         }
     }
-    return spacing;
+    std::sort(lower_deviations.begin(), lower_deviations.end());
+    std::sort(upper_deviations.begin(), upper_deviations.end());
+    lower_width = lower_deviations.empty()
+        ? 0.0
+        : 1.4826 * sortedMedian(lower_deviations);
+    upper_width = upper_deviations.empty()
+        ? 0.0
+        : 1.4826 * sortedMedian(upper_deviations);
+    lower_width = std::max(lower_width, 1.0);
+    upper_width = std::max(upper_width, 1.0);
+    return std::isfinite(median)
+        && std::isfinite(lower_width) && lower_width > 0.0
+        && std::isfinite(upper_width) && upper_width > 0.0;
+}
+
+// ==========================================
+// Structure: Publish one first-layer integer star-area pilot and its bounds
+// Method: Keep center/width, retained count, and zero-MAD branch decisions atomic.
+// ==========================================
+struct PSFCountPilotEstimate {
+    double center = 0.0;
+    double width = 0.0;
+    double lower = 0.0;
+    double upper = 0.0;
+    int retained_count = 0;
+    bool uses_quantile_range = false;
+    bool rejected_zero_mad_clip = false;
+};
+
+// ==========================================
+// Function: Estimate a quantization-safe first-layer integer star-area pilot
+// Method: Use configurable symmetric Q(q)--Q(1-q) bounds for an initially zero
+//         MAD; otherwise accept clips only while their next MAD remains positive.
+// ==========================================
+bool estimatePSFCountPilot(
+    const std::vector<double>& sorted_input,
+    double clip_sigma,
+    int max_iterations,
+    double zero_mad_quantile,
+    double range_sigma,
+    PSFCountPilotEstimate& pilot) {
+    pilot = {};
+    if (sorted_input.empty() || !std::isfinite(clip_sigma)
+        || clip_sigma <= 0.0 || max_iterations <= 0
+        || !std::isfinite(zero_mad_quantile)
+        || zero_mad_quantile < 0.0 || zero_mad_quantile >= 0.5
+        || !std::isfinite(range_sigma) || range_sigma <= 0.0) {
+        return false;
+    }
+
+    std::vector<double> population = sorted_input;
+    double center = 0.0;
+    double width = 0.0;
+    if (!medianAndMad(population, center, width)) return false;
+
+    if (width <= 0.0) {
+        pilot.center = center;
+        pilot.width = 0.0;
+        pilot.lower = sortedQuantile(population, zero_mad_quantile);
+        pilot.upper = sortedQuantile(population, 1.0 - zero_mad_quantile);
+        pilot.retained_count = static_cast<int>(population.size());
+        pilot.uses_quantile_range = true;
+        return std::isfinite(pilot.center)
+            && std::isfinite(pilot.width)
+            && pilot.width >= 0.0
+            && std::isfinite(pilot.lower)
+            && std::isfinite(pilot.upper)
+            && pilot.upper >= pilot.lower
+            && pilot.retained_count > 0;
+    }
+
+    for (int iteration = 0; iteration < max_iterations; ++iteration) {
+        if (!medianAndMad(population, center, width)) return false;
+        std::vector<double> clipped;
+        clipped.reserve(population.size());
+        for (double value : population) {
+            if (std::abs(value - center) <= clip_sigma * width) {
+                clipped.push_back(value);
+            }
+        }
+        if (clipped.empty()) return false;
+        if (clipped.size() == population.size()) break;
+
+        double next_center = 0.0;
+        double next_width = 0.0;
+        if (!medianAndMad(clipped, next_center, next_width)) return false;
+        if (next_width <= 0.0) {
+            pilot.rejected_zero_mad_clip = true;
+            break;
+        }
+        population.swap(clipped);
+    }
+
+    if (!medianAndMad(population, pilot.center, pilot.width)) return false;
+    pilot.retained_count = static_cast<int>(population.size());
+    if (pilot.width <= 0.0) {
+        pilot.uses_quantile_range = true;
+        pilot.lower = sortedQuantile(population, zero_mad_quantile);
+        pilot.upper = sortedQuantile(population, 1.0 - zero_mad_quantile);
+    } else {
+        pilot.lower = pilot.center - range_sigma * pilot.width;
+        pilot.upper = pilot.center + range_sigma * pilot.width;
+    }
+    return std::isfinite(pilot.center)
+        && std::isfinite(pilot.width)
+        && pilot.width >= 0.0
+        && std::isfinite(pilot.lower)
+        && std::isfinite(pilot.upper)
+        && pilot.upper >= pilot.lower
+        && pilot.retained_count > 0;
 }
 
 // ==========================================
@@ -128,7 +257,453 @@ private:
     std::vector<int> rank_;
 };
 
+// ==========================================
+// Function: Smooth one continuous FD histogram without filling empty bins
+// Method: Apply the shared 1-2-3-2-1 kernel with edge renormalization.
+// ==========================================
+std::vector<double> smoothUpperElbowHistogram(
+    const std::vector<double>& histogram) {
+    const int offsets[] = {-2, -1, 0, 1, 2};
+    const double weights[] = {1.0, 2.0, 3.0, 2.0, 1.0};
+    std::vector<double> smoothed(histogram.size(), 0.0);
+    for (int bin = 0; bin < static_cast<int>(histogram.size()); ++bin) {
+        double weighted_sum = 0.0;
+        double weight_sum = 0.0;
+        for (int index = 0; index < 5; ++index) {
+            const int neighbour = bin + offsets[index];
+            if (neighbour < 0
+                || neighbour >= static_cast<int>(histogram.size())) {
+                continue;
+            }
+            weighted_sum += weights[index] * histogram[neighbour];
+            weight_sum += weights[index];
+        }
+        smoothed[bin] = weight_sum > 0.0
+            ? weighted_sum / weight_sum
+            : 0.0;
+    }
+    return smoothed;
+}
+
+// ==========================================
+// Function: Collapse positive local-maximum plateaus to deterministic peaks
+// Method: Treat each exact-height run atomically and use its lower middle bin.
+// ==========================================
+std::vector<int> findUpperElbowPeaks(
+    const std::vector<double>& smoothed_histogram) {
+    std::vector<int> peaks;
+    int first = 0;
+    while (first < static_cast<int>(smoothed_histogram.size())) {
+        int last = first;
+        while (last + 1 < static_cast<int>(smoothed_histogram.size())
+               && smoothed_histogram[last + 1]
+                    == smoothed_histogram[first]) {
+            ++last;
+        }
+        const double height = smoothed_histogram[first];
+        const double left = first == 0
+            ? -std::numeric_limits<double>::infinity()
+            : smoothed_histogram[first - 1];
+        const double right = last + 1
+                == static_cast<int>(smoothed_histogram.size())
+            ? -std::numeric_limits<double>::infinity()
+            : smoothed_histogram[last + 1];
+        if (std::isfinite(height) && height > 0.0
+            && height >= left && height >= right) {
+            peaks.push_back(first + (last - first) / 2);
+        }
+        first = last + 1;
+    }
+    return peaks;
+}
+
+// ==========================================
+// Function: Classify peaks and select one gated right-side curvature elbow
+// Method: Search below the configured main-peak fraction between the rightmost
+//         valid peak and first invalid peak; ties keep the nearer lower bin.
+// ==========================================
+bool analyzeUpperElbowTopology(
+    double valid_peak_fraction,
+    double elbow_search_height_fraction,
+    PSFUpperElbowHistogramResult& result) {
+    result.valid = false;
+    result.main_peak_bin = -1;
+    result.rightmost_valid_peak_bin = -1;
+    result.first_invalid_peak_bin = -1;
+    result.elbow_bin = -1;
+    result.cut = 0.0;
+    result.elbow_search_height = 0.0;
+    result.elbow_search_first_bin = -1;
+    result.elbow_search_last_bin = -1;
+    result.elbow_candidate_count = 0;
+    result.peaks.clear();
+    result.valid_peaks.clear();
+    result.invalid_peaks.clear();
+    if (!std::isfinite(elbow_search_height_fraction)
+        || elbow_search_height_fraction <= 0.0
+        || elbow_search_height_fraction >= 1.0) {
+        result.status = PSFUpperElbowStatus::InvalidConfig;
+        return false;
+    }
+    result.smoothed_histogram =
+        smoothUpperElbowHistogram(result.histogram);
+    result.peaks = findUpperElbowPeaks(result.smoothed_histogram);
+    if (result.peaks.empty()) {
+        result.status = PSFUpperElbowStatus::NoPeaks;
+        return false;
+    }
+
+    result.main_peak_bin = result.peaks.front();
+    for (int peak : result.peaks) {
+        if (result.smoothed_histogram[peak]
+            > result.smoothed_histogram[result.main_peak_bin]) {
+            result.main_peak_bin = peak;
+        }
+    }
+    const double valid_height =
+        result.smoothed_histogram[result.main_peak_bin]
+        * valid_peak_fraction;
+    for (int peak : result.peaks) {
+        if (result.smoothed_histogram[peak] > valid_height) {
+            result.valid_peaks.push_back(peak);
+        } else {
+            result.invalid_peaks.push_back(peak);
+        }
+    }
+    if (result.valid_peaks.empty()) {
+        result.status = PSFUpperElbowStatus::NoPeaks;
+        return false;
+    }
+    result.rightmost_valid_peak_bin = result.valid_peaks.back();
+    for (int peak : result.invalid_peaks) {
+        if (peak > result.rightmost_valid_peak_bin) {
+            result.first_invalid_peak_bin = peak;
+            break;
+        }
+    }
+
+    const int first_candidate = std::max(
+        1, result.rightmost_valid_peak_bin + 1);
+    const int last_candidate = result.first_invalid_peak_bin >= 0
+        ? result.first_invalid_peak_bin - 1
+        : static_cast<int>(result.smoothed_histogram.size()) - 2;
+    const double main_peak_height =
+        result.smoothed_histogram[result.main_peak_bin];
+    result.elbow_search_height =
+        main_peak_height * elbow_search_height_fraction;
+    double best_curvature = 0.0;
+    for (int bin = first_candidate; bin <= last_candidate; ++bin) {
+        const double height = result.smoothed_histogram[bin];
+        if (!std::isfinite(height)
+            || !(height < result.elbow_search_height)) {
+            continue;
+        }
+        if (result.elbow_search_first_bin < 0) {
+            result.elbow_search_first_bin = bin;
+        }
+        result.elbow_search_last_bin = bin;
+        ++result.elbow_candidate_count;
+        const double curvature = result.smoothed_histogram[bin - 1]
+            - 2.0 * height
+            + result.smoothed_histogram[bin + 1];
+        if (std::isfinite(curvature) && curvature > best_curvature) {
+            best_curvature = curvature;
+            result.elbow_bin = bin;
+        }
+    }
+    if (result.elbow_bin < 0) {
+        result.status = PSFUpperElbowStatus::NoElbow;
+        return false;
+    }
+    result.cut = result.bin_origin
+        + (static_cast<double>(result.elbow_bin) + 0.5)
+            * result.bin_width;
+    if (!std::isfinite(result.cut)) {
+        result.status = PSFUpperElbowStatus::InvalidInput;
+        return false;
+    }
+    result.valid = true;
+    result.status = PSFUpperElbowStatus::Valid;
+    return true;
+}
+
+// ==========================================
+// Function: Estimate one generic adaptive upper-elbow histogram
+// Method: Filter samples, derive an FD grid, collapse peaks, then maximize
+//         gated positive curvature right of the rightmost valid peak.
+// ==========================================
+template <typename Sample>
+bool estimatePSFUpperElbowCutImpl(
+    const std::vector<Sample>& input,
+    const PSFUpperElbowHistogramConfig& config,
+    PSFUpperElbowHistogramResult& result) {
+    result = {};
+    if (!std::isfinite(config.valid_peak_fraction)
+        || config.valid_peak_fraction <= 0.0
+        || config.valid_peak_fraction >= 1.0
+        || !std::isfinite(config.elbow_search_height_fraction)
+        || config.elbow_search_height_fraction <= 0.0
+        || config.elbow_search_height_fraction >= 1.0) {
+        result.status = PSFUpperElbowStatus::InvalidConfig;
+        return false;
+    }
+
+    try {
+        std::vector<double> values;
+        values.reserve(input.size());
+        for (Sample sample : input) {
+            const double value = static_cast<double>(sample);
+            if (std::isfinite(value)) values.push_back(value);
+        }
+        result.finite_value_count = values.size();
+        if (values.empty()) return false;
+        if (config.force_zero_origin
+            && *std::min_element(values.begin(), values.end()) < 0.0) {
+            result.status = PSFUpperElbowStatus::InvalidInput;
+            return false;
+        }
+
+        std::vector<double> fd_values;
+        fd_values.reserve(values.size());
+        for (double value : values) {
+            if (!config.exclude_zero_from_fd || value > 0.0) {
+                fd_values.push_back(value);
+            }
+        }
+        result.fd_sample_count = fd_values.size();
+        result.fd_scale_sample_count = config.fd_scale_sample_count > 0U
+            ? config.fd_scale_sample_count
+            : result.fd_sample_count;
+        if (fd_values.empty() || result.fd_scale_sample_count == 0U) {
+            result.status = PSFUpperElbowStatus::NoFDSamples;
+            return false;
+        }
+        std::sort(fd_values.begin(), fd_values.end());
+        const double first_quartile = sortedQuantile(fd_values, 0.25);
+        const double third_quartile = sortedQuantile(fd_values, 0.75);
+        result.fd_iqr = third_quartile - first_quartile;
+        if (std::isfinite(result.fd_iqr) && result.fd_iqr > 0.0) {
+            result.bin_width = 2.0 * result.fd_iqr
+                / std::cbrt(static_cast<double>(
+                    result.fd_scale_sample_count));
+        } else if (config.zero_iqr_uses_min_positive
+                   && fd_values.front() > 0.0) {
+            result.bin_width = fd_values.front();
+        }
+        if (!std::isfinite(result.bin_width) || result.bin_width <= 0.0) {
+            result.status = PSFUpperElbowStatus::NonPositiveWidth;
+            return false;
+        }
+
+        const auto minimum_and_maximum =
+            std::minmax_element(values.begin(), values.end());
+        const double minimum = *minimum_and_maximum.first;
+        const double maximum = *minimum_and_maximum.second;
+        if (config.force_zero_origin) {
+            result.bin_origin = 0.0;
+        } else {
+            const long double origin = std::floor(
+                static_cast<long double>(minimum)
+                    / static_cast<long double>(result.bin_width))
+                * static_cast<long double>(result.bin_width);
+            result.bin_origin = static_cast<double>(origin);
+        }
+        if (!std::isfinite(result.bin_origin)
+            || result.bin_origin > minimum) {
+            result.status = PSFUpperElbowStatus::InvalidInput;
+            return false;
+        }
+
+        const long double scaled_range =
+            (static_cast<long double>(maximum)
+             - static_cast<long double>(result.bin_origin))
+            / static_cast<long double>(result.bin_width);
+        if (!std::isfinite(scaled_range) || scaled_range < 0.0L) {
+            result.status = PSFUpperElbowStatus::UnsafeBinCount;
+            return false;
+        }
+        const long double last_bin_value = std::floor(scaled_range);
+        const long double maximum_last_bin = static_cast<long double>(
+            std::numeric_limits<int>::max() - 1);
+        if (last_bin_value > maximum_last_bin) {
+            result.status = PSFUpperElbowStatus::UnsafeBinCount;
+            return false;
+        }
+        const std::size_t bin_count =
+            static_cast<std::size_t>(last_bin_value) + 1U;
+        if (bin_count == 0
+            || bin_count > result.histogram.max_size()) {
+            result.status = PSFUpperElbowStatus::UnsafeBinCount;
+            return false;
+        }
+        result.histogram.assign(bin_count, 0.0);
+        for (double value : values) {
+            long double scaled =
+                (static_cast<long double>(value)
+                 - static_cast<long double>(result.bin_origin))
+                / static_cast<long double>(result.bin_width);
+            const long double tolerance = 64.0L
+                * std::numeric_limits<long double>::epsilon()
+                * std::max(1.0L, std::abs(scaled));
+            if (!std::isfinite(scaled) || scaled < -tolerance) {
+                result.status = PSFUpperElbowStatus::InvalidInput;
+                return false;
+            }
+            if (scaled < 0.0L) scaled = 0.0L;
+            std::size_t bin = static_cast<std::size_t>(std::floor(scaled));
+            if (bin >= bin_count) bin = bin_count - 1U;
+            result.histogram[bin] += 1.0;
+        }
+        return analyzeUpperElbowTopology(
+            config.valid_peak_fraction,
+            config.elbow_search_height_fraction,
+            result);
+    } catch (const std::bad_alloc&) {
+        result = {};
+        result.status = PSFUpperElbowStatus::AllocationFailure;
+        return false;
+    } catch (const std::length_error&) {
+        result = {};
+        result.status = PSFUpperElbowStatus::AllocationFailure;
+        return false;
+    }
+}
+
 }  // namespace
+
+// ==========================================
+// Function: Analyze one already-binned upper-elbow histogram
+// Method: Validate nonnegative finite bins, then expose the production topology.
+// ==========================================
+bool analyzePSFUpperElbowHistogram(
+    const std::vector<double>& histogram,
+    double bin_origin,
+    double bin_width,
+    double valid_peak_fraction,
+    double elbow_search_height_fraction,
+    PSFUpperElbowHistogramResult& result) {
+    result = {};
+    if (histogram.empty() || !std::isfinite(bin_origin)
+        || !std::isfinite(bin_width) || bin_width <= 0.0
+        || !std::isfinite(valid_peak_fraction)
+        || valid_peak_fraction <= 0.0 || valid_peak_fraction >= 1.0
+        || std::any_of(
+            histogram.begin(), histogram.end(),
+            [](double count) {
+                return !std::isfinite(count) || count < 0.0;
+            })) {
+        result.status = PSFUpperElbowStatus::InvalidInput;
+        return false;
+    }
+    try {
+        result.bin_origin = bin_origin;
+        result.bin_width = bin_width;
+        result.histogram = histogram;
+        return analyzeUpperElbowTopology(
+            valid_peak_fraction,
+            elbow_search_height_fraction,
+            result);
+    } catch (const std::bad_alloc&) {
+        result = {};
+        result.status = PSFUpperElbowStatus::AllocationFailure;
+        return false;
+    } catch (const std::length_error&) {
+        result = {};
+        result.status = PSFUpperElbowStatus::AllocationFailure;
+        return false;
+    }
+}
+
+// ==========================================
+// Function: Estimate an FD-histogram upper elbow from double samples
+// Method: Delegate to the type-generic finite-filtering implementation.
+// ==========================================
+bool estimatePSFUpperElbowCut(
+    const std::vector<double>& values,
+    const PSFUpperElbowHistogramConfig& config,
+    PSFUpperElbowHistogramResult& result) {
+    return estimatePSFUpperElbowCutImpl(values, config, result);
+}
+
+// ==========================================
+// Function: Estimate an FD-histogram upper elbow from float samples
+// Method: Delegate without first expanding the compact production pair vector.
+// ==========================================
+bool estimatePSFUpperElbowCut(
+    const std::vector<float>& values,
+    const PSFUpperElbowHistogramConfig& config,
+    PSFUpperElbowHistogramResult& result) {
+    return estimatePSFUpperElbowCutImpl(values, config, result);
+}
+
+// ==========================================
+// Function: Return a stable adaptive-histogram status label
+// Method: Map every outcome to one uppercase diagnostic token.
+// ==========================================
+const char* psfUpperElbowStatusName(PSFUpperElbowStatus status) {
+    switch (status) {
+        case PSFUpperElbowStatus::NoFiniteValues: return "NO_FINITE_VALUES";
+        case PSFUpperElbowStatus::InvalidConfig: return "INVALID_CONFIG";
+        case PSFUpperElbowStatus::InvalidInput: return "INVALID_INPUT";
+        case PSFUpperElbowStatus::NoFDSamples: return "NO_FD_SAMPLES";
+        case PSFUpperElbowStatus::NonPositiveWidth: return "NONPOSITIVE_WIDTH";
+        case PSFUpperElbowStatus::UnsafeBinCount: return "UNSAFE_BIN_COUNT";
+        case PSFUpperElbowStatus::AllocationFailure: return "ALLOCATION_FAILURE";
+        case PSFUpperElbowStatus::NoPeaks: return "NO_PEAKS";
+        case PSFUpperElbowStatus::NoElbow: return "NO_ELBOW";
+        case PSFUpperElbowStatus::Valid: return "VALID";
+    }
+    return "UNKNOWN";
+}
+
+// ==========================================
+// Function: Classify one finite pair against the Type-3 upper cut
+// Method: Preserve the scientific strict-greater-than boundary exactly.
+// ==========================================
+bool isPSFType3BadPair(double chi, double pair_chi_cut) {
+    return std::isfinite(chi) && std::isfinite(pair_chi_cut)
+        && chi > pair_chi_cut;
+}
+
+// ==========================================
+// Function: Apply the Type-3 bad-pair-fraction gate to one chip
+// Method: Require finite denominators, apply a strict upper rejection only when
+//         requested, and clear the complete result below the chip minimum.
+// ==========================================
+PSFType3ChipSelection selectPSFType3FractionSurvivors(
+    const std::vector<double>& bad_pair_fractions,
+    const std::vector<bool>& has_finite_pair_denominator,
+    bool apply_fraction_cut,
+    double fraction_cut,
+    int minimum_retained) {
+    PSFType3ChipSelection result;
+    result.selected.assign(bad_pair_fractions.size(), false);
+    if (bad_pair_fractions.size() != has_finite_pair_denominator.size()
+        || minimum_retained < 0
+        || (apply_fraction_cut
+            && (!std::isfinite(fraction_cut) || fraction_cut < 0.0))) {
+        return result;
+    }
+    for (std::size_t index = 0; index < bad_pair_fractions.size(); ++index) {
+        const double fraction = bad_pair_fractions[index];
+        if (!has_finite_pair_denominator[index]
+            || !std::isfinite(fraction) || fraction < 0.0
+            || fraction > 1.0) {
+            continue;
+        }
+        result.finite_pair_count++;
+        if (!apply_fraction_cut || fraction <= fraction_cut) {
+            result.selected[index] = true;
+            result.retained_count++;
+        }
+    }
+    if (result.retained_count < static_cast<std::size_t>(minimum_retained)) {
+        std::fill(result.selected.begin(), result.selected.end(), false);
+        result.retained_count = 0;
+        result.rejected_by_minimum = true;
+    }
+    return result;
+}
 
 // ==========================================
 // Function: Derive the shared PSF chi-window bounds
@@ -143,20 +718,361 @@ PSFChiWindow getPSFChiWindow(int n) {
 }
 
 // ==========================================
-// Function: Estimate an exposure-wide stellar FWHM locus
-// Method: Smooth a fixed-bin robust histogram, optionally choose the peak
-//         nearest the Gaia median, then apply median/MAD clipping with a
-//         discretization floor.
+// Function: Return the nominal center of one fixed two-count histogram bin
+// Method: Offset the first allowed count by two per bin and one half count.
 // ==========================================
-bool estimateFWHMLocus(
-    const std::vector<FWHMSample>& samples,
-    int histogram_bins,
-    double sigma_cut,
-    int minimum_samples,
-    int minimum_gaia_matches,
-    FWHMLocus& locus) {
+double psfCountHistogramBinCenter(
+    int histogram_first_count,
+    int bin) {
+    return static_cast<double>(histogram_first_count)
+        + static_cast<double>(PSFCountHistogramBinWidth * bin) + 0.5;
+}
+
+// ==========================================
+// Function: Select one integer star-area histogram peak deterministically
+// Method: Use density without Gaia; with Gaia, anchor eligibility to the global
+//         nominal-center distance plus one count and rank deterministically.
+// ==========================================
+int selectPSFCountPeak(
+    const std::vector<int>& peaks,
+    const std::vector<double>& smoothed_histogram,
+    const std::vector<double>& gaia_histogram,
+    int histogram_first_count,
+    double pilot_center,
+    bool pilot_uses_gaia) {
+    if (peaks.empty() || smoothed_histogram.empty()
+        || gaia_histogram.size() != smoothed_histogram.size()
+        || histogram_first_count <= 0
+        || !std::isfinite(pilot_center)) {
+        return -1;
+    }
+    for (int peak : peaks) {
+        if (peak < 0
+            || peak >= static_cast<int>(smoothed_histogram.size())) {
+            return -1;
+        }
+    }
+
+    int selected = peaks.front();
+    if (!pilot_uses_gaia) {
+        for (int candidate : peaks) {
+            if (smoothed_histogram[candidate]
+                > smoothed_histogram[selected]) {
+                selected = candidate;
+            }
+        }
+        return selected;
+    }
+
+    double minimum_distance = std::numeric_limits<double>::infinity();
+    for (int peak : peaks) {
+        const double distance = std::abs(
+            psfCountHistogramBinCenter(histogram_first_count, peak)
+                - pilot_center);
+        minimum_distance = std::min(minimum_distance, distance);
+    }
+
+    selected = -1;
+    double selected_distance = std::numeric_limits<double>::infinity();
+    for (int candidate : peaks) {
+        const double candidate_distance = std::abs(
+            psfCountHistogramBinCenter(histogram_first_count, candidate)
+                - pilot_center);
+        if (candidate_distance > minimum_distance + 1.0) {
+            continue;
+        }
+        if (selected < 0) {
+            selected = candidate;
+            selected_distance = candidate_distance;
+            continue;
+        }
+
+        bool replace = false;
+        if (gaia_histogram[candidate] != gaia_histogram[selected]) {
+            replace = gaia_histogram[candidate]
+                > gaia_histogram[selected];
+        } else if (smoothed_histogram[candidate]
+                   != smoothed_histogram[selected]) {
+            replace = smoothed_histogram[candidate]
+                > smoothed_histogram[selected];
+        } else if (candidate_distance != selected_distance) {
+            replace = candidate_distance < selected_distance;
+        } else {
+            replace = candidate < selected;
+        }
+        if (replace) {
+            selected = candidate;
+            selected_distance = candidate_distance;
+        }
+    }
+    return selected;
+}
+
+// ==========================================
+// Function: Find the selected peak's complete significant peak complex
+// Method: Include local peaks strictly above H_selected/e and descend outward
+//         from their extrema until the smoothed histogram rises again.
+// ==========================================
+PSFCountBinRange findPSFCountPeakComplexBasin(
+    const std::vector<int>& peaks,
+    const std::vector<double>& smoothed_histogram,
+    int selected_peak) {
+    PSFCountBinRange basin;
+    if (selected_peak < 0
+        || selected_peak >= static_cast<int>(smoothed_histogram.size())
+        || !std::isfinite(smoothed_histogram[selected_peak])
+        || smoothed_histogram[selected_peak] <= 0.0) {
+        return basin;
+    }
+
+    const double minimum_height =
+        smoothed_histogram[selected_peak] * std::exp(-1.0);
+    for (int peak : peaks) {
+        if (peak < 0 || peak >= static_cast<int>(smoothed_histogram.size())
+            || !std::isfinite(smoothed_histogram[peak])) {
+            return {};
+        }
+        if (smoothed_histogram[peak] > minimum_height) {
+            if (basin.first < 0) basin.first = peak;
+            basin.first = std::min(basin.first, peak);
+            basin.last = std::max(basin.last, peak);
+        }
+    }
+    if (basin.first < 0 || basin.last < 0
+        || selected_peak < basin.first || selected_peak > basin.last) {
+        return {};
+    }
+    while (basin.first > 0
+           && smoothed_histogram[basin.first - 1]
+                <= smoothed_histogram[basin.first]) {
+        --basin.first;
+    }
+    while (basin.last + 1 < static_cast<int>(smoothed_histogram.size())
+           && smoothed_histogram[basin.last + 1]
+                <= smoothed_histogram[basin.last]) {
+        ++basin.last;
+    }
+    return basin;
+}
+
+// ==========================================
+// Function: Find independent outer elbows around the selected count peak
+// Method: Cross below ten percent of peak height, then maximize positive signed
+//         curvature toward each domain edge with nearest-bin tie breaking.
+// ==========================================
+PSFCountElbows findPSFCountOuterElbows(
+    const std::vector<double>& smoothed_histogram,
+    int selected_peak) {
+    PSFCountElbows elbows;
+    if (selected_peak < 0
+        || selected_peak >= static_cast<int>(smoothed_histogram.size())
+        || !std::isfinite(smoothed_histogram[selected_peak])
+        || smoothed_histogram[selected_peak] <= 0.0) {
+        return elbows;
+    }
+    const double threshold = 0.10 * smoothed_histogram[selected_peak];
+
+    int left_crossing = -1;
+    for (int bin = selected_peak - 1; bin >= 0; --bin) {
+        if (smoothed_histogram[bin] < threshold) {
+            left_crossing = bin;
+            break;
+        }
+    }
+    double best_curvature = 0.0;
+    for (int bin = left_crossing; bin >= 1; --bin) {
+        const double curvature = smoothed_histogram[bin - 1]
+            - 2.0 * smoothed_histogram[bin]
+            + smoothed_histogram[bin + 1];
+        if (std::isfinite(curvature) && curvature > best_curvature) {
+            best_curvature = curvature;
+            elbows.left = bin;
+        }
+    }
+
+    int right_crossing = -1;
+    for (int bin = selected_peak + 1;
+         bin < static_cast<int>(smoothed_histogram.size()); ++bin) {
+        if (smoothed_histogram[bin] < threshold) {
+            right_crossing = bin;
+            break;
+        }
+    }
+    best_curvature = 0.0;
+    for (int bin = right_crossing;
+         bin >= 0 && bin + 1 < static_cast<int>(smoothed_histogram.size());
+         ++bin) {
+        const double curvature = smoothed_histogram[bin - 1]
+            - 2.0 * smoothed_histogram[bin]
+            + smoothed_histogram[bin + 1];
+        if (std::isfinite(curvature) && curvature > best_curvature) {
+            best_curvature = curvature;
+            elbows.right = bin;
+        }
+    }
+    return elbows;
+}
+
+// ==========================================
+// Function: Fill bounded one- or two-bin holes in a working histogram
+// Method: Detect every zero run from the immutable raw input, then interpolate
+//         only short internal runs between positive raw endpoints.
+// ==========================================
+std::vector<double> interpolateShortInternalHoles(
+    const std::vector<double>& histogram) {
+    std::vector<double> working = histogram;
+    std::size_t index = 0;
+    while (index < histogram.size()) {
+        if (histogram[index] != 0.0) {
+            ++index;
+            continue;
+        }
+        const std::size_t first = index;
+        while (index < histogram.size() && histogram[index] == 0.0) ++index;
+        const std::size_t length = index - first;
+        if (first == 0 || index >= histogram.size() || length > 2
+            || histogram[first - 1] <= 0.0 || histogram[index] <= 0.0) {
+            continue;
+        }
+        const double left = histogram[first - 1];
+        const double right = histogram[index];
+        for (std::size_t offset = 0; offset < length; ++offset) {
+            const double fraction = static_cast<double>(offset + 1)
+                / static_cast<double>(length + 1);
+            working[first + offset] = left + fraction * (right - left);
+        }
+    }
+    return working;
+}
+
+// ==========================================
+// Function: Refine a peak-basin seed with re-absorbing asymmetric MAD
+// Method: Rebuild each pass from all real pilot-domain samples inside the current
+//         asymmetric bounds, allowing previously excluded samples to return.
+// ==========================================
+PSFCountRefinement refinePSFCountPopulation(
+    const std::vector<double>& seed_values,
+    const std::vector<double>& domain_values,
+    double locus_sigma,
+    int iterations) {
+    PSFCountRefinement result;
+    if (seed_values.empty() || domain_values.empty()
+        || !std::isfinite(locus_sigma) || locus_sigma <= 0.0
+        || iterations <= 0) {
+        return result;
+    }
+    std::vector<double> population = seed_values;
+    std::vector<double> domain = domain_values;
+    if (std::any_of(population.begin(), population.end(),
+                    [](double value) { return !std::isfinite(value); })
+        || std::any_of(domain.begin(), domain.end(),
+                       [](double value) { return !std::isfinite(value); })) {
+        return result;
+    }
+    std::sort(population.begin(), population.end());
+    std::sort(domain.begin(), domain.end());
+
+    double center = 0.0;
+    double lower_width = 0.0;
+    double upper_width = 0.0;
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        if (!medianAndAsymmetricMad(
+                population, center, lower_width, upper_width)) {
+            return {};
+        }
+        const double clip_lower = center - locus_sigma * lower_width;
+        const double clip_upper = center + locus_sigma * upper_width;
+        std::vector<double> refined;
+        refined.reserve(domain.size());
+        for (double value : domain) {
+            if (value >= clip_lower && value <= clip_upper) {
+                refined.push_back(value);
+            }
+        }
+        if (refined.empty()) return {};
+        population.swap(refined);
+    }
+    if (!medianAndAsymmetricMad(
+            population, center, lower_width, upper_width)) {
+        return {};
+    }
+    result.valid = true;
+    result.center = center;
+    result.lower_width = lower_width;
+    result.upper_width = upper_width;
+    result.sample_count = static_cast<int>(population.size());
+    return result;
+}
+
+// ==========================================
+// Function: Count exp(-1)-threshold pixels in one square Fourier-power stamp
+// Method: Compare every stamp value with the finite central value times exp(-1).
+// ==========================================
+int countPSFStarArea(
+    const std::vector<float>& power,
+    int stamp_side) {
+    if (stamp_side <= 0
+        || power.size() < static_cast<std::size_t>(stamp_side * stamp_side)) {
+        return 0;
+    }
+    const float center = power[static_cast<std::size_t>(stamp_side / 2)
+        * static_cast<std::size_t>(stamp_side)
+        + static_cast<std::size_t>(stamp_side / 2)];
+    if (!std::isfinite(center)) return 0;
+    const float threshold = center * std::exp(-1.0f);
+    int star_area = 0;
+    for (int index = 0; index < stamp_side * stamp_side; ++index) {
+        if (std::isfinite(power[static_cast<std::size_t>(index)])
+            && power[static_cast<std::size_t>(index)] >= threshold) {
+            ++star_area;
+        }
+    }
+    return star_area;
+}
+
+// ==========================================
+// Function: Convert an exp(-1) star area to the historical PSF FWHM
+// Method: Preserve the legacy area-minus-1e-5 formula and explicit pixel scale.
+// ==========================================
+double fwhmFromStarArea(
+    double star_area,
+    int stamp_side,
+    double pixel_size) {
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    const double area = star_area - 1.0e-5;
+    if (!std::isfinite(star_area) || area <= 0.0 || stamp_side <= 0
+        || !std::isfinite(pixel_size) || pixel_size <= 0.0) {
+        return 0.0;
+    }
+    const double beta = static_cast<double>(stamp_side) / (2.0 * pi)
+        / std::sqrt(area / pi);
+    return beta * 2.0 * std::sqrt(2.0 * std::log(2.0)) * pixel_size;
+}
+
+// ==========================================
+// Function: Estimate an exposure-wide integer star-area locus
+// Method: Build fixed two-count bins, refine the significant peak complex from
+//         all pilot-domain samples, and widen only with independent outer elbows.
+// ==========================================
+bool estimatePSFCountLocus(
+    const std::vector<PSFCountSample>& samples,
+    const PSFCountLocusConfig& config,
+    PSFCountLocus& locus,
+    PSFCountLocusDiagnostics* diagnostics) {
     locus = {};
-    if (histogram_bins < 3 || sigma_cut <= 0.0 || minimum_samples <= 0) {
+    if (diagnostics != nullptr) *diagnostics = {};
+    if (!std::isfinite(config.pilot_clip_sigma)
+        || config.pilot_clip_sigma <= 0.0
+        || config.pilot_clip_iterations <= 0
+        || !std::isfinite(config.zero_mad_quantile)
+        || config.zero_mad_quantile < 0.0
+        || config.zero_mad_quantile >= 0.5
+        || !std::isfinite(config.histogram_range_sigma)
+        || config.histogram_range_sigma <= 0.0
+        || !std::isfinite(config.locus_sigma)
+        || config.locus_sigma <= 0.0
+        || config.minimum_samples <= 0
+        || config.minimum_gaia_matches <= 0) {
         return false;
     }
 
@@ -164,153 +1080,328 @@ bool estimateFWHMLocus(
     std::vector<double> gaia_values;
     values.reserve(samples.size());
     gaia_values.reserve(samples.size());
-    for (const FWHMSample& sample : samples) {
-        if (!std::isfinite(sample.fwhm) || sample.fwhm <= 0.0) continue;
-        values.push_back(sample.fwhm);
-        if (sample.gaia_matched) gaia_values.push_back(sample.fwhm);
+    for (const PSFCountSample& sample : samples) {
+        if (sample.star_area <= 0) continue;
+        values.push_back(static_cast<double>(sample.star_area));
+        if (sample.gaia_matched) {
+            gaia_values.push_back(static_cast<double>(sample.star_area));
+        }
     }
-    if (static_cast<int>(values.size()) < minimum_samples) return false;
+    if (diagnostics != nullptr) {
+        diagnostics->sample_count = static_cast<int>(values.size());
+        diagnostics->gaia_match_count = static_cast<int>(gaia_values.size());
+    }
+    if (static_cast<int>(values.size()) < config.minimum_samples) return false;
 
     std::sort(values.begin(), values.end());
     std::sort(gaia_values.begin(), gaia_values.end());
-    const double minimum_spacing = minimumPositiveSpacing(values);
-    double range_low = sortedQuantile(values, 0.01);
-    double range_high = sortedQuantile(values, 0.99);
-
-    if (!(range_high > range_low)) {
-        const double center = sortedMedian(values);
-        const double floor = std::isfinite(minimum_spacing)
-            ? minimum_spacing
-            : std::max(std::abs(center) * 1.0e-6, 1.0e-6);
-        locus.valid = true;
-        locus.center = center;
-        locus.width = floor;
-        locus.lower = center - sigma_cut * floor;
-        locus.upper = center + sigma_cut * floor;
-        locus.histogram_bin_width = floor;
-        return true;
+    const bool has_gaia_support =
+        static_cast<int>(gaia_values.size()) >= config.minimum_gaia_matches;
+    if (diagnostics != nullptr && has_gaia_support) {
+        diagnostics->has_gaia_median = true;
+        diagnostics->gaia_median = sortedMedian(gaia_values);
     }
 
-    const double bin_width = (range_high - range_low)
-        / static_cast<double>(histogram_bins);
-    if (!std::isfinite(bin_width) || bin_width <= 0.0) return false;
+    bool pilot_uses_gaia = has_gaia_support;
+    int pilot_input_count = pilot_uses_gaia
+        ? static_cast<int>(gaia_values.size())
+        : static_cast<int>(values.size());
+    PSFCountPilotEstimate pilot;
+    bool pilot_valid = estimatePSFCountPilot(
+        pilot_uses_gaia ? gaia_values : values,
+        config.pilot_clip_sigma,
+        config.pilot_clip_iterations,
+        config.zero_mad_quantile,
+        config.histogram_range_sigma,
+        pilot);
+    if (pilot_uses_gaia
+        && (!pilot_valid
+            || pilot.retained_count < config.minimum_gaia_matches)) {
+        pilot_uses_gaia = false;
+        pilot_input_count = static_cast<int>(values.size());
+        pilot = {};
+        pilot_valid = estimatePSFCountPilot(
+            values,
+            config.pilot_clip_sigma,
+            config.pilot_clip_iterations,
+            config.zero_mad_quantile,
+            config.histogram_range_sigma,
+            pilot);
+    }
+    if (!pilot_valid) return false;
 
-    std::vector<double> histogram(static_cast<std::size_t>(histogram_bins), 0.0);
+    if (diagnostics != nullptr) {
+        diagnostics->pilot_uses_gaia = pilot_uses_gaia;
+        diagnostics->pilot_input_count = pilot_input_count;
+        diagnostics->pilot_retained_count = pilot.retained_count;
+        diagnostics->pilot_center = pilot.center;
+        diagnostics->pilot_width = pilot.width;
+        diagnostics->pilot_lower = pilot.lower;
+        diagnostics->pilot_upper = pilot.upper;
+        diagnostics->pilot_uses_quantile_range = pilot.uses_quantile_range;
+        diagnostics->pilot_rejected_zero_mad_clip =
+            pilot.rejected_zero_mad_clip;
+    }
+
+    int histogram_first_count = std::max(
+        1, static_cast<int>(std::ceil(pilot.lower)));
+    int histogram_last_count = static_cast<int>(std::floor(pilot.upper));
+    if (histogram_first_count > histogram_last_count) {
+        const std::vector<double>& source = pilot_uses_gaia
+            ? gaia_values : values;
+        if (source.empty()) return false;
+        int nearest = static_cast<int>(std::llround(source.front()));
+        double nearest_distance = std::abs(
+            static_cast<double>(nearest) - pilot.center);
+        for (double value : source) {
+            const int observed = static_cast<int>(std::llround(value));
+            const double distance = std::abs(value - pilot.center);
+            if (distance < nearest_distance
+                || (distance == nearest_distance && observed < nearest)) {
+                nearest = observed;
+                nearest_distance = distance;
+            }
+        }
+        histogram_first_count = nearest;
+        histogram_last_count = nearest;
+    }
+    const int histogram_bin_count =
+        (histogram_last_count - histogram_first_count)
+            / PSFCountHistogramBinWidth + 1;
+    if (histogram_bin_count <= 0) return false;
+
+    std::vector<double> histogram(
+        static_cast<std::size_t>(histogram_bin_count), 0.0);
+    std::vector<double> domain_values;
+    domain_values.reserve(values.size());
+    int histogram_sample_count = 0;
+    int histogram_below_count = 0;
+    int histogram_above_count = 0;
     for (double value : values) {
-        if (value < range_low || value > range_high) continue;
-        int bin = static_cast<int>((value - range_low) / bin_width);
-        bin = std::clamp(bin, 0, histogram_bins - 1);
+        const int star_area = static_cast<int>(std::llround(value));
+        if (star_area < histogram_first_count) {
+            histogram_below_count++;
+            continue;
+        }
+        if (star_area > histogram_last_count) {
+            histogram_above_count++;
+            continue;
+        }
+        const int bin = (star_area - histogram_first_count)
+            / PSFCountHistogramBinWidth;
         histogram[bin] += 1.0;
+        domain_values.push_back(value);
+        histogram_sample_count++;
     }
 
+    std::vector<double> gaia_histogram(
+        static_cast<std::size_t>(histogram_bin_count), 0.0);
+    int gaia_histogram_sample_count = 0;
+    int gaia_histogram_below_count = 0;
+    int gaia_histogram_above_count = 0;
+    for (double value : gaia_values) {
+        const int star_area = static_cast<int>(std::llround(value));
+        if (star_area < histogram_first_count) {
+            gaia_histogram_below_count++;
+            continue;
+        }
+        if (star_area > histogram_last_count) {
+            gaia_histogram_above_count++;
+            continue;
+        }
+        const int bin = (star_area - histogram_first_count)
+            / PSFCountHistogramBinWidth;
+        gaia_histogram[bin] += 1.0;
+        gaia_histogram_sample_count++;
+    }
+
+    const std::vector<double> working =
+        interpolateShortInternalHoles(histogram);
     const int offsets[] = {-2, -1, 0, 1, 2};
     const double weights[] = {1.0, 2.0, 3.0, 2.0, 1.0};
-    std::vector<double> smoothed(static_cast<std::size_t>(histogram_bins), 0.0);
-    for (int bin = 0; bin < histogram_bins; ++bin) {
+    std::vector<double> smoothed(
+        static_cast<std::size_t>(histogram_bin_count), 0.0);
+    for (int bin = 0; bin < histogram_bin_count; ++bin) {
         double weighted_sum = 0.0;
         double weight_sum = 0.0;
         for (int offset_index = 0; offset_index < 5; ++offset_index) {
             const int neighbour = bin + offsets[offset_index];
-            if (neighbour < 0 || neighbour >= histogram_bins) continue;
-            weighted_sum += weights[offset_index] * histogram[neighbour];
+            if (neighbour < 0 || neighbour >= histogram_bin_count) continue;
+            weighted_sum += weights[offset_index] * working[neighbour];
             weight_sum += weights[offset_index];
         }
         smoothed[bin] = weighted_sum / weight_sum;
     }
 
     std::vector<int> peaks;
-    for (int bin = 0; bin < histogram_bins; ++bin) {
+    for (int bin = 0; bin < histogram_bin_count; ++bin) {
         const double left = bin == 0 ? -1.0 : smoothed[bin - 1];
-        const double right = bin + 1 == histogram_bins ? -1.0 : smoothed[bin + 1];
+        const double right = bin + 1 == histogram_bin_count
+            ? -1.0
+            : smoothed[bin + 1];
         if (smoothed[bin] > 0.0 && smoothed[bin] >= left && smoothed[bin] >= right) {
             peaks.push_back(bin);
         }
     }
     if (peaks.empty()) return false;
 
-    int peak_bin = peaks.front();
-    if (static_cast<int>(gaia_values.size()) >= minimum_gaia_matches) {
-        const double gaia_median = sortedMedian(gaia_values);
-        double best_distance = std::numeric_limits<double>::infinity();
-        for (int candidate_peak : peaks) {
-            const double peak_center = range_low
-                + (static_cast<double>(candidate_peak) + 0.5) * bin_width;
-            const double distance = std::abs(peak_center - gaia_median);
-            if (distance < best_distance) {
-                best_distance = distance;
-                peak_bin = candidate_peak;
-            }
-        }
-    } else {
-        for (int candidate_peak : peaks) {
-            if (smoothed[candidate_peak] > smoothed[peak_bin]) {
-                peak_bin = candidate_peak;
-            }
-        }
+    const int peak_bin = selectPSFCountPeak(
+        peaks,
+        smoothed,
+        gaia_histogram,
+        histogram_first_count,
+        pilot.center,
+        pilot_uses_gaia);
+    if (peak_bin < 0) return false;
+    if (diagnostics != nullptr) {
+        diagnostics->histogram_sample_count = histogram_sample_count;
+        diagnostics->histogram_below_count = histogram_below_count;
+        diagnostics->histogram_above_count = histogram_above_count;
+        diagnostics->gaia_histogram_sample_count =
+            gaia_histogram_sample_count;
+        diagnostics->gaia_histogram_below_count =
+            gaia_histogram_below_count;
+        diagnostics->gaia_histogram_above_count =
+            gaia_histogram_above_count;
+        diagnostics->histogram_first_count = histogram_first_count;
+        diagnostics->histogram_last_count = histogram_last_count;
+        diagnostics->peak_bin = peak_bin;
+        diagnostics->histogram = histogram;
+        diagnostics->working_histogram = working;
+        diagnostics->smoothed_histogram = smoothed;
+        diagnostics->gaia_histogram = gaia_histogram;
     }
 
-    int basin_first = peak_bin;
-    while (basin_first > 0
-           && smoothed[basin_first - 1] <= smoothed[basin_first]) {
-        basin_first--;
-    }
-    int basin_last = peak_bin;
-    while (basin_last + 1 < histogram_bins
-           && smoothed[basin_last + 1] <= smoothed[basin_last]) {
-        basin_last++;
-    }
-
-    const double basin_low = range_low + static_cast<double>(basin_first) * bin_width;
-    const double basin_high = range_low
-        + static_cast<double>(basin_last + 1) * bin_width;
+    const PSFCountBinRange basin = findPSFCountPeakComplexBasin(
+        peaks, smoothed, peak_bin);
+    if (basin.first < 0 || basin.last < basin.first) return false;
+    const int basin_low = histogram_first_count
+        + PSFCountHistogramBinWidth * basin.first;
+    const int basin_high = std::min(
+        histogram_last_count,
+        histogram_first_count
+            + PSFCountHistogramBinWidth * (basin.last + 1) - 1);
     std::vector<double> population;
     for (double value : values) {
-        if (value >= basin_low && value <= basin_high) population.push_back(value);
+        if (value >= static_cast<double>(basin_low)
+            && value <= static_cast<double>(basin_high)) {
+            population.push_back(value);
+        }
     }
     if (population.size() < 3) {
         const int fallback_first = std::max(0, peak_bin - 2);
-        const int fallback_last = std::min(histogram_bins - 1, peak_bin + 2);
-        const double fallback_low = range_low
-            + static_cast<double>(fallback_first) * bin_width;
-        const double fallback_high = range_low
-            + static_cast<double>(fallback_last + 1) * bin_width;
+        const int fallback_last = std::min(
+            histogram_bin_count - 1, peak_bin + 2);
+        const int fallback_low = histogram_first_count
+            + PSFCountHistogramBinWidth * fallback_first;
+        const int fallback_high = std::min(
+            histogram_last_count,
+            histogram_first_count
+                + PSFCountHistogramBinWidth * (fallback_last + 1) - 1);
         population.clear();
         for (double value : values) {
-            if (value >= fallback_low && value <= fallback_high) {
+            if (value >= static_cast<double>(fallback_low)
+                && value <= static_cast<double>(fallback_high)) {
                 population.push_back(value);
             }
         }
     }
     if (population.empty()) return false;
 
-    const double spacing_floor = std::isfinite(minimum_spacing)
-        ? std::max(bin_width, minimum_spacing)
-        : bin_width;
-    double center = 0.0;
-    double width = 0.0;
-    for (int iteration = 0; iteration < 2; ++iteration) {
-        if (!medianAndMad(population, center, width)) return false;
-        width = std::max(width, spacing_floor);
-        std::vector<double> clipped;
-        clipped.reserve(population.size());
-        for (double value : population) {
-            if (std::abs(value - center) <= sigma_cut * width) {
-                clipped.push_back(value);
-            }
-        }
-        if (clipped.empty() || clipped.size() == population.size()) break;
-        population.swap(clipped);
-    }
-    if (!medianAndMad(population, center, width)) return false;
-    width = std::max(width, spacing_floor);
+    const PSFCountRefinement refinement = refinePSFCountPopulation(
+        population, domain_values, config.locus_sigma, 2);
+    if (!refinement.valid) return false;
+    const double mad_lower = refinement.center
+        - config.locus_sigma * refinement.lower_width;
+    const double mad_upper = refinement.center
+        + config.locus_sigma * refinement.upper_width;
+    const PSFCountElbows elbows = findPSFCountOuterElbows(
+        smoothed, peak_bin);
+    const double left_elbow = elbows.left >= 0
+        ? psfCountHistogramBinCenter(histogram_first_count, elbows.left)
+        : mad_lower;
+    const double right_elbow = elbows.right >= 0
+        ? psfCountHistogramBinCenter(histogram_first_count, elbows.right)
+        : mad_upper;
 
     locus.valid = true;
-    locus.center = center;
-    locus.width = width;
-    locus.lower = center - sigma_cut * width;
-    locus.upper = center + sigma_cut * width;
-    locus.histogram_bin_width = bin_width;
+    locus.center = refinement.center;
+    locus.lower_width = refinement.lower_width;
+    locus.upper_width = refinement.upper_width;
+    locus.lower = std::min(mad_lower, left_elbow);
+    locus.upper = std::max(mad_upper, right_elbow);
+    if (diagnostics != nullptr) {
+        diagnostics->mad_lower = mad_lower;
+        diagnostics->mad_upper = mad_upper;
+        diagnostics->left_elbow_bin = elbows.left;
+        diagnostics->right_elbow_bin = elbows.right;
+        diagnostics->left_elbow_guard_applied =
+            elbows.left >= 0 && left_elbow < mad_lower;
+        diagnostics->right_elbow_guard_applied =
+            elbows.right >= 0 && right_elbow > mad_upper;
+    }
     return std::isfinite(locus.lower) && std::isfinite(locus.upper);
+}
+
+// ==========================================
+// Function: Populate one integer-area histogram on the science count grid
+// Method: Reset the output bins and count only in-range integer star areas.
+// ==========================================
+static void populateCountHistogramOnScienceGrid(
+    const std::vector<int>& star_areas,
+    int histogram_first_count,
+    int histogram_last_count,
+    std::size_t histogram_bin_count,
+    std::vector<double>& output_histogram) {
+    output_histogram.assign(histogram_bin_count, 0.0);
+    if (histogram_bin_count == 0) return;
+
+    const int first_count = histogram_first_count;
+    const int last_count = histogram_last_count;
+    if (last_count < first_count) return;
+    for (int star_area : star_areas) {
+        if (star_area < first_count || star_area > last_count) continue;
+        const int bin = (star_area - first_count)
+            / PSFCountHistogramBinWidth;
+        if (bin < 0 || bin >= static_cast<int>(histogram_bin_count)) continue;
+        output_histogram[static_cast<std::size_t>(bin)] += 1.0;
+    }
+}
+
+// ==========================================
+// Function: Populate the minChi-survivor integer-area histogram
+// Method: Count all actual grouping inputs and bin only values on the science
+//         grid without changing upstream count-locus diagnostics.
+// ==========================================
+void populateMinChiSurvivorCountHistogram(
+    const std::vector<int>& minchi_star_areas,
+    PSFCountLocusDiagnostics& diagnostics) {
+    diagnostics.minchi_survivor_count =
+        static_cast<int>(minchi_star_areas.size());
+    populateCountHistogramOnScienceGrid(
+        minchi_star_areas,
+        diagnostics.histogram_first_count,
+        diagnostics.histogram_last_count,
+        diagnostics.histogram.size(),
+        diagnostics.minchi_survivor_histogram);
+}
+
+// ==========================================
+// Function: Populate the historical pre-PRESS integer-area histogram
+// Method: Count all selected stars for any grouping type on the science grid
+//         without changing upstream count-locus diagnostics.
+// ==========================================
+void populateSelectedGroupCountHistogram(
+    const std::vector<int>& selected_star_areas,
+    PSFCountLocusDiagnostics& diagnostics) {
+    diagnostics.selected_group_count =
+        static_cast<int>(selected_star_areas.size());
+    populateCountHistogramOnScienceGrid(
+        selected_star_areas,
+        diagnostics.histogram_first_count,
+        diagnostics.histogram_last_count,
+        diagnostics.histogram.size(),
+        diagnostics.selected_group_histogram);
 }
 
 // ==========================================
@@ -511,13 +1602,13 @@ MinChiPairResult computeMinChiAndThresholdPairs(
     result.min_chi.assign(
         candidates.size(), std::numeric_limits<float>::infinity());
     for (std::size_t first = 0; first + 1 < candidates.size(); ++first) {
-        if (!candidates[first].in_fwhm_locus
+        if (!candidates[first].in_size_locus
             || candidates[first].chi_window == nullptr) {
             continue;
         }
         for (std::size_t second = first + 1;
              second < candidates.size(); ++second) {
-            if (!candidates[second].in_fwhm_locus
+            if (!candidates[second].in_size_locus
                 || candidates[second].chi_window == nullptr) {
                 continue;
             }

@@ -1,4 +1,5 @@
 #include "process_main/UniversalUtils.hpp"
+#include "general/CatalogTileNaming.hpp"
 #include "process_main/PSFStarSelection.hpp"
 #include "process_main/FitsIO.hpp"
 #include "process_main/LinearSolve.hpp"
@@ -521,7 +522,14 @@ namespace UniversalUtils {
         return generateGaiaFileName(baseDir, cRVAL, dummy_proc_error);
     }
 
-    std::vector<std::string> generateGalCatFileNames(const std::string& baseDir, const double cRVAL[2]) {
+    // ==========================================
+    // Function: Build nearby one-degree catalog tile paths
+    // Method: Apply the caller-selected catalog prefix through the shared basename grammar.
+    // ==========================================
+    std::vector<std::string> generateGalCatFileNames(
+        const std::string& baseDir,
+        const double cRVAL[2],
+        std::string_view tile_prefix) {
         double ra_val = cRVAL[0];
         double dec_val = cRVAL[1];
         double m_dec = 1.0;
@@ -545,30 +553,7 @@ namespace UniversalUtils {
         int ra2 = static_cast<int>(std::floor(ra_val + m_ra));
 
         std::vector<std::string> filenames;
-        std::string prefix = baseDir + "/des_y6_";
-
         for (int dec = dec1; dec <= dec2; ++dec) {
-            std::string c_dec1, c_dec2;
-            {
-                std::ostringstream oss;
-                if (dec >= 0) {
-                    oss << "p" << std::setw(2) << std::setfill('0') << dec;
-                } else {
-                    oss << "m" << std::setw(2) << std::setfill('0') << std::abs(dec);
-                }
-                c_dec1 = oss.str();
-            }
-            {
-                std::ostringstream oss;
-                int dec_next = dec + 1;
-                if (dec_next >= 0) {
-                    oss << "p" << std::setw(2) << std::setfill('0') << dec_next;
-                } else {
-                    oss << "m" << std::setw(2) << std::setfill('0') << std::abs(dec_next);
-                }
-                c_dec2 = oss.str();
-            }
-
             for (int ra = ra1; ra <= ra2; ++ra) {
                 int mra = ra;
                 if (ra < 0) {
@@ -577,21 +562,10 @@ namespace UniversalUtils {
                     mra -= 360;
                 }
 
-                std::string c_ra1, c_ra2;
-                {
-                    std::ostringstream oss;
-                    oss << std::setw(3) << std::setfill('0') << mra;
-                    c_ra1 = oss.str();
-                }
-                {
-                    std::ostringstream oss;
-                    int mra_next = mra + 1;
-                    oss << std::setw(3) << std::setfill('0') << mra_next;
-                    c_ra2 = oss.str();
-                }
-
-                std::string fname = prefix + "RA_" + c_ra1 + "_" + c_ra2 + "_Dec_" + c_dec1 + "_" + c_dec2 + ".dat";
-                filenames.push_back(fname);
+                filenames.push_back(
+                    baseDir + "/"
+                    + CatalogTileNaming::tileFilename(
+                        tile_prefix, mra, dec));
             }
         }
         return filenames;

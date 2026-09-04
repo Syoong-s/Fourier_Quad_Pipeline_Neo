@@ -73,11 +73,55 @@ Eigen 单独安装时再传入 `EIGEN_INCLUDE=/opt/eigen/include/eigen3`。当�
 Lite Makefile 只公开 `all` 和 `clean`；`make` 等同于 `make all`。修改编译期配置或
 工具链后，先执行 `make clean` 再重新编译。
 
-Stage 5 使用所有同 CCD FWHM-locus 配对计算每颗候选体的 minChi，但曝光阈值只由
+Stage 5 使用所有同 CCD star-area-locus 配对计算每颗候选体的 minChi，但曝光阈值只由
 触及受限大尺寸 reference 的唯一配对估计。raw analytic PRESS 保留为诊断；可选 rejection
 使用 leverage-standardized PRESS 和受保护的临时重拟合。关闭 rejection、触发删除保护或
 重拟合失败时均保留合法 first fit。这些科学开关仍是编译期设置，已有运行时 PSF 模式、
 芯片几何与 direct stamp-cube I/O 不变。
+
+Stage 5 将中心值 `exp(-1)` 阈值以上的 Fourier 像素精确整数个数保存为私有候选参数
+index 12 `star_area`，并用它进行曝光级 locus 科学选择。Cpp 的 Stage-5 私有行仅为此
+增加一个槽，`src_npara` 仍为 12，外部 catalog 格式不变。index 7 仍是 minChi reference
+排序使用的 0.02 阈值 legacy area，index 10 仍保存 FWHM。正 MAD 的 Gaia pilot
+（不足时退回全部候选）最多执行三轮 3-MAD clipping，并仅接受下一 population 仍为
+正 MAD 的 clip，然后使用局部 ±5-MAD range。初始 MAD 为零时保留完整输入，使用无
+padding 的插值 `Q(q)--Q(1-q)` bounds；
+`q = LensingConfig::psf_count_zero_mad_quantile`，默认 `0.05`。
+
+科学 histogram 的 bin 宽固定为 2 个整数 count level，名义中心为
+`first + 2 * bin + 0.5`，diagnostics 同时保存 pilot domain 实际包含的首末整数。
+raw count 始终不修改；只在 working histogram 中对两侧由正值封闭的 1 或 2 个 bin
+（即 2 或 4 个 count）的内部空洞做线性插值，再进行不变的 1-2-3-2-1 平滑。Gaia
+峰资格以名义 bin center 的全局最近距离再加 1 count 为界。所有严格满足
+`H > H_selected / e` 的局部峰组成一个 peak complex，不考虑内部 valley；seed basin
+从最外侧有效峰向外下降，遇到下一次上升停止。随后两轮不对称 MAD refinement 每轮都
+从 pilot histogram domain 内全部真实样本重建 population，允许重新吸收；等于中心的
+重复值仍不进入两侧 MAD，宽度下限仍为 1 count。左右两侧各自从第一个严格低于所选峰
+高度 10% 的 bin 向边界搜索，选择最大正有符号二阶差分作为 elbow；可用 elbow 只能向外
+放宽 pre-guard MAD cut。生产选择继续采用严格的 star-area cuts。
+
+`PsfGroupingType = 3` 保留同一套质量、Gaia/star-area、归一化窗口和 minChi 门控，
+随后完全绕过两种 graph grouping。曝光级 Freedman-Diaconis 的 IQR、范围和 histogram
+仍使用所有 minChi survivor 的同芯片、无序、有限 pair chi，但宽度的 `n^(-1/3)` 项
+使用全部 minChi survivor 星数，而不是高度相关的 pair 数。1-2-3-2-1 平滑只做边界归一化，
+不填空洞，plateau 峰折叠到较低的中间 bin。局部峰必须严格满足 `H > H_main / e`；
+从最右有效峰到其右侧第一个无效峰之间选择最大正有符号二阶差分，以对应 bin center
+为 pair chi cut，只有严格大于 cut 的 pair 才算 bad。第二次同芯片 pair pass 计算每颗
+星的 `bad / finite` 比例；FD 宽度只使用正比例（其 IQR 为零时用最小正值），但原点固定
+为零的 histogram 会包含所有零值，并用严格的 `H > 0.10 H_main` 峰规则。等于 fraction
+cut 的星保留；估计失败采用 fail-open，全零比例不增加拒绝；pair stage 成功后没有有限
+分母的星不能通过，且每芯片仍必须至少保留 `nstar_min_local` 颗星。`PSF_TYPE3_*` 日志
+完整记录两级 grid、峰、elbow、cut 与 fail-open 决策，并以 `fd_samples` 和
+`fd_scale_samples` 分别报告 distribution 与宽度缩放所用的样本数。
+
+两版仍写出 `stamps/svg_StarLocus/<exposure>_locus.svg`，但横轴现在直接使用科学选择的
+整数 `exp(-1)` pixel count。每个 histogram bin 覆盖两个整数 count level；raw、
+smoothed、Gaia、精确的 minChi 后/grouping 前 survivor，以及最终 PRESS 前 selected
+分布连同 pilot、所选峰、Gaia median、pre-guard MAD cuts、可用的左右
+elbow 和最终 guarded cuts 均使用同一 count grid。历史
+index-10 FWHM 及各版本原有 pixel-scale 来源仍供
+非 locus 消费者使用，但 SVG 不再读取或映射 FWHM。固定目录由 `process_init` 创建；旧
+数据树若跳过初始化，必须提前补齐。
 
 ## 配置
 
@@ -103,6 +147,11 @@ Lite 会拒绝 Standard 专属键；未知段、未知键、无效值及不一�
 `process_astrocat` 生成的一度瓦片。生产者路径 `[astrocat].output_directory` 与消费者
 路径 `[lensing].astrometry_cat` 始终是两个独立设置；若同一次运行的后续阶段需要消费
 新发布的瓦片，应显式分别配置两者。
+
+`PathConfig::ASTROMETRY_TILE_PREFIX` 与
+`PathConfig::SOURCE_CAT_TILE_PREFIX` 分别控制 Type-2 Gaia 和外部源星表的一度瓦片。
+前缀不包含固定的 `RA_`；生产、消费及已有输出识别使用同一配置值。这两个前缀仅在
+编译时配置，修改后不会继续识别旧前缀文件。
 
 CLI 同时接受 `--name value` 与 `--name=value`。布尔值接受 `true/false`、`1/0`、
 `yes/no`、`on/off`。首次显式 `--dataset`、`--contains`、`--extcat-contains` 会替换
@@ -151,15 +200,15 @@ INI 与 CLI 只覆盖 RuntimeConfig 副本，不会修改头文件或其编译�
 | 曝光表与阶段输出 | `[process].expo_list`、`rearr_output_directory`、`rearr_output_base_directory`、`rearranged_expo_list_filename`、`rearranged_expo_list_directory`、`fd_expo_list`、`fd_output_directory`、`fd_output_base_directory` | INI；对应 CLI 为 `--expo-list`、`--rearr-output-dir`、`--rearr-output-base`、`--rearr-list-name`、`--rearr-list-dir`、`--fd-expo-list`、`--fd-output-dir`、`--fd-output-base` | 下游单独运行，或改变重排/FD 输出目录和曝光表位置时修改。 |
 | 固定生成布局 | `SKIP_DIRECTORY_NAME`、`SUBCAT_PREFIX`、`SUBCAT_EXTENSION`、`SUMMARY_FILENAME`、`NON_CHIP_BASE_DIRECTORIES`、`CHIP_PRODUCT_DIRECTORIES` | `config/pathconfig.hpp`，编译时 | 仅在发布星表命名或相对输出目录约定变化时修改；重编译并重新生成受影响产物。 |
 | Gaia 星表分块 | `[astrocat].input_directory`、`output_directory`、`add_header=true`、`existing_policy=fail` | INI；运行时 `--astrocat-input`、`--astrocat-output`、`--astrocat-add-header`、`--astrocat-existing` | 更换 Gaia 原始星表或重跑策略时修改。输出只属于 `process_astrocat`，不会传播到 `[lensing].astrometry_cat`。 |
-| Gaia 星表布局 | `[lensing].astrometry_cat_type=1`、`astrometry_cat` | INI，运行时 | `1` 读取旧式大 `gaia_*.cat` 瓦片；`2` 累积读取 `process_astrocat` 生成的一度 `des_y6_*.dat` 瓦片。切换布局时同时指向对应消费目录，无需重编译。 |
-| 外部星表发现与发布 | `[extcat].input_directory`、`output_directory` | INI；运行时 `--extcat-input`、`--extcat-output` | 更换 External source catalog 的原始目录或规范化瓦片目录时修改。输出目录不能等于或位于输入目录内；它同时是有效的 `SOURCE_CAT`。 |
+| Gaia 星表布局 | `[lensing].astrometry_cat_type=1`、`astrometry_cat`；`ASTROMETRY_TILE_PREFIX="astra_"` | 布局/路径由 INI 运行时设置；前缀在 `config/pathconfig.hpp` 编译时设置 | `1` 读取旧式大 `gaia_*.cat` 瓦片；`2` 累积读取 `process_astrocat` 生成的一度 `<prefix>RA_*.dat` 瓦片。切换布局时同时指向消费目录；修改前缀后需重编译。 |
+| 外部星表发现与发布 | `[extcat].input_directory`、`output_directory`；`SOURCE_CAT_TILE_PREFIX="extern_"` | 路径由 INI/CLI 运行时设置；前缀在 `config/pathconfig.hpp` 编译时设置 | 更换 External source catalog 的原始目录或规范化瓦片目录时修改。输出目录不能等于或位于输入目录内；它同时是有效的 `SOURCE_CAT`，生产者与消费者共用该前缀。 |
 | 外部星表 schema | `[extcat].total_columns`、`use_explicit_columns`、`input_columns`、`use_explicit_coordinate_columns`、`ra_column`、`dec_column`、`zp_column` | INI；投影和 RA/Dec/ZP 列可用 `--extcat-columns`、`--extcat-ra-column`、`--extcat-dec-column`、`--extcat-zp-column` 覆盖 | 更换 survey 或列顺序时修改。显式投影必须保留 RA、Dec、photo-z 以及启用阶段需要的字段；完整行宽和下游偏移由 `CatalogLayout` 自动解析。 |
 | FD magnitude 映射 | `[extcat].mag_g_column`、`mag_r_column`、`mag_i_column`、`mag_z_column`、`mag_y_column` | INI，运行时；`0` 表示该波段不存在 | 更换 survey/band schema 时修改。显式投影应保留所用 magnitude；`process_fd` 至少需要一个波段，并按 `i -> z -> r -> g -> y` 选择首个可用列，无需手工修改 FD 偏移。 |
 | 标定路径与 Standard 分支 | `[lensing].flat_path`、`psf_path`、`astrometry_trivial=0`、`include_flat=0`、`include_mask=2`、`ext_cat=1`、`ext_psf=0`、`psf_type=1`、`psf_ms=0` | Standard 的 INI 运行时设置；Lite 拒绝这些已删除分支键 | 更换平场/外部 PSF 数据或选择替代科学分支时修改。Lite 固定为 Gaia、无平场、逐 CCD DQ、外部源星表、帧内 PSF、局域多项式且无 PCA。 |
-| 图像与探测器几何 | `[lensing].ccd_split=2`、`pixel_size=0.2628`、`nmax_chip=62`、`chipnx=2046`、`chipny=4094`；编译时 `ns=64`、`chip_margin=8` | 前五项为 INI 运行时；后两项在 `config/LensingConfig.hpp` 中修改并重编译 | 更换相机、放大器布局、像元尺度、PSF map 几何或 stamp 尺寸时成组核对。Science FITS 的实际轴长由文件动态读取；本仓库没有固定 `npx/npy` 设置。 |
+| 图像与探测器几何 | `[lensing].ccd_split=2`、`pixel_size=0.2628`、`nmax_chip=62`、`chipnx=2046`、`chipny=4094`；编译时 `ns=64`、`chip_margin=8` | 前五项为 INI 运行时；后两项在 `config/LensingConfig.hpp` 中修改并重编译 | 更换相机、放大器布局、像元尺度、PSF map 几何或 stamp 尺寸时成组核对。Stage 1 动态读取 Science FITS 轴长；成功的 Standard Hybrid PSF 图与 FD 边界使用有效运行时 `chipnx/chipny`。本仓库没有固定 `npx/npy`。 |
 | 数值阶段 | `[lensing].process_stage=223092870` | INI，运行时 | 用素因数选择九个主流程阶段；阶段 9（23）必须与阶段 8（19）同时启用。 |
 | 源检测与像素阈值 | `saturation_thresh=25000` | `config/LensingConfig.hpp`，编译时 | 更换图像源、增益或饱和定义后，以代表性数据重新标定并重编译。 |
-| FD 探测器规则 | `bad_ccds={2,31,53,61}`、`chip_xmin=50`、`chip_xmax=1990`、`chip_ymin=100`、`chip_ymax=3990` | `config/FDConfig.hpp`，编译时 | 更换相机、坏 CCD 清单或边缘 mask 策略时修改；`n_bad_ccds` 是派生长度，不应单独改。 |
+| FD 探测器规则 | `bad_ccds={}`、`chip_mask_edge=50` | `config/FDConfig.hpp`，编译时 | 接受闭区间按有效运行时几何自动生成为 `[edge, chipnx-edge]` 与 `[edge, chipny-edge]`。更换相机、坏 CCD 清单或边缘策略时修改；`n_bad_ccds` 为派生长度。 |
 
 每个独立参数的 Standard/Lite 默认值、合法值、INI/CLI 覆盖和重编译要求见
 [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md)。修改高耦合参数时，应保留基准

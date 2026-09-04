@@ -1,4 +1,5 @@
 #include "process_init/Initializer.hpp"
+#include "Initialize.hpp"
 #include "general/MPIUtils.hpp"
 #include "general/MPIScheduler.hpp"
 #include "general/OutputLayout.hpp"
@@ -30,8 +31,6 @@ namespace fqinit {
 namespace {
 
 namespace fs = std::filesystem;
-
-constexpr const char* kArchiveSuffix = ".fits.fz";
 
 struct Task {
     ProductKind kind = ProductKind::Science;
@@ -88,7 +87,7 @@ bool matchesAnyToken(const std::string& filename,
 
 // ==========================================
 // Function: Discover matching archives below one immutable source root
-// Method: Recursively collect regular .fits.fz files, apply basename filters,
+// Method: Recursively collect files with the configured archive suffix, apply basename filters,
 //         normalize absolute paths, and sort the in-memory result.
 // ==========================================
 std::vector<fs::path> discoverArchives(const fs::path& root,
@@ -116,7 +115,7 @@ std::vector<fs::path> discoverArchives(const fs::path& root,
         }
         if (regular) {
             const std::string filename = entry.path().filename().string();
-            if (endsWith(filename, kArchiveSuffix)
+            if (endsWith(filename, Initialize::ARCHIVE_SUFFIX)
                 && startsWith(filename, prefix)
                 && matchesAnyToken(filename, tokens)) {
                 paths.push_back(PathUtils::normalizedAbsolute(entry.path()));
@@ -134,7 +133,7 @@ std::vector<fs::path> discoverArchives(const fs::path& root,
 
 // ==========================================
 // Function: Reject source archives that would target the same output exposure
-// Method: Compare science stems directly and DQ stems after ood-to-ooi mapping.
+// Method: Compare science stems directly and DQ stems after configured replacement.
 // ==========================================
 void validateUniqueStems(const std::vector<fs::path>& paths, ProductKind kind) {
     std::map<std::string, fs::path> seen;
@@ -449,7 +448,8 @@ std::string makeManifest(const Config& config,
              << "  \"copy_staging\": false,\n"
              << "  \"exposure_order\": \"corrected_lexical_no_rotation\",\n"
              << "  \"science_numbering\": \"two_dimensional_hdu_occurrence\",\n"
-             << "  \"dq_numbering\": \"CCDNUM\",\n"
+             << "  \"dq_numbering\": \""
+             << jsonEscape(Initialize::CCDNUM_KEYWORD) << "\",\n"
              << "  \"science_root\": \"" << jsonEscape(config.science_root.string()) << "\",\n"
              << "  \"dq_root\": \"" << jsonEscape(config.dq_root.string()) << "\",\n"
              << "  \"output_root\": \"" << jsonEscape(config.output_root.string()) << "\",\n"
@@ -556,10 +556,14 @@ int runInitializer(const Config& input_config) {
             dq_sources = discoverArchives(
                 config.dq_root, config.filename_prefix, config.filename_tokens);
             if (science_sources.empty()) {
-                throw std::runtime_error("no matching science .fits.fz archives were found");
+                throw std::runtime_error(
+                    "no matching science " + std::string(Initialize::ARCHIVE_SUFFIX)
+                    + " archives were found");
             }
             if (dq_sources.empty()) {
-                throw std::runtime_error("no matching DQ .fits.fz archives were found");
+                throw std::runtime_error(
+                    "no matching DQ " + std::string(Initialize::ARCHIVE_SUFFIX)
+                    + " archives were found");
             }
             validateUniqueStems(science_sources, ProductKind::Science);
             validateUniqueStems(dq_sources, ProductKind::DqMask);

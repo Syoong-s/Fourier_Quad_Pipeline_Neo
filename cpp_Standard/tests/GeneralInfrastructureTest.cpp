@@ -86,6 +86,12 @@ int main(int argc, char** argv) {
                        "pipeline records were not preserved")
                && local_ok;
     local_ok = require(
+                   ExposureList::loadPipelineList(
+                       (root / "pipeline.list").string(), entries, 0, error)
+                       && entries.size() == 2,
+                   "zero must select unlimited pipeline-list loading: " + error)
+               && local_ok;
+    local_ok = require(
                    !ExposureList::loadPipelineList(
                        (root / "truncated.list").string(), entries, 2, error),
                    "truncated pipeline record was accepted")

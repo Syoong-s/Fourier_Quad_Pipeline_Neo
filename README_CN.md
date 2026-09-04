@@ -137,9 +137,10 @@ images 天区，并直接存放在 `[lensing].astrometry_cat` 目录下（编译
 
 **Type 2（1 度分片）：**
 
-- `des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`，RA 边界固定为三位数字，
-  Dec 边界由 `p` 或 `m` 加两位绝对值组成。
-- 示例：`des_y6_RA_123_124_Dec_m05_m04.dat` 覆盖
+- `<ASTROMETRY_TILE_PREFIX>RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`。
+  `config/pathconfig.hpp` 中默认前缀为 `astra_`，前缀本身不含 `RA_`。RA 边界固定为
+  三位数字，Dec 边界由 `p` 或 `m` 加两位绝对值组成。
+- 示例：`astra_RA_123_124_Dec_m05_m04.dat` 覆盖
   `123° <= RA < 124°`、`-5° <= Dec < -4°`。
 
 可选的 `process_astrocat` 阶段会读取原始 Gaia 目录下的直接常规文件，转换为 Type 2
@@ -166,12 +167,13 @@ images 天区，并直接存放在 `[lensing].astrometry_cat` 目录下（编译
 
 **文件名规范：**
 
-- 1° × 1° 分片：`des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`。
+- 1° × 1° 分片：`<SOURCE_CAT_TILE_PREFIX>RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`。
+- `config/pathconfig.hpp` 中默认 `SOURCE_CAT_TILE_PREFIX` 为 `extern_`，前缀本身不含 `RA_`。
 - RA 边界固定为三位数字；Dec 边界由 `p` 或 `m` 加两位绝对值组成；每个上边界比
   下边界大 1 度。
 - 单个文件必须包含一行表头。
 
-> 示例：`des_y6_RA_123_124_Dec_m05_m04.dat` 覆盖
+> 示例：`extern_RA_123_124_Dec_m05_m04.dat` 覆盖
 > `123° <= RA < 124°`、`-5° <= Dec < -4°`。
 
 ### DQ masks（可选）

@@ -146,6 +146,34 @@ void testInputFailures(TemporaryNormTree& tree) {
             "ReadError diagnostic must identify the derived norm path");
 }
 
+// ==========================================
+// Function: Verify compact FITS failure state and a true 1x1 Invalid norm
+// Method: Read one missing image, then serialize and classify the Stage-1
+//         unreadable-input product without a source HDU template.
+// ==========================================
+void testCompactReadFailureAndInvalidNorm(TemporaryNormTree& tree) {
+    int nx = 7;
+    int ny = 9;
+    std::vector<float> pixels(8, 0.0f);
+    require(!FitsIO::readImage(tree.imageFile(), nx, ny, pixels),
+            "missing FITS input must fail");
+    require(pixels.size() == 1 && pixels[0] == -99999.0f,
+            "failed FITS read must return one sentinel pixel");
+
+    require(FitsIO::writeImage(tree.normFile(), 1, 1, {1.0f}),
+            "1x1 Invalid norm write failed");
+    nx = 0;
+    ny = 0;
+    pixels.clear();
+    require(FitsIO::readImage(tree.normFile(), nx, ny, pixels)
+                && nx == 1 && ny == 1
+                && pixels.size() == 1 && pixels[0] == 1.0f,
+            "1x1 Invalid norm did not round-trip");
+    require(Universalblock::checkNorm(tree.imageFile(), tree.outputRoot())
+                == Universalblock::NormStatus::Invalid,
+            "1x1 positive sentinel must classify as Invalid");
+}
+
 }  // namespace
 
 // ==========================================
@@ -154,6 +182,7 @@ void testInputFailures(TemporaryNormTree& tree) {
 // ==========================================
 int main() {
     TemporaryNormTree tree;
+    testCompactReadFailureAndInvalidNorm(tree);
     testSentinelClassification(tree);
     testInputFailures(tree);
     std::cout << "Universalblock tests passed\n";

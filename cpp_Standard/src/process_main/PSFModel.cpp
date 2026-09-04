@@ -30,6 +30,8 @@
 #include <complex>
 #include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
 
 // Extern variables defined elsewhere (e.g. main.cpp)
 
@@ -67,12 +69,17 @@ namespace PSFModel {
     void getPSFModelVeryLocal(const std::vector<float>& psfmap, double x, double y,
                               std::vector<float>& model, double& dmax,
                               int stride);
-    void genPSFFits(std::vector<float>& psfmap, int nums, int nx, int ny, const std::vector<float>& star, const std::vector<std::array<double, 2>>& posi);
+    void genPSFFits(std::vector<float>& psfmap, int nums,
+                    const std::vector<float>& star,
+                    const std::vector<std::array<double, 2>>& posi);
 
     void getPowerArea(int nx, int ny, const std::vector<float>& power, int& area, float thresh_ratio);
     void getPowerE(int nx, int ny, const std::vector<float>& power, std::array<double, 2>& e, float thresh_ratio);
     void getPowerAll(int nx, int ny, const std::vector<float>& power, std::array<double, 2>& e, double& size, float thresh_ratio);
-    void getPSFFWHM(const std::vector<float>& power, double& FWHM);
+    void getPSFFWHM(
+        const std::vector<float>& power,
+        double& FWHM,
+        int& star_area);
 
     // ==========================================
     // Function: Validate one PSF fitting sample
@@ -91,6 +98,452 @@ namespace PSFModel {
             }
         }
         return true;
+    }
+
+    // ==========================================
+    // Function: Escape arbitrary text for an SVG XML text node
+    // Method: Replace all five XML-sensitive characters with entity references.
+    // ==========================================
+    static std::string escapeSVGText(const std::string& text) {
+        std::string escaped;
+        escaped.reserve(text.size());
+        for (const char character : text) {
+            switch (character) {
+                case '&': escaped += "&amp;"; break;
+                case '<': escaped += "&lt;"; break;
+                case '>': escaped += "&gt;"; break;
+                case '"': escaped += "&quot;"; break;
+                case '\'': escaped += "&apos;"; break;
+                default: escaped += character; break;
+            }
+        }
+        return escaped;
+    }
+
+    // ==========================================
+    // Function: Write one exposure-level integer-area locus SVG diagnostic
+    // Method: Render the same-pass two-count histograms, pilot/peak/MAD/elbow
+    //         decisions, and final guarded cuts before PRESS rejection.
+    // ==========================================
+    static void writePSFCountLocusSVG(
+        const std::string& dirOutput,
+        const std::string& exposure,
+        const Internal::PSFCountLocus& locus,
+        const Internal::PSFCountLocusDiagnostics& diagnostics) {
+        if (!locus.valid || diagnostics.histogram.empty()
+            || diagnostics.histogram.size()
+                != diagnostics.smoothed_histogram.size()
+            || diagnostics.peak_bin < 0
+            || diagnostics.peak_bin
+                >= static_cast<int>(diagnostics.histogram.size())) {
+            return;
+        }
+        const std::size_t bin_count = diagnostics.histogram.size();
+        const int first_count = diagnostics.histogram_first_count;
+        const int last_count = diagnostics.histogram_last_count;
+        const int expected_bin_count = last_count >= first_count
+            ? (last_count - first_count)
+                / Internal::PSFCountHistogramBinWidth + 1
+            : 0;
+        if (expected_bin_count != static_cast<int>(bin_count)
+            || !std::isfinite(diagnostics.mad_lower)
+            || !std::isfinite(diagnostics.mad_upper)) {
+            return;
+        }
+        const double histogram_lower =
+            static_cast<double>(first_count) - 0.5;
+        const double histogram_upper =
+            static_cast<double>(first_count)
+                + static_cast<double>(Internal::PSFCountHistogramBinWidth)
+                    * static_cast<double>(bin_count) - 0.5;
+        const bool has_left_elbow = diagnostics.left_elbow_bin >= 0
+            && diagnostics.left_elbow_bin < static_cast<int>(bin_count);
+        const bool has_right_elbow = diagnostics.right_elbow_bin >= 0
+            && diagnostics.right_elbow_bin < static_cast<int>(bin_count);
+        const double left_elbow_value = has_left_elbow
+            ? Internal::psfCountHistogramBinCenter(
+                first_count, diagnostics.left_elbow_bin)
+            : 0.0;
+        const double right_elbow_value = has_right_elbow
+            ? Internal::psfCountHistogramBinCenter(
+                first_count, diagnostics.right_elbow_bin)
+            : 0.0;
+        const bool has_gaia_histogram =
+            !diagnostics.gaia_histogram.empty()
+            && diagnostics.gaia_histogram.size()
+                == diagnostics.histogram.size();
+        const bool has_minchi_survivor_histogram =
+            !diagnostics.minchi_survivor_histogram.empty()
+            && diagnostics.minchi_survivor_histogram.size()
+                == diagnostics.histogram.size();
+        const bool has_selected_group_histogram =
+            !diagnostics.selected_group_histogram.empty()
+            && diagnostics.selected_group_histogram.size()
+                == diagnostics.histogram.size();
+        std::ostringstream quantile_range_mode;
+        quantile_range_mode << "Q("
+                            << LensingConfig::psf_count_zero_mad_quantile
+                            << ")-Q("
+                            << 1.0 - LensingConfig::psf_count_zero_mad_quantile
+                            << ")";
+
+        constexpr double canvas_width = 1200.0;
+        constexpr double canvas_height = 1160.0;
+        constexpr double plot_left = 90.0;
+        constexpr double plot_right = 870.0;
+        constexpr double plot_top = 110.0;
+        constexpr double plot_bottom = 650.0;
+        const double plot_width = plot_right - plot_left;
+        const double plot_height = plot_bottom - plot_top;
+
+        double x_min = std::min(diagnostics.pilot_lower, locus.lower);
+        double x_max = std::max(diagnostics.pilot_upper, locus.upper);
+        x_min = std::min(x_min, histogram_lower);
+        x_max = std::max(x_max, histogram_upper);
+        x_min = std::min(x_min, diagnostics.pilot_center);
+        x_max = std::max(x_max, diagnostics.pilot_center);
+        x_min = std::min(x_min, diagnostics.mad_lower);
+        x_max = std::max(x_max, diagnostics.mad_upper);
+        if (has_left_elbow) x_min = std::min(x_min, left_elbow_value);
+        if (has_right_elbow) x_max = std::max(x_max, right_elbow_value);
+        if (diagnostics.has_gaia_median) {
+            x_min = std::min(x_min, diagnostics.gaia_median);
+            x_max = std::max(x_max, diagnostics.gaia_median);
+        }
+        const double x_padding = std::max((x_max - x_min) * 0.05, 1.0e-9);
+        x_min -= x_padding;
+        x_max += x_padding;
+
+        double y_max = 0.0;
+        for (const double count : diagnostics.histogram) {
+            y_max = std::max(y_max, count);
+        }
+        for (const double count : diagnostics.smoothed_histogram) {
+            y_max = std::max(y_max, count);
+        }
+        if (has_gaia_histogram) {
+            for (const double count : diagnostics.gaia_histogram) {
+                y_max = std::max(y_max, count);
+            }
+        }
+        if (has_minchi_survivor_histogram) {
+            for (const double count : diagnostics.minchi_survivor_histogram) {
+                y_max = std::max(y_max, count);
+            }
+        }
+        if (has_selected_group_histogram) {
+            for (const double count : diagnostics.selected_group_histogram) {
+                y_max = std::max(y_max, count);
+            }
+        }
+        y_max = std::max(1.0, y_max * 1.08);
+
+        const auto mapX = [&](double value) {
+            return plot_left + (value - x_min) / (x_max - x_min) * plot_width;
+        };
+        const auto mapY = [&](double value) {
+            return plot_bottom - value / y_max * plot_height;
+        };
+
+        const std::string filename = dirOutput + "/stamps/svg_StarLocus/"
+            + exposure + "_locus.svg";
+        MainIO::OutputFile output(filename);
+        output << std::fixed << std::setprecision(6);
+        output << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+               << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+               << canvas_width << "\" height=\"" << canvas_height
+               << "\" viewBox=\"0 0 " << canvas_width << ' ' << canvas_height
+               << "\">\n"
+               << "  <rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n"
+               << "  <text x=\"600\" y=\"38\" text-anchor=\"middle\" "
+                  "font-family=\"sans-serif\" font-size=\"24\" font-weight=\"bold\">"
+                  "PSF Star Pixel-Count Locus</text>\n"
+               << "  <text x=\"600\" y=\"68\" text-anchor=\"middle\" "
+                  "font-family=\"sans-serif\" font-size=\"16\">Exposure: "
+               << escapeSVGText(exposure) << "</text>\n";
+
+        for (int tick = 0; tick <= 5; ++tick) {
+            const double fraction = static_cast<double>(tick) / 5.0;
+            const double x_value = x_min + fraction * (x_max - x_min);
+            const double x = mapX(x_value);
+            const double y_value = fraction * y_max;
+            const double y = mapY(y_value);
+            output << "  <line x1=\"" << x << "\" y1=\"" << plot_top
+                   << "\" x2=\"" << x << "\" y2=\"" << plot_bottom
+                   << "\" stroke=\"#eeeeee\"/>\n"
+                   << "  <text x=\"" << x << "\" y=\"" << plot_bottom + 25.0
+                   << "\" text-anchor=\"middle\" font-family=\"sans-serif\" "
+                      "font-size=\"12\">" << x_value << "</text>\n"
+                   << "  <line x1=\"" << plot_left << "\" y1=\"" << y
+                   << "\" x2=\"" << plot_right << "\" y2=\"" << y
+                   << "\" stroke=\"#eeeeee\"/>\n"
+                   << "  <text x=\"" << plot_left - 12.0 << "\" y=\"" << y + 4.0
+                   << "\" text-anchor=\"end\" font-family=\"sans-serif\" "
+                      "font-size=\"12\">" << y_value << "</text>\n";
+        }
+
+        output << "  <g id=\"raw-histogram\" fill=\"#b8bec7\">\n";
+        for (std::size_t bin = 0; bin < bin_count; ++bin) {
+            const double left_value = static_cast<double>(first_count)
+                + static_cast<double>(Internal::PSFCountHistogramBinWidth)
+                    * static_cast<double>(bin) - 0.5;
+            const double right_value = left_value
+                + static_cast<double>(Internal::PSFCountHistogramBinWidth);
+            const double left = mapX(left_value);
+            const double right = mapX(right_value);
+            const double top = mapY(diagnostics.histogram[bin]);
+            output << "    <rect x=\"" << left << "\" y=\"" << top
+                   << "\" width=\"" << std::max(0.0, right - left - 0.5)
+                   << "\" height=\"" << plot_bottom - top << "\"/>\n";
+        }
+        output << "  </g>\n"
+               << "  <polyline id=\"smoothed-histogram\" fill=\"none\" "
+                  "stroke=\"#2468b4\" stroke-width=\"3\" points=\"";
+        for (std::size_t bin = 0; bin < bin_count; ++bin) {
+            const double center = Internal::psfCountHistogramBinCenter(
+                first_count, static_cast<int>(bin));
+            output << mapX(center) << ','
+                   << mapY(diagnostics.smoothed_histogram[bin]) << ' ';
+        }
+        output << "\"/>\n";
+        if (has_gaia_histogram) {
+            output << "  <polyline id=\"gaia-histogram\" fill=\"none\" "
+                      "stroke=\"#2ca02c\" stroke-width=\"2\" points=\"";
+            for (std::size_t bin = 0; bin < bin_count; ++bin) {
+                const double center = Internal::psfCountHistogramBinCenter(
+                    first_count, static_cast<int>(bin));
+                output << mapX(center) << ','
+                       << mapY(diagnostics.gaia_histogram[bin]) << ' ';
+            }
+            output << "\"/>\n";
+        }
+        if (has_minchi_survivor_histogram) {
+            output << "  <polyline id=\"minchi-survivor-histogram\" fill=\"none\" "
+                      "stroke=\"#e377c2\" stroke-width=\"3\" points=\"";
+            for (std::size_t bin = 0; bin < bin_count; ++bin) {
+                const double center = Internal::psfCountHistogramBinCenter(
+                    first_count, static_cast<int>(bin));
+                output << mapX(center) << ','
+                       << mapY(diagnostics.minchi_survivor_histogram[bin]) << ' ';
+            }
+            output << "\"/>\n";
+        }
+        if (has_selected_group_histogram) {
+            output << "  <polyline id=\"selected-group-histogram\" fill=\"none\" "
+                      "stroke=\"#17becf\" stroke-width=\"3\" points=\"";
+            for (std::size_t bin = 0; bin < bin_count; ++bin) {
+                const double center = Internal::psfCountHistogramBinCenter(
+                    first_count, static_cast<int>(bin));
+                output << mapX(center) << ','
+                       << mapY(diagnostics.selected_group_histogram[bin]) << ' ';
+            }
+            output << "\"/>\n";
+        }
+
+        const double peak_value = Internal::psfCountHistogramBinCenter(
+            first_count, diagnostics.peak_bin);
+        output << "  <line id=\"selected-peak\" x1=\"" << mapX(peak_value)
+               << "\" y1=\"" << plot_top << "\" x2=\"" << mapX(peak_value)
+               << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#f28e2b\" stroke-width=\"2\" "
+                  "stroke-dasharray=\"3,3\"/>\n";
+        output << "  <line id=\"pilot-center\" x1=\""
+               << mapX(diagnostics.pilot_center) << "\" y1=\"" << plot_top
+               << "\" x2=\"" << mapX(diagnostics.pilot_center)
+               << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#9467bd\" stroke-width=\"2\" "
+                  "stroke-dasharray=\"6,3\"/>\n";
+        if (diagnostics.has_gaia_median) {
+            output << "  <line id=\"gaia-median\" x1=\""
+                   << mapX(diagnostics.gaia_median) << "\" y1=\"" << plot_top
+                   << "\" x2=\"" << mapX(diagnostics.gaia_median)
+                   << "\" y2=\"" << plot_bottom
+                   << "\" stroke=\"#2ca02c\" stroke-width=\"2\" "
+                      "stroke-dasharray=\"8,4,2,4\"/>\n";
+        }
+        output << "  <line id=\"mad-lower\" x1=\""
+               << mapX(diagnostics.mad_lower)
+               << "\" y1=\"" << plot_top << "\" x2=\""
+               << mapX(diagnostics.mad_lower) << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#8c564b\" stroke-width=\"2\" "
+                  "stroke-dasharray=\"5,3\"/>\n"
+               << "  <line id=\"mad-upper\" x1=\""
+               << mapX(diagnostics.mad_upper)
+               << "\" y1=\"" << plot_top << "\" x2=\""
+               << mapX(diagnostics.mad_upper) << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#8c564b\" stroke-width=\"2\" "
+                  "stroke-dasharray=\"5,3\"/>\n";
+        if (has_left_elbow) {
+            output << "  <line id=\"left-elbow\" x1=\""
+                   << mapX(left_elbow_value) << "\" y1=\"" << plot_top
+                   << "\" x2=\"" << mapX(left_elbow_value) << "\" y2=\""
+                   << plot_bottom << "\" stroke=\"#bc8f00\" stroke-width=\"2\" "
+                      "stroke-dasharray=\"2,3\"/>\n";
+        }
+        if (has_right_elbow) {
+            output << "  <line id=\"right-elbow\" x1=\""
+                   << mapX(right_elbow_value) << "\" y1=\"" << plot_top
+                   << "\" x2=\"" << mapX(right_elbow_value) << "\" y2=\""
+                   << plot_bottom << "\" stroke=\"#bc8f00\" stroke-width=\"2\" "
+                      "stroke-dasharray=\"2,3\"/>\n";
+        }
+        output << "  <line id=\"locus-lower\" x1=\"" << mapX(locus.lower)
+               << "\" y1=\"" << plot_top << "\" x2=\"" << mapX(locus.lower)
+               << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#d62728\" stroke-width=\"3\" "
+                  "stroke-dasharray=\"8,5\"/>\n"
+               << "  <line id=\"locus-upper\" x1=\"" << mapX(locus.upper)
+               << "\" y1=\"" << plot_top << "\" x2=\"" << mapX(locus.upper)
+               << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#d62728\" stroke-width=\"3\" "
+                  "stroke-dasharray=\"8,5\"/>\n"
+               << "  <line id=\"locus-center\" x1=\"" << mapX(locus.center)
+               << "\" y1=\"" << plot_top << "\" x2=\"" << mapX(locus.center)
+               << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"#111111\" stroke-width=\"3\"/>\n"
+               << "  <line x1=\"" << plot_left << "\" y1=\"" << plot_bottom
+               << "\" x2=\"" << plot_right << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"black\" stroke-width=\"2\"/>\n"
+               << "  <line x1=\"" << plot_left << "\" y1=\"" << plot_top
+               << "\" x2=\"" << plot_left << "\" y2=\"" << plot_bottom
+               << "\" stroke=\"black\" stroke-width=\"2\"/>\n"
+               << "  <text x=\"" << (plot_left + plot_right) / 2.0
+               << "\" y=\"715\" text-anchor=\"middle\" font-family=\"sans-serif\" "
+                  "font-size=\"16\">exp(-1) Pixel Count</text>\n"
+               << "  <text x=\"25\" y=\"380\" text-anchor=\"middle\" "
+                  "transform=\"rotate(-90 25 380)\" font-family=\"sans-serif\" "
+                  "font-size=\"16\">Candidate count</text>\n";
+
+        output << std::setprecision(10);
+        output << "  <g font-family=\"sans-serif\" font-size=\"14\" fill=\"#222222\">\n"
+               << "    <text x=\"900\" y=\"115\">Samples = "
+               << diagnostics.sample_count << "</text>\n"
+               << "    <text x=\"900\" y=\"138\">Pilot source = "
+               << (diagnostics.pilot_uses_gaia ? "Gaia" : "all")
+               << "</text>\n"
+               << "    <text x=\"900\" y=\"161\">Pilot samples = "
+               << diagnostics.pilot_retained_count << " / "
+               << diagnostics.pilot_input_count << "</text>\n"
+               << "    <text x=\"900\" y=\"184\">Pilot center = "
+               << diagnostics.pilot_center << "</text>\n"
+               << "    <text x=\"900\" y=\"207\">Pilot width = "
+               << diagnostics.pilot_width << "</text>\n"
+               << "    <text x=\"900\" y=\"230\">Pilot lower = "
+               << diagnostics.pilot_lower << "</text>\n"
+               << "    <text x=\"900\" y=\"253\">Pilot upper = "
+               << diagnostics.pilot_upper << "</text>\n"
+               << "    <text x=\"900\" y=\"276\">Pilot range mode = "
+               << (diagnostics.pilot_uses_quantile_range
+                       ? quantile_range_mode.str() : "MAD")
+               << "</text>\n"
+               << "    <text x=\"900\" y=\"299\">Zero-MAD clip rejected = "
+               << (diagnostics.pilot_rejected_zero_mad_clip ? "yes" : "no")
+               << "</text>\n"
+               << "    <text x=\"900\" y=\"322\">Histogram samples = "
+               << diagnostics.histogram_sample_count << "</text>\n"
+               << "    <text x=\"900\" y=\"345\">Below / above = "
+               << diagnostics.histogram_below_count << " / "
+               << diagnostics.histogram_above_count << "</text>\n"
+               << "    <text x=\"900\" y=\"376\">Final center = "
+               << locus.center << "</text>\n"
+               << "    <text x=\"900\" y=\"399\">Lower width = "
+               << locus.lower_width << "</text>\n"
+               << "    <text x=\"900\" y=\"422\">Upper width = "
+               << locus.upper_width << "</text>\n"
+               << "    <text x=\"900\" y=\"445\">Final sigma = "
+               << LensingConfig::psf_count_locus_sigma << "</text>\n"
+               << "    <text x=\"900\" y=\"468\">MAD lower = "
+               << diagnostics.mad_lower << "</text>\n"
+               << "    <text x=\"900\" y=\"491\">MAD upper = "
+               << diagnostics.mad_upper << "</text>\n"
+               << "    <text x=\"900\" y=\"514\">Final lower = "
+               << locus.lower << "</text>\n"
+               << "    <text x=\"900\" y=\"537\">Final upper = "
+               << locus.upper << "</text>\n"
+               << "    <text x=\"900\" y=\"560\">Gaia matches = "
+               << diagnostics.gaia_match_count << "</text>\n"
+               << "    <text x=\"900\" y=\"583\">Gaia histogram = "
+               << diagnostics.gaia_histogram_sample_count << "</text>\n"
+               << "    <text x=\"900\" y=\"606\">Gaia below / above = "
+               << diagnostics.gaia_histogram_below_count << " / "
+               << diagnostics.gaia_histogram_above_count << "</text>\n"
+               << "    <text x=\"900\" y=\"629\">MinChi survivors = "
+               << diagnostics.minchi_survivor_count << "</text>\n"
+               << "    <text x=\"900\" y=\"652\">Pre-PRESS selected = "
+               << diagnostics.selected_group_count << "</text>\n";
+        if (diagnostics.has_gaia_median) {
+            output << "    <text x=\"900\" y=\"675\">Gaia raw median = "
+                   << diagnostics.gaia_median << "</text>\n";
+        }
+        output << "    <text x=\"900\" y=\"698\">Left elbow = ";
+        if (has_left_elbow) output << left_elbow_value;
+        else output << "unavailable";
+        output << "</text>\n"
+               << "    <text x=\"900\" y=\"721\">Right elbow = ";
+        if (has_right_elbow) output << right_elbow_value;
+        else output << "unavailable";
+        output << "</text>\n"
+               << "    <text x=\"900\" y=\"744\">Left guard applied = "
+               << (diagnostics.left_elbow_guard_applied ? "yes" : "no")
+               << "</text>\n"
+               << "    <text x=\"900\" y=\"767\">Right guard applied = "
+               << (diagnostics.right_elbow_guard_applied ? "yes" : "no")
+               << "</text>\n"
+               << "    <text x=\"930\" y=\"820\">raw histogram</text>\n"
+               << "    <text x=\"930\" y=\"846\">smoothed histogram</text>\n";
+        if (has_gaia_histogram) {
+            output << "    <text x=\"930\" y=\"872\">Gaia histogram</text>\n";
+        }
+        if (has_minchi_survivor_histogram) {
+            output << "    <text x=\"930\" y=\"898\">MinChi survivors</text>\n";
+        }
+        if (has_selected_group_histogram) {
+            output << "    <text x=\"930\" y=\"924\">Pre-PRESS selected</text>\n";
+        }
+        output << "    <text x=\"930\" y=\"950\">selected peak</text>\n"
+               << "    <text x=\"930\" y=\"976\">pilot center</text>\n"
+               << "    <text x=\"930\" y=\"1002\">locus center</text>\n"
+               << "    <text x=\"930\" y=\"1028\">pre-guard MAD cuts</text>\n"
+               << "    <text x=\"930\" y=\"1054\">outer elbows</text>\n"
+               << "    <text x=\"930\" y=\"1080\">final guarded cuts</text>\n";
+        if (diagnostics.has_gaia_median) {
+            output << "    <text x=\"930\" y=\"1106\">Gaia raw median</text>\n";
+        }
+        output << "  </g>\n"
+               << "  <rect x=\"900\" y=\"807\" width=\"20\" height=\"14\" "
+                  "fill=\"#b8bec7\"/>\n"
+               << "  <line x1=\"900\" y1=\"841\" x2=\"920\" y2=\"841\" "
+                  "stroke=\"#2468b4\" stroke-width=\"3\"/>\n";
+        if (has_gaia_histogram) {
+            output << "  <line x1=\"900\" y1=\"867\" x2=\"920\" y2=\"867\" "
+                      "stroke=\"#2ca02c\" stroke-width=\"2\"/>\n";
+        }
+        if (has_minchi_survivor_histogram) {
+            output << "  <line x1=\"900\" y1=\"893\" x2=\"920\" y2=\"893\" "
+                      "stroke=\"#e377c2\" stroke-width=\"3\"/>\n";
+        }
+        if (has_selected_group_histogram) {
+            output << "  <line x1=\"900\" y1=\"919\" x2=\"920\" y2=\"919\" "
+                      "stroke=\"#17becf\" stroke-width=\"3\"/>\n";
+        }
+        output << "  <line x1=\"900\" y1=\"945\" x2=\"920\" y2=\"945\" "
+                  "stroke=\"#f28e2b\" stroke-width=\"2\" stroke-dasharray=\"3,3\"/>\n"
+               << "  <line x1=\"900\" y1=\"971\" x2=\"920\" y2=\"971\" "
+                  "stroke=\"#9467bd\" stroke-width=\"2\" stroke-dasharray=\"6,3\"/>\n"
+               << "  <line x1=\"900\" y1=\"997\" x2=\"920\" y2=\"997\" "
+                  "stroke=\"#111111\" stroke-width=\"3\"/>\n"
+               << "  <line x1=\"900\" y1=\"1023\" x2=\"920\" y2=\"1023\" "
+                  "stroke=\"#8c564b\" stroke-width=\"2\" stroke-dasharray=\"5,3\"/>\n"
+               << "  <line x1=\"900\" y1=\"1049\" x2=\"920\" y2=\"1049\" "
+                  "stroke=\"#bc8f00\" stroke-width=\"2\" stroke-dasharray=\"2,3\"/>\n"
+               << "  <line x1=\"900\" y1=\"1075\" x2=\"920\" y2=\"1075\" "
+                  "stroke=\"#d62728\" stroke-width=\"3\" stroke-dasharray=\"8,5\"/>\n";
+        if (diagnostics.has_gaia_median) {
+            output << "  <line x1=\"900\" y1=\"1101\" x2=\"920\" y2=\"1101\" "
+                      "stroke=\"#2ca02c\" stroke-width=\"2\" "
+                      "stroke-dasharray=\"8,4,2,4\"/>\n";
+        }
+        output << "</svg>\n";
     }
 
     // ==========================================
@@ -548,14 +1001,19 @@ namespace PSFModel {
                     state.getStarPara(k, i, 9) = ee[1];
 
                     double FWHM = 0.0;
-                    getPSFFWHM(source_p, FWHM);
+                    int star_area = 0;
+                    getPSFFWHM(source_p, FWHM, star_area);
                     if (!Internal::candidateDiagnosticsAreFinite(
-                            size, ee[0], ee[1], FWHM)) {
+                            size, ee[0], ee[1])
+                        || star_area <= 0) {
                         state.getStarPara(k, i, 4) = -1.0;
                         continue;
                     }
                     state.getStarPara(k, i, 10) = FWHM;
                     state.getStarPara(k, i, 11) = 1.0 / sum_power;
+                    state.getStarPara(
+                        k, i, ChipPSFState::star_area_index) =
+                            static_cast<double>(star_area);
 
                     Internal::StarSelectionState& selection = chip.selection[i];
                     selection.full_power_sum = sum_power;
@@ -589,9 +1047,10 @@ namespace PSFModel {
                 chip.stars[index][4] = -1.0;
                 if (index >= chip.selection.size()) continue;
                 Internal::StarSelectionState& selection = chip.selection[index];
-                selection.in_fwhm_locus = false;
+                selection.in_size_locus = false;
                 selection.selected_group = false;
                 selection.selected_press = false;
+                selection.bad_pair_fraction = 0.0;
                 std::vector<float>().swap(selection.chi_window);
                 std::vector<Internal::NeighborEdge>().swap(selection.knn);
             }
@@ -683,7 +1142,7 @@ namespace PSFModel {
             const ChipPSFState& chip = state.chips[chip_index];
             for (int star_index = 0;
                  star_index < state.getNStar(chip_index); ++star_index) {
-                if (!chip.selection[star_index].in_fwhm_locus) continue;
+                if (!chip.selection[star_index].in_size_locus) continue;
                 locus_count++;
                 reference_candidates.push_back({
                     chip_index,
@@ -721,7 +1180,7 @@ namespace PSFModel {
                  star_index < state.getNStar(chip_index); ++star_index) {
                 candidates.push_back({
                     &chip.selection[star_index].chi_window,
-                    chip.selection[star_index].in_fwhm_locus,
+                    chip.selection[star_index].in_size_locus,
                     is_reference[chip_index][star_index]});
             }
             Internal::MinChiPairResult pair_result =
@@ -750,7 +1209,7 @@ namespace PSFModel {
                  star_index < state.getNStar(chip_index); ++star_index) {
                 const Internal::StarSelectionState& selection =
                     chip.selection[star_index];
-                if (selection.in_fwhm_locus && std::isfinite(selection.min_chi)
+                if (selection.in_size_locus && std::isfinite(selection.min_chi)
                     && selection.min_chi <= min_chi_threshold) {
                     active_indices[chip_index].push_back(star_index);
                 }
@@ -761,7 +1220,7 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Construct legacy threshold groups for every exposure chip
-    // Method: Preserve the existing all-FWHM-pair threshold sample exactly,
+    // Method: Preserve the existing all-size-locus-pair threshold sample exactly,
     //         then apply its threshold graph only to shared minChi survivors.
     // ==========================================
     [[maybe_unused]] static ExposureGroups groupStarsLegacy(
@@ -772,10 +1231,10 @@ namespace PSFModel {
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             const ChipPSFState& chip = state.chips[chip_index];
             for (int first = 0; first < state.getNStar(chip_index) - 1; ++first) {
-                if (!chip.selection[first].in_fwhm_locus) continue;
+                if (!chip.selection[first].in_size_locus) continue;
                 for (int second = first + 1;
                      second < state.getNStar(chip_index); ++second) {
-                    if (!chip.selection[second].in_fwhm_locus) continue;
+                    if (!chip.selection[second].in_size_locus) continue;
                     const float chi = Internal::normalizedChiDistance(
                         chip.selection[first].chi_window,
                         chip.selection[second].chi_window);
@@ -856,7 +1315,7 @@ namespace PSFModel {
     // Method: Reject all candidates first, retain selected components only when
     //         the local minimum passes, and release temporary grouping caches.
     // ==========================================
-    static void applySharedGroupSelection(
+    [[maybe_unused]] static void applySharedGroupSelection(
         int nchip,
         const ExposureGroups& groups_by_chip,
         ExposurePSFState& state) {
@@ -895,9 +1354,326 @@ namespace PSFModel {
     }
 
     // ==========================================
+    // Function: Commit one direct Type-3 pre-PRESS survivor collection
+    // Method: Validate original indices, enforce the chip minimum atomically,
+    //         update legacy flags, and release every rejected temporary cache.
+    // ==========================================
+    static void commitAdaptivePairSelection(
+        int nchip,
+        const ActiveIndicesByChip& proposed_indices,
+        ExposurePSFState& state) {
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            const int nstar = state.getNStar(chip_index);
+            std::vector<bool> proposed(static_cast<std::size_t>(nstar), false);
+            if (chip_index < static_cast<int>(proposed_indices.size())) {
+                for (int star_index : proposed_indices[chip_index]) {
+                    if (star_index >= 0 && star_index < nstar) {
+                        proposed[star_index] = true;
+                    }
+                }
+            }
+            const int proposed_count = static_cast<int>(std::count(
+                proposed.begin(), proposed.end(), true));
+            const bool keep_chip =
+                proposed_count >= LensingConfig::nstar_min_local;
+            for (int star_index = 0; star_index < nstar; ++star_index) {
+                Internal::StarSelectionState& selection =
+                    chip.selection[star_index];
+                selection.selected_group = keep_chip && proposed[star_index];
+                state.getStarPara(chip_index, star_index, 4) =
+                    selection.selected_group ? 1.0 : -1.0;
+                std::vector<Internal::NeighborEdge>().swap(selection.knn);
+                if (!selection.selected_group) {
+                    std::vector<float>().swap(selection.chi_window);
+                }
+            }
+            std::cout << "PSF_TYPE3_CHIP chip=" << (chip_index + 1)
+                      << " proposed=" << proposed_count
+                      << " retained=" << (keep_chip ? proposed_count : 0)
+                      << " decision="
+                      << (keep_chip ? "KEEP" : "REJECT_MINIMUM")
+                      << std::endl;
+        }
+    }
+
+    // ==========================================
+    // Function: Log one Type-3 adaptive histogram decision
+    // Method: Publish FD sample/grid/topology fields for reproducible fail-open
+    //         diagnosis without requiring a new rendered diagnostic product.
+    // ==========================================
+    static void logAdaptiveHistogram(
+        const char* label,
+        const Internal::PSFUpperElbowHistogramResult& result,
+        const char* decision) {
+        std::cout << label
+                  << " finite=" << result.finite_value_count
+                  << " fd_samples=" << result.fd_sample_count
+                  << " fd_scale_samples="
+                  << result.fd_scale_sample_count
+                  << " iqr=" << result.fd_iqr
+                  << " width=" << result.bin_width
+                  << " origin=" << result.bin_origin
+                  << " bins=" << result.histogram.size()
+                  << " main_peak=" << result.main_peak_bin
+                  << " rightmost_valid="
+                  << result.rightmost_valid_peak_bin
+                  << " first_invalid=" << result.first_invalid_peak_bin
+                  << " elbow=" << result.elbow_bin
+                  << " cut=" << result.cut
+                  << " status="
+                  << Internal::psfUpperElbowStatusName(result.status)
+                  << " decision=" << decision << std::endl;
+    }
+
+    // ==========================================
+    // Function: Select minChi survivors with adaptive pair/fraction elbows
+    // Method: Estimate an exposure pair-chi cut, recompute same-chip finite
+    //         pairs into per-star bad fractions, then commit a direct pre-PRESS gate.
+    // ==========================================
+    static void applyAdaptivePairFractionSelection(
+        int nchip,
+        ExposurePSFState& state,
+        const ActiveIndicesByChip& active_indices) {
+        for (ChipPSFState& chip : state.chips) {
+            for (Internal::StarSelectionState& selection : chip.selection) {
+                selection.bad_pair_fraction = 0.0;
+            }
+        }
+
+        // ==========================================
+        // Function: Derive the Type-3 Stage-1 FD scale count
+        // Method: Sum minChi survivors with checked size_t addition; a
+        //         representational overflow preserves the fail-open selection.
+        // ==========================================
+        std::size_t active_star_count = 0U;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const std::size_t chip_active_count =
+                active_indices[chip_index].size();
+            if (chip_active_count
+                > std::numeric_limits<std::size_t>::max()
+                    - active_star_count) {
+                Internal::PSFUpperElbowHistogramResult count_failure;
+                count_failure.status =
+                    Internal::PSFUpperElbowStatus::InvalidInput;
+                logAdaptiveHistogram(
+                    "PSF_TYPE3_PAIR", count_failure, "FAIL_OPEN");
+                commitAdaptivePairSelection(nchip, active_indices, state);
+                return;
+            }
+            active_star_count += chip_active_count;
+        }
+
+        std::vector<float> pair_chi;
+        try {
+            for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+                const ChipPSFState& chip = state.chips[chip_index];
+                const std::vector<int>& active = active_indices[chip_index];
+                for (std::size_t first = 0;
+                     first + 1 < active.size(); ++first) {
+                    for (std::size_t second = first + 1;
+                         second < active.size(); ++second) {
+                        const float chi = Internal::normalizedChiDistance(
+                            chip.selection[active[first]].chi_window,
+                            chip.selection[active[second]].chi_window);
+                        if (std::isfinite(chi)) pair_chi.push_back(chi);
+                    }
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            Internal::PSFUpperElbowHistogramResult allocation_failure;
+            allocation_failure.status =
+                Internal::PSFUpperElbowStatus::AllocationFailure;
+            logAdaptiveHistogram(
+                "PSF_TYPE3_PAIR", allocation_failure, "FAIL_OPEN");
+            commitAdaptivePairSelection(nchip, active_indices, state);
+            return;
+        } catch (const std::length_error&) {
+            Internal::PSFUpperElbowHistogramResult allocation_failure;
+            allocation_failure.status =
+                Internal::PSFUpperElbowStatus::AllocationFailure;
+            logAdaptiveHistogram(
+                "PSF_TYPE3_PAIR", allocation_failure, "FAIL_OPEN");
+            commitAdaptivePairSelection(nchip, active_indices, state);
+            return;
+        }
+
+        Internal::PSFUpperElbowHistogramResult pair_result;
+        const Internal::PSFUpperElbowHistogramConfig pair_config = {
+            LensingConfig::psf_pair_chi_valid_peak_fraction,
+            false,
+            false,
+            false,
+            active_star_count,
+            LensingConfig::psf_type3_elbow_search_height_fraction};
+        if (!Internal::estimatePSFUpperElbowCut(
+                pair_chi, pair_config, pair_result)) {
+            logAdaptiveHistogram(
+                "PSF_TYPE3_PAIR", pair_result, "FAIL_OPEN");
+            commitAdaptivePairSelection(nchip, active_indices, state);
+            return;
+        }
+        logAdaptiveHistogram("PSF_TYPE3_PAIR", pair_result, "APPLY");
+        std::vector<float>().swap(pair_chi);
+
+        std::vector<std::vector<std::size_t>> total_pairs;
+        std::vector<std::vector<std::size_t>> bad_pairs;
+        try {
+            total_pairs.resize(static_cast<std::size_t>(nchip));
+            bad_pairs.resize(static_cast<std::size_t>(nchip));
+            for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+                total_pairs[chip_index].assign(
+                    static_cast<std::size_t>(state.getNStar(chip_index)), 0U);
+                bad_pairs[chip_index].assign(
+                    static_cast<std::size_t>(state.getNStar(chip_index)), 0U);
+                const ChipPSFState& chip = state.chips[chip_index];
+                const std::vector<int>& active = active_indices[chip_index];
+                for (std::size_t first = 0;
+                     first + 1 < active.size(); ++first) {
+                    for (std::size_t second = first + 1;
+                         second < active.size(); ++second) {
+                        const int first_index = active[first];
+                        const int second_index = active[second];
+                        const float chi = Internal::normalizedChiDistance(
+                            chip.selection[first_index].chi_window,
+                            chip.selection[second_index].chi_window);
+                        if (!std::isfinite(chi)) continue;
+                        total_pairs[chip_index][first_index]++;
+                        total_pairs[chip_index][second_index]++;
+                        if (Internal::isPSFType3BadPair(
+                                static_cast<double>(chi), pair_result.cut)) {
+                            bad_pairs[chip_index][first_index]++;
+                            bad_pairs[chip_index][second_index]++;
+                        }
+                    }
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            Internal::PSFUpperElbowHistogramResult allocation_failure;
+            allocation_failure.status =
+                Internal::PSFUpperElbowStatus::AllocationFailure;
+            logAdaptiveHistogram(
+                "PSF_TYPE3_FRACTION", allocation_failure, "FAIL_OPEN");
+            commitAdaptivePairSelection(nchip, active_indices, state);
+            return;
+        } catch (const std::length_error&) {
+            Internal::PSFUpperElbowHistogramResult allocation_failure;
+            allocation_failure.status =
+                Internal::PSFUpperElbowStatus::AllocationFailure;
+            logAdaptiveHistogram(
+                "PSF_TYPE3_FRACTION", allocation_failure, "FAIL_OPEN");
+            commitAdaptivePairSelection(nchip, active_indices, state);
+            return;
+        }
+
+        std::vector<double> fraction_values;
+        std::size_t positive_fraction_count = 0;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index : active_indices[chip_index]) {
+                const std::size_t denominator =
+                    total_pairs[chip_index][star_index];
+                if (denominator == 0U) continue;
+                const double fraction = static_cast<double>(
+                    bad_pairs[chip_index][star_index])
+                    / static_cast<double>(denominator);
+                chip.selection[star_index].bad_pair_fraction = fraction;
+                fraction_values.push_back(fraction);
+                if (fraction > 0.0) positive_fraction_count++;
+            }
+        }
+
+        bool apply_fraction_cut = false;
+        Internal::PSFUpperElbowHistogramResult fraction_result;
+        if (positive_fraction_count == 0U) {
+            fraction_result.finite_value_count = fraction_values.size();
+            fraction_result.status =
+                Internal::PSFUpperElbowStatus::NoFDSamples;
+            logAdaptiveHistogram(
+                "PSF_TYPE3_FRACTION",
+                fraction_result,
+                fraction_values.empty()
+                    ? "NO_DENOMINATORS"
+                    : "ALL_ZERO_PASS");
+        } else {
+            const Internal::PSFUpperElbowHistogramConfig fraction_config = {
+                LensingConfig::psf_bad_fraction_valid_peak_fraction,
+                true,
+                true,
+                true,
+                0U,
+                LensingConfig::psf_type3_elbow_search_height_fraction};
+            apply_fraction_cut = Internal::estimatePSFUpperElbowCut(
+                fraction_values, fraction_config, fraction_result);
+            logAdaptiveHistogram(
+                "PSF_TYPE3_FRACTION",
+                fraction_result,
+                apply_fraction_cut ? "APPLY" : "FAIL_OPEN");
+        }
+
+        ActiveIndicesByChip proposed_indices(static_cast<std::size_t>(nchip));
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const std::vector<int>& active = active_indices[chip_index];
+            std::vector<double> fractions(active.size(), 0.0);
+            std::vector<bool> has_denominator(active.size(), false);
+            for (std::size_t index = 0; index < active.size(); ++index) {
+                const int star_index = active[index];
+                has_denominator[index] =
+                    total_pairs[chip_index][star_index] > 0U;
+                fractions[index] =
+                    state.chips[chip_index]
+                        .selection[star_index].bad_pair_fraction;
+            }
+            const Internal::PSFType3ChipSelection chip_selection =
+                Internal::selectPSFType3FractionSurvivors(
+                    fractions,
+                    has_denominator,
+                    apply_fraction_cut,
+                    fraction_result.cut,
+                    LensingConfig::nstar_min_local);
+            double fraction_sum = 0.0;
+            double fraction_maximum = 0.0;
+            for (std::size_t index = 0; index < active.size(); ++index) {
+                if (!has_denominator[index]) continue;
+                fraction_sum += fractions[index];
+                fraction_maximum = std::max(
+                    fraction_maximum, fractions[index]);
+            }
+            const double fraction_mean = chip_selection.finite_pair_count > 0U
+                ? fraction_sum
+                    / static_cast<double>(chip_selection.finite_pair_count)
+                : 0.0;
+            for (std::size_t index = 0;
+                 index < chip_selection.selected.size(); ++index) {
+                if (chip_selection.selected[index]) {
+                    proposed_indices[chip_index].push_back(active[index]);
+                }
+            }
+            std::cout << "PSF_TYPE3_FRACTION_CHIP chip="
+                      << (chip_index + 1)
+                      << " active=" << active.size()
+                      << " finite_denominator="
+                      << chip_selection.finite_pair_count
+                      << " mean=" << fraction_mean
+                      << " max=" << fraction_maximum
+                      << " selected=" << chip_selection.retained_count
+                      << " minimum_reject="
+                      << (chip_selection.rejected_by_minimum ? 1 : 0)
+                      << " decision="
+                      << (chip_selection.rejected_by_minimum
+                              ? "REJECT_MINIMUM"
+                              : (chip_selection.finite_pair_count == 0U
+                                     ? "NO_FINITE_PAIRS"
+                                     : "KEEP"))
+                      << std::endl;
+        }
+        commitAdaptivePairSelection(nchip, proposed_indices, state);
+    }
+
+    // ==========================================
     // Function: Select PSF stars from quality-valid candidates
-    // Method: Apply common Gaia/FWHM/minChi selection, dispatch isolated legacy
-    //         or survivor-only KNN grouping, then apply one shared group policy.
+    // Method: Apply common Gaia/star-area/minChi selection, dispatch grouping and the
+    //         shared policy, then publish the pre-PRESS selected distribution.
     // ==========================================
     void starSelection(
         int nchip,
@@ -917,8 +1693,8 @@ namespace PSFModel {
             return;
         }
 
-        std::vector<Internal::FWHMSample> fwhm_samples;
-        fwhm_samples.reserve(static_cast<std::size_t>(quality_valid_count));
+        std::vector<Internal::PSFCountSample> count_samples;
+        count_samples.reserve(static_cast<std::size_t>(quality_valid_count));
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             ChipPSFState& chip = state.chips[chip_index];
             const std::vector<std::array<double, 2>> gaia_xy =
@@ -931,24 +1707,38 @@ namespace PSFModel {
                     state.getStarPara(chip_index, star_index, 2),
                     gaia_xy,
                     LensingConfig::psf_gaia_match_radius_pix);
-                fwhm_samples.push_back({
-                    state.getStarPara(chip_index, star_index, 10),
+                const int star_area = static_cast<int>(std::llround(
+                    state.getStarPara(
+                        chip_index,
+                        star_index,
+                        ChipPSFState::star_area_index)));
+                count_samples.push_back({
+                    star_area,
                     selection.gaia_matched});
             }
         }
 
-        Internal::FWHMLocus locus;
-        if (!Internal::estimateFWHMLocus(
-                fwhm_samples,
-                LensingConfig::psf_fwhm_hist_bins,
-                LensingConfig::psf_fwhm_locus_sigma,
-                LensingConfig::psf_fwhm_locus_min_samples,
-                LensingConfig::psf_gaia_locus_min_matches,
-                locus)) {
+        Internal::PSFCountLocus locus;
+        Internal::PSFCountLocusDiagnostics locus_diagnostics;
+        const Internal::PSFCountLocusConfig locus_config = {
+            LensingConfig::psf_count_pilot_clip_sigma,
+            LensingConfig::psf_count_pilot_clip_iterations,
+            LensingConfig::psf_count_zero_mad_quantile,
+            LensingConfig::psf_count_hist_range_sigma,
+            LensingConfig::psf_count_locus_sigma,
+            LensingConfig::psf_count_locus_min_samples,
+            LensingConfig::psf_gaia_locus_min_matches};
+        if (!Internal::estimatePSFCountLocus(
+                count_samples,
+                locus_config,
+                locus,
+                &locus_diagnostics)) {
             rejectExposureCandidates(state);
             return;
         }
 
+        const std::string prefix_e =
+            UniversalUtils::getPrefixExpo(imageFiles[0]);
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             ChipPSFState& chip = state.chips[chip_index];
             for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
@@ -957,11 +1747,16 @@ namespace PSFModel {
                 selection.selected_press = false;
                 selection.knn.clear();
                 selection.min_chi = std::numeric_limits<float>::infinity();
+                selection.bad_pair_fraction = 0.0;
                 if (state.getStarPara(chip_index, star_index, 4) <= 0.0) continue;
 
-                const double fwhm = state.getStarPara(chip_index, star_index, 10);
-                selection.in_fwhm_locus = fwhm > locus.lower && fwhm < locus.upper;
-                if (!selection.in_fwhm_locus
+                const double star_area = state.getStarPara(
+                    chip_index,
+                    star_index,
+                    ChipPSFState::star_area_index);
+                selection.in_size_locus =
+                    star_area > locus.lower && star_area < locus.upper;
+                if (!selection.in_size_locus
                     || selection.full_power_sum <= 0.0
                     || selection.chi_window.empty()) {
                     state.getStarPara(chip_index, star_index, 4) = -1.0;
@@ -977,13 +1772,58 @@ namespace PSFModel {
 
         const ActiveIndicesByChip active_indices =
             buildMinChiActiveIndices(nchip, state);
-        ExposureGroups groups_by_chip;
-        if constexpr (LensingConfig::PsfGroupingType == 1) {
-            groups_by_chip = groupStarsLegacy(nchip, state, active_indices);
-        } else {
-            groups_by_chip = groupStarsKNN(nchip, state, active_indices);
+        std::size_t minchi_survivor_total = 0;
+        for (const std::vector<int>& chip_indices : active_indices) {
+            minchi_survivor_total += chip_indices.size();
         }
-        applySharedGroupSelection(nchip, groups_by_chip, state);
+        std::vector<int> minchi_survivor_star_areas;
+        minchi_survivor_star_areas.reserve(minchi_survivor_total);
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            for (int star_index : active_indices[chip_index]) {
+                minchi_survivor_star_areas.push_back(
+                    static_cast<int>(std::llround(
+                        state.getStarPara(
+                            chip_index,
+                            star_index,
+                            ChipPSFState::star_area_index))));
+            }
+        }
+        Internal::populateMinChiSurvivorCountHistogram(
+            minchi_survivor_star_areas, locus_diagnostics);
+        if constexpr (LensingConfig::PsfGroupingType == 3) {
+            applyAdaptivePairFractionSelection(
+                nchip, state, active_indices);
+        } else {
+            ExposureGroups groups_by_chip;
+            if constexpr (LensingConfig::PsfGroupingType == 1) {
+                groups_by_chip = groupStarsLegacy(
+                    nchip, state, active_indices);
+            } else {
+                groups_by_chip = groupStarsKNN(
+                    nchip, state, active_indices);
+            }
+            applySharedGroupSelection(nchip, groups_by_chip, state);
+        }
+
+        std::vector<int> selected_group_star_areas;
+        for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const ChipPSFState& chip = state.chips[chip_index];
+            for (int star_index = 0;
+                 star_index < state.getNStar(chip_index); ++star_index) {
+                if (chip.selection[star_index].selected_group) {
+                    selected_group_star_areas.push_back(
+                        static_cast<int>(std::llround(
+                            state.getStarPara(
+                                chip_index,
+                                star_index,
+                                ChipPSFState::star_area_index))));
+                }
+            }
+        }
+        Internal::populateSelectedGroupCountHistogram(
+            selected_group_star_areas, locus_diagnostics);
+        writePSFCountLocusSVG(
+            dirOutput, prefix_e, locus, locus_diagnostics);
     }
 
     // ==========================================
@@ -1781,9 +2621,9 @@ namespace PSFModel {
     }
 
     // ==========================================
-    // Function: Fit and serialize hybrid PSF models.
-    // Method: Preserve F77 hybrid-model layout, including the established zero-star placeholder
-    //         produced after candidate loading skips a chip.
+    // Function: Fit and serialize hybrid PSF models
+    // Method: Use effective runtime CCD geometry for every successful map and
+    //         retain a compact marker map for invalid chips.
     // ==========================================
     void makePSFHybrid(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
@@ -1887,23 +2727,10 @@ namespace PSFModel {
                     }
                 }
 
-                int nx = 0, ny = 0;
-                if (!FitsIO::readPara(imageFiles[k], nx, ny)) {
-                    MPIFailure::abortWorld("read hybrid-fit image dimensions",
-                                           imageFiles[k]);
-                }
-                if (nx > map_width || ny > map_height) {
-                    MPIFailure::abortWorld(
-                        "validate hybrid PSF geometry",
-                        imageFiles[k] + " dimensions=" + std::to_string(nx) +
-                            "x" + std::to_string(ny) +
-                            " configured=" + std::to_string(map_width) +
-                            "x" + std::to_string(map_height));
-                }
-                genPSFFits(psfmap, nums, nx, ny, star_residual, posi);
+                genPSFFits(psfmap, nums, star_residual, posi);
 
-                const int ixt = (nx - ns - 1) / step_psf + 1;
-                const int iyt = (ny - ns) / step_psf + 1;
+                const int ixt = (map_width - ns - 1) / step_psf + 1;
+                const int iyt = (map_height - ns) / step_psf + 1;
 
                 for (int ix = 1; ix <= ixt; ++ix) {
                     int xs = (ix - 1) * step_psf;
@@ -1923,13 +2750,8 @@ namespace PSFModel {
 
                 std::string out_fits = OutputLayout::chipPath(
                     dirOutput, "stamps/fits_PsfLocal", prefix, "_PSF_local.fits");
-                std::vector<float> sub_psfmap(static_cast<size_t>(nx) * ny);
-                for (int y = 0; y < ny; ++y) {
-                    for (int x = 0; x < nx; ++x) {
-                        sub_psfmap[y * nx + x] = psfmap[y * map_width + x];
-                    }
-                }
-                FitsIO::writeImage(out_fits, nx, ny, sub_psfmap);
+                FitsIO::writeImage(
+                    out_fits, map_width, map_height, psfmap);
 
                 file90 << (k + 1) << " " << nums << " 1\n";
                 for (int i = 0; i < nums; ++i) {
@@ -1938,7 +2760,7 @@ namespace PSFModel {
                     std::vector<float> model;
                     double dmax = 0.0;
                     getPSFModelVeryLocal(
-                        sub_psfmap, px, py, model, dmax, nx);
+                        psfmap, px, py, model, dmax, map_width);
 
                     std::array<double, 2> ee = {0.0, 0.0};
                     double size = 0.0;
@@ -1969,20 +2791,22 @@ namespace PSFModel {
                             " removed_samples=" + std::to_string(removed_non_finite) +
                             " action=MARK_CHIP_INVALID");
                 }
-                std::fill(psfmap.begin(), psfmap.end(), 0.0f);
-                psfmap[(step_psf - 1) * map_width + (step_psf - 1)] = -100.0f;
-                const int nx = std::min(map_width, 3 * step_psf);
-                const int ny = std::min(map_height, 3 * step_psf);
+                const int failure_width = std::min(map_width, 3 * step_psf);
+                const int failure_height = std::min(map_height, 3 * step_psf);
+                psfmap.assign(
+                    checkedElementCount(
+                        {static_cast<std::size_t>(failure_width),
+                         static_cast<std::size_t>(failure_height)},
+                        "allocate invalid hybrid PSF map"),
+                    0.0f);
+                psfmap[(step_psf - 1) * failure_width + (step_psf - 1)] = -100.0f;
+                psfmap[(step_psf - 2) * failure_width + (step_psf - 2)] =
+                    static_cast<float>(nums);
 
                 std::string out_fits = OutputLayout::chipPath(
                     dirOutput, "stamps/fits_PsfLocal", prefix, "_PSF_local.fits");
-                std::vector<float> sub_psfmap(static_cast<size_t>(nx) * ny);
-                for (int y = 0; y < ny; ++y) {
-                    for (int x = 0; x < nx; ++x) {
-                        sub_psfmap[y * nx + x] = psfmap[y * map_width + x];
-                    }
-                }
-                FitsIO::writeImage(out_fits, nx, ny, sub_psfmap);
+                FitsIO::writeImage(
+                    out_fits, failure_width, failure_height, psfmap);
 
                 file10 << nums << " -1\n";
                 file90 << (k + 1) << " " << nums << " -1\n";
@@ -2208,10 +3032,12 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Build the local residual layer on the configured detector map
-    // Method: Use runtime chip geometry as storage bounds and visit only grid
+    // Method: Use runtime chip geometry as storage and grid bounds, visiting
     //         origins whose stamp plus dmax cell fit in the physical image.
     // ==========================================
-    void genPSFFits(std::vector<float>& psfmap, int nums, int nx, int ny, const std::vector<float>& star, const std::vector<std::array<double, 2>>& posi) {
+    void genPSFFits(std::vector<float>& psfmap, int nums,
+                    const std::vector<float>& star,
+                    const std::vector<std::array<double, 2>>& posi) {
         const LensingRuntimeConfig& lensing =
             RuntimeConfigStore::get().lensing;
         const int map_width = lensing.chipnx;
@@ -2219,11 +3045,11 @@ namespace PSFModel {
         int ns = LensingConfig::ns;
         int step_psf = LensingConfig::step_psf;
 
-        if (nx > map_width || ny > map_height || nx <= ns || ny < ns ||
+        if (map_width <= ns || map_height < ns ||
             map_width < step_psf || map_height < step_psf) {
             MPIFailure::abortWorld(
                 "build hybrid PSF map",
-                "image or configured geometry cannot contain the PSF grid");
+                "configured geometry cannot contain the PSF grid");
         }
         psfmap.assign(
             checkedElementCount(
@@ -2232,8 +3058,8 @@ namespace PSFModel {
                 "allocate hybrid residual map"),
             0.0f);
 
-        const int ixt = (nx - ns - 1) / step_psf + 1;
-        const int iyt = (ny - ns) / step_psf + 1;
+        const int ixt = (map_width - ns - 1) / step_psf + 1;
+        const int iyt = (map_height - ns) / step_psf + 1;
 
         if (nums < LensingConfig::nstar_min_local) {
             psfmap[(step_psf - 1) * map_width + (step_psf - 1)] = -100.0f;
@@ -2386,21 +3212,19 @@ namespace PSFModel {
         getPowerE(nx, ny, power, e, thresh_ratio);
     }
 
-    void getPSFFWHM(const std::vector<float>& power, double& FWHM) {
-        int ns = LensingConfig::ns;
-        float thresh = power[(ns / 2) * ns + (ns / 2)] * std::exp(-1.0f);
-        double area = -1e-5;
-        for (int idx = 0; idx < ns * ns; ++idx) {
-            if (power[idx] >= thresh) {
-                area += 1.0;
-            }
-        }
-        if (area <= 0.0) {
-            FWHM = 0.0;
-            return;
-        }
-        double beta = ns / (2.0 * LensingConfig::pi) / std::sqrt(area / LensingConfig::pi);
-        FWHM = beta * 2.0 * std::sqrt(2.0 * std::log(2.0))
-             * RuntimeConfigStore::get().lensing.pixel_size;
+    // ==========================================
+    // Function: Measure historical PSF FWHM and exact exp(-1) star area
+    // Method: Count integer threshold pixels once, then reuse the unchanged
+    //         area-minus-1e-5 conversion with the runtime pixel scale.
+    // ==========================================
+    void getPSFFWHM(
+        const std::vector<float>& power,
+        double& FWHM,
+        int& star_area) {
+        star_area = Internal::countPSFStarArea(power, LensingConfig::ns);
+        FWHM = Internal::fwhmFromStarArea(
+            static_cast<double>(star_area),
+            LensingConfig::ns,
+            RuntimeConfigStore::get().lensing.pixel_size);
     }
 }

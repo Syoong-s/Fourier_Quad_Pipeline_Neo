@@ -2,6 +2,7 @@
 #define UNIVERSAL_UTILS_HPP
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <array>
 #include "process_main/LinearSolve.hpp"
@@ -50,7 +51,10 @@ namespace UniversalUtils {
     // Path & Filename processing
     std::string generateGaiaFileName(const std::string& baseDir, const double cRVAL[2], int& proc_error);
     std::string generateGaiaFileName(const std::string& baseDir, const double cRVAL[2]);
-    std::vector<std::string> generateGalCatFileNames(const std::string& baseDir, const double cRVAL[2]);
+    std::vector<std::string> generateGalCatFileNames(
+        const std::string& baseDir,
+        const double cRVAL[2],
+        std::string_view tile_prefix);
     std::string getPrefix(const std::string& imagefile);
     std::string getDir(const std::string& imagefile, int level);
     std::string getPrefixExpo(const std::string& imagefile);

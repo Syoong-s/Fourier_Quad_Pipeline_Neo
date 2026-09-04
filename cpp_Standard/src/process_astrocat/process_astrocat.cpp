@@ -1,8 +1,10 @@
 #include "process_astrocat/process_astrocat.hpp"
 
+#include "general/CatalogTileNaming.hpp"
 #include "general/MPIUtils.hpp"
 #include "general/MPIScheduler.hpp"
 #include "general/PathUtils.hpp"
+#include "pathconfig.hpp"
 
 #include <mpi.h>
 
@@ -121,28 +123,12 @@ bool collectiveSuccess(bool local_success,
 
 // ==========================================
 // Function: Recognize one generated Type-2 Gaia tile basename
-// Method: Validate the fixed prefix, digit/sign fields, separators, and suffix
-//         without matching unrelated files in the output directory.
+// Method: Apply the configured prefix and shared fixed-suffix grammar without
+//         matching unrelated or legacy-prefix files in the output directory.
 // ==========================================
 bool isGeneratedTileFilename(const std::string& filename) {
-    constexpr std::size_t kExpectedSize = 33;
-    if (filename.size() != kExpectedSize
-        || filename.compare(0, 10, "des_y6_RA_") != 0
-        || filename.compare(13, 1, "_") != 0
-        || filename.compare(17, 5, "_Dec_") != 0
-        || filename.compare(25, 1, "_") != 0
-        || filename.compare(29, 4, ".dat") != 0) {
-        return false;
-    }
-    const std::array<std::size_t, 10> digit_positions = {
-        10, 11, 12, 14, 15, 16, 23, 24, 27, 28};
-    for (const std::size_t position : digit_positions) {
-        if (filename[position] < '0' || filename[position] > '9') {
-            return false;
-        }
-    }
-    return (filename[22] == 'p' || filename[22] == 'm')
-           && (filename[26] == 'p' || filename[26] == 'm');
+    return CatalogTileNaming::isTileFilename(
+        filename, AstroCatConfig::ASTROMETRY_TILE_PREFIX);
 }
 
 // ==========================================
@@ -900,31 +886,15 @@ std::uint64_t applyBoundaryDedup(
 }
 
 // ==========================================
-// Function: Format one signed integer declination boundary
-// Method: Emit the Type-2 p/m prefix plus at least two zero-padded digits.
-// ==========================================
-std::string formatDeclination(int value) {
-    std::ostringstream stream;
-    stream << (value >= 0 ? 'p' : 'm')
-           << std::setw(2) << std::setfill('0') << std::abs(value);
-    return stream.str();
-}
-
-// ==========================================
 // Function: Format one Type-2 Gaia tile basename
-// Method: Decode the shared tile id and reproduce generateGalCatFileNames'
-//         exact RA/Dec boundary convention.
+// Method: Decode the shared tile id and apply the configured astrometry prefix
+//         through the producer/consumer naming grammar.
 // ==========================================
 std::string tileFilename(std::uint32_t tile_id) {
     const int ra_lower = static_cast<int>(tile_id % kRaTileCount);
     const int dec_lower = static_cast<int>(tile_id / kRaTileCount) - 90;
-    std::ostringstream stream;
-    stream << "des_y6_RA_"
-           << std::setw(3) << std::setfill('0') << ra_lower << '_'
-           << std::setw(3) << std::setfill('0') << ra_lower + 1
-           << "_Dec_" << formatDeclination(dec_lower) << '_'
-           << formatDeclination(dec_lower + 1) << ".dat";
-    return stream.str();
+    return CatalogTileNaming::tileFilename(
+        AstroCatConfig::ASTROMETRY_TILE_PREFIX, ra_lower, dec_lower);
 }
 
 // ==========================================

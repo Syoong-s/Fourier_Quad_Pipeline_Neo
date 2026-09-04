@@ -1,4 +1,5 @@
 #include "process_init/FitsExtractor.hpp"
+#include "Initialize.hpp"
 
 #include <fitsio.h>
 
@@ -15,7 +16,6 @@
 namespace fqinit {
 namespace {
 
-constexpr const char* kArchiveSuffix = ".fits.fz";
 constexpr std::size_t kCopyBufferBytes = 16U * 1024U * 1024U;
 
 struct PlannedImage {
@@ -57,7 +57,7 @@ void closeFits(fitsfile*& file) {
 
 // ==========================================
 // Function: Replace all non-overlapping occurrences in a filename stem
-// Method: Advance past each replacement so legacy ood-to-ooi mapping is exact.
+// Method: Advance past each replacement so the configured DQ stem mapping is exact.
 // ==========================================
 void replaceAll(std::string& value, const std::string& from, const std::string& to) {
     if (from.empty()) {
@@ -190,7 +190,7 @@ void copyCurrentImage(fitsfile* input, const std::filesystem::path& output_path)
 // ==========================================
 // Function: Verify a committed or resumed chip image
 // Method: Require a two-dimensional uncompressed primary image and, for DQ,
-//         require the CCDNUM used to construct its output filename.
+//         require the configured DQ chip identifier used in its output filename.
 // ==========================================
 bool validateOutput(const PlannedImage& plan, std::string& error) {
     fitsfile* file = nullptr;
@@ -214,9 +214,12 @@ bool validateOutput(const PlannedImage& plan, std::string& error) {
     }
     if (status == 0 && plan.check_ccdnum) {
         int ccdnum = 0;
-        fits_read_key(file, TINT, "CCDNUM", &ccdnum, nullptr, &status);
+        fits_read_key(file, TINT, Initialize::CCDNUM_KEYWORD,
+                      &ccdnum, nullptr, &status);
         if (status == 0 && ccdnum != plan.expected_ccdnum) {
-            error = "existing DQ output has the wrong CCDNUM: " + plan.final_path.string();
+            error = "existing DQ output has the wrong "
+                    + std::string(Initialize::CCDNUM_KEYWORD) + ": "
+                    + plan.final_path.string();
             closeFits(file);
             return false;
         }
@@ -234,7 +237,7 @@ bool validateOutput(const PlannedImage& plan, std::string& error) {
 // ==========================================
 // Function: Discover the output name of every extractable HDU in one archive
 // Method: Number science images by two-dimensional HDU occurrence and DQ images
-//         by their CCDNUM header without changing either established convention.
+//         by the configured chip-keyword header without changing either convention.
 // ==========================================
 std::vector<PlannedImage> planImages(fitsfile* input,
                                      const std::filesystem::path& source,
@@ -283,7 +286,8 @@ std::vector<PlannedImage> planImages(fitsfile* input,
             output_number = ++science_index;
         } else {
             int key_status = 0;
-            fits_read_key(input, TINT, "CCDNUM", &output_number, nullptr, &key_status);
+            fits_read_key(input, TINT, Initialize::CCDNUM_KEYWORD,
+                          &output_number, nullptr, &key_status);
             if (key_status != 0) {
                 fits_clear_errmsg();
                 continue;
@@ -322,25 +326,29 @@ void commitImages(const std::vector<PlannedImage>& plans) {
 
 // ==========================================
 // Function: Return the exposure stem used by science chip output names
-// Method: Remove the exact trailing .fits.fz suffix from the source basename.
+// Method: Remove the exact configured archive suffix from the source basename.
 // ==========================================
 std::string archiveStem(const std::filesystem::path& source) {
     const std::string filename = source.filename().string();
-    if (filename.size() <= std::strlen(kArchiveSuffix)
-        || filename.compare(filename.size() - std::strlen(kArchiveSuffix),
-                            std::strlen(kArchiveSuffix), kArchiveSuffix) != 0) {
-        throw std::runtime_error("archive does not end in .fits.fz: " + source.string());
+    const std::size_t suffix_length = std::strlen(Initialize::ARCHIVE_SUFFIX);
+    if (filename.size() <= suffix_length
+        || filename.compare(filename.size() - suffix_length,
+                            suffix_length, Initialize::ARCHIVE_SUFFIX) != 0) {
+        throw std::runtime_error(
+            "archive does not end in " + std::string(Initialize::ARCHIVE_SUFFIX)
+            + ": " + source.string());
     }
-    return filename.substr(0, filename.size() - std::strlen(kArchiveSuffix));
+    return filename.substr(0, filename.size() - suffix_length);
 }
 
 // ==========================================
 // Function: Return the DQ exposure stem expected by the pipeline
-// Method: Remove .fits.fz and replace every legacy ood token with ooi.
+// Method: Remove the archive suffix and apply the configured DQ stem replacement.
 // ==========================================
 std::string dqOutputStem(const std::filesystem::path& source) {
     std::string stem = archiveStem(source);
-    replaceAll(stem, "ood", "ooi");
+    replaceAll(stem, Initialize::DQ_STEM_REPLACE_FROM,
+               Initialize::DQ_STEM_REPLACE_TO);
     return stem;
 }
 

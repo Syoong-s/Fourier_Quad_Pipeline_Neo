@@ -44,8 +44,8 @@ struct AstroCatRuntimeConfig {
 
 // ==========================================
 // Structure: ExtCatRuntimeConfig
-// Method: Represent the complete external-catalog parser, projection, schema,
-//         and publication configuration with one authoritative tile directory.
+// Method: Represent the external-catalog parser, projection, schema, and
+//         producer publication configuration independently from main input.
 // ==========================================
 struct ExtCatRuntimeConfig {
     std::string input_directory;
@@ -92,9 +92,9 @@ struct InitRuntimeConfig {
 //         physically deleted Standard branches remain absent from this API.
 // ==========================================
 struct LensingRuntimeConfig {
-    int astrometry_cat_type = 1;
     std::int64_t process_stage = 1;
     std::string astrometry_cat;
+    std::string source_cat;
     int ccd_split = 2;
     int gal_smooth = 0;
     int star_smooth = 2;

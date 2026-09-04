@@ -1,7 +1,9 @@
 #include "process_astrocat/process_astrocat.hpp"
 
+#include "general/CatalogTileNaming.hpp"
 #include "general/MPIUtils.hpp"
 #include "general/MPIScheduler.hpp"
+#include "pathconfig.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -185,6 +187,21 @@ int main(int argc, char** argv) {
     config.output_directory = output;
     config.add_header = true;
     config.existing_policy = ProcessAstrocat::ExistingPolicy::Fail;
+    const std::string special_prefix = "survey.v2+[x]_";
+    const std::string special_name = CatalogTileNaming::tileFilename(
+        special_prefix, 7, -3);
+    local_ok = require(
+                   special_name
+                           == "survey.v2+[x]_RA_007_008_Dec_m03_m02.dat"
+                       && CatalogTileNaming::isTileFilename(
+                           special_name, special_prefix)
+                       && !CatalogTileNaming::isTileFilename(
+                           special_name, "survey.v2+[y]_")
+                       && !CatalogTileNaming::isTileFilename(
+                           "survey.v2+[x]_RA_07_008_Dec_m03_m02.dat",
+                           special_prefix),
+                   "literal variable-length tile-prefix grammar is incorrect")
+               && local_ok;
     local_ok = require(process_astrocat(config) == 0,
                        "primary no-header run failed")
                && local_ok;
@@ -223,11 +240,15 @@ int main(int argc, char** argv) {
                    && local_ok;
         local_ok = require(containsFilename(
                                filenames,
-                               "des_y6_RA_000_001_Dec_p01_p02.dat")
+                               "astra_RA_000_001_Dec_p01_p02.dat")
                                && containsFilename(
                                    filenames,
-                                   "des_y6_RA_050_051_Dec_p89_p90.dat"),
+                                   "astra_RA_050_051_Dec_p89_p90.dat"),
                            "Type-2 filename boundary contract is incorrect")
+                   && local_ok;
+        local_ok = writeFixture(
+                       output / "des_y6_RA_000_001_Dec_p01_p02.dat",
+                       "legacy prefix remains unrelated\n")
                    && local_ok;
     }
     MPIScheduler::barrier();
@@ -247,6 +268,11 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         local_ok = require(fs::exists(output / "keep.txt"),
                            "overwrite removed an unrelated output file")
+                   && local_ok;
+        local_ok = require(
+                       fs::exists(
+                           output / "des_y6_RA_000_001_Dec_p01_p02.dat"),
+                       "overwrite treated a legacy-prefix file as generated")
                    && local_ok;
         for (const fs::directory_entry& entry : fs::directory_iterator(output)) {
             const std::string name = entry.path().filename().string();

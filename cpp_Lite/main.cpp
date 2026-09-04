@@ -127,7 +127,8 @@ void printUsage(const char* program_name) {
         << "  --run-fd BOOL         Run field-distortion test (default: "
         << (ProcessConfig::RUN_PROCESS_FD ? "true" : "false") << ")\n"
         << "  --extcat-input PATH   Directory containing raw external catalogs\n"
-        << "  --extcat-output PATH  External tile directory and effective SOURCE_CAT\n"
+        << "  --source-cat PATH     External tile input for process_main\n"
+        << "  --extcat-output PATH  Generated external tile output directory\n"
         << "  --extcat-contains T   Repeatable raw basename token (default: "
         << configuredExtcatContainsText() << ")\n"
         << "  --extcat-recursive B  Recurse below extcat input\n"
@@ -167,7 +168,7 @@ void printUsage(const char* program_name) {
            "--name value and --name=value; duplicate scalars use the last value.\n"
         << "The first CLI --dataset, --contains, or --extcat-contains replaces its "
            "configured list; repeats append. Lite stage, geometry, smoothing, "
-           "and Gaia layout/path controls are set in the INI [lensing] section.\n";
+           "and Gaia/source path controls are set in the INI [lensing] section.\n";
 }
 
 // ==========================================

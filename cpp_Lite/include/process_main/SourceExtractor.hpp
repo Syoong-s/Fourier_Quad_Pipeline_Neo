@@ -44,12 +44,6 @@ namespace SourceExtractor {
         double xp, double yp, double sig, int& imax, int& jmax,
         double& peak, double& half_light_flux, int& half_light_area);
 
-    void CovarSrcStamp(
-        int& flag, std::vector<float>& sourceStamp, std::vector<float>& noisePower,
-        int nx, int ny, const std::vector<float>& array, const std::vector<int>& weight,
-        double xp, double yp, double sig, int& imax, int& jmax,
-        double& peak, double& half_light_flux, int& half_light_area);
-
     void extractSourceAndNoise(
         int& flag, std::vector<float>& sourceProduct, std::vector<float>& noiseProduct,
         int nx, int ny, const std::vector<float>& array,

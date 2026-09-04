@@ -4,7 +4,7 @@
 #include "pathconfig.hpp"
 
 // ==========================================
-// InitConfig - Initializer and exposure-list defaults
+// InitConfig - Initializer, archive, detector, and exposure-list defaults
 // Method: Edit this file for one site's usual dataset.
 // ==========================================
 
@@ -24,6 +24,13 @@ inline const std::vector<DatasetSpec> DATASETS = {
 };  // Datasets processed sequentially.
 // "Contains1", "Contains2" ...
 inline const std::vector<std::string> CONTAINS = {"v1"};  // OR-matched archive basename tokens.
+
+// Input archive and detector naming conventions.
+inline constexpr const char* ARCHIVE_SUFFIX = ".fits.fz";
+inline constexpr const char* CCDNUM_KEYWORD = "CCDNUM";
+inline constexpr const char* DQ_STEM_REPLACE_FROM = "ood";
+inline constexpr const char* DQ_STEM_REPLACE_TO = "ooi";
+
 inline constexpr const char* EXISTING = "fail";  // Existing-output policy.
 inline constexpr int F77_MAX_PATH = 0;  // Generated-path compatibility limit; zero disables it.
 

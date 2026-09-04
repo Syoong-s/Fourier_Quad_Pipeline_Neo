@@ -151,9 +151,10 @@ lower Dec limits by 2°. Around absolute-Dec ranges beginning at 0°, 30°, and
 
 **Type 2 (one-degree tiles):**
 
-- `des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`, with three-digit RA
-  boundaries and signed two-digit Dec boundaries.
-- Example: `des_y6_RA_123_124_Dec_m05_m04.dat` covers
+- `<ASTROMETRY_TILE_PREFIX>RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`. The default
+  prefix in `config/pathconfig.hpp` is `astra_` and does not include `RA_`.
+  RA boundaries use three digits and Dec boundaries use signed two-digit values.
+- Example: `astra_RA_123_124_Dec_m05_m04.dat` covers
   `123° <= RA < 124°` and `-5° <= Dec < -4°`.
 
 The optional `process_astrocat` phase converts direct regular files from a raw
@@ -184,12 +185,15 @@ compiled defaults in `config/ExtCatConfig.hpp`.
 
 **Filename convention:**
 
-- 1° × 1° tile: `des_y6_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`.
+- 1° × 1° tile:
+  `<SOURCE_CAT_TILE_PREFIX>RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`.
+- The default `SOURCE_CAT_TILE_PREFIX` in `config/pathconfig.hpp` is `extern_`;
+  the prefix does not include `RA_`.
 - RA boundaries use three digits. Dec boundaries use `p` or `m` plus a two-digit
   absolute value. Each upper boundary is one degree above its lower boundary.
 - Each file must contain one header line.
 
-> Example: `des_y6_RA_123_124_Dec_m05_m04.dat` covers
+> Example: `extern_RA_123_124_Dec_m05_m04.dat` covers
 > `123° <= RA < 124°` and `-5° <= Dec < -4°`.
 
 ### DQ masks (optional)

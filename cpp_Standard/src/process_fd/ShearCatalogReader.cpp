@@ -53,7 +53,8 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                                       const PipelineCatalog::CatalogLayout& layout,
                                       std::size_t magnitude_column,
                                       int rank) {
-    const double pixel_size = RuntimeConfigStore::get().lensing.pixel_size;
+    const LensingRuntimeConfig& lensing = RuntimeConfigStore::get().lensing;
+    const double pixel_size = lensing.pixel_size;
     if (iexpo < 1 || iexpo > static_cast<int>(expo_files.size())) {
         if (rank == 0)
             std::cerr << "Invalid exposure index: " << iexpo << std::endl;
@@ -66,6 +67,15 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
         }
         return;
     }
+
+    // ==========================================
+    // Logic: Derive the accepted catalog footprint from runtime CCD geometry
+    // Method: Apply one symmetric edge width to the effective chip dimensions.
+    // ==========================================
+    const int chip_xmin = fc::chip_mask_edge;
+    const int chip_xmax = lensing.chipnx - fc::chip_mask_edge;
+    const int chip_ymin = fc::chip_mask_edge;
+    const int chip_ymax = lensing.chipny - fc::chip_mask_edge;
 
     const std::string& filename = expo_files[iexpo - 1];
     std::ifstream file(filename);
@@ -109,8 +119,8 @@ void ShearCatalogReader::readExposure(int iexpo, FDData& data,
                 }
             }
             if (bad_ccd) continue;
-            if (ix < fc::chip_xmin || ix > fc::chip_xmax ||
-                iy < fc::chip_ymin || iy > fc::chip_ymax) continue;
+            if (ix < chip_xmin || ix > chip_xmax ||
+                iy < chip_ymin || iy > chip_ymax) continue;
             if (row[layout.source.snr_f] < fc::snrfcut) continue;
 
             float snr = row[layout.source.h_flux]

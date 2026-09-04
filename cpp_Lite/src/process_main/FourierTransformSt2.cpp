@@ -163,7 +163,7 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
         }
 
         if (!ImageProcessing::prepareNoisePower(
-                ns, noise_product, LensingConfig::NstampType, noise_p)) {
+                ns, noise_product, noise_p)) {
             MPIFailure::abortWorld("prepare source noise power", noise_fits);
         }
         if (!ImageProcessing::buildCorrectedPower(

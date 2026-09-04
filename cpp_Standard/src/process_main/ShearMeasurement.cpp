@@ -244,10 +244,23 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
             std::string filename = OutputLayout::chipPath(
                 dirOutput, "stamps/fits_PsfLocal", PREFIX, "_PSF_local.fits");
             if (FitsIO::readImage(filename, nx, ny, psfmap)) {
-                int step_psf = LensingConfig::step_psf;
-                nstar = static_cast<int>(psfmap[(step_psf - 2) * nx + (step_psf - 2)] + 0.5f);
-                if (psfmap[(step_psf - 1) * nx + (step_psf - 1)] < -1.0f) {
+                const int step_psf = LensingConfig::step_psf;
+                if (nx < step_psf || ny < step_psf) {
                     proc_error = 1;
+                } else {
+                    nstar = static_cast<int>(
+                        psfmap[(step_psf - 2) * nx + (step_psf - 2)] + 0.5f);
+                    const float validity_marker =
+                        psfmap[(step_psf - 1) * nx + (step_psf - 1)];
+                    if (validity_marker < -1.0f) {
+                        proc_error = 1;
+                    } else if (nx != chipnx || ny != chipny) {
+                        std::cerr << "Error / successful local PSF geometry "
+                                  << nx << "x" << ny << " does not match runtime CCD "
+                                  << chipnx << "x" << chipny << ": " << filename
+                                  << std::endl;
+                        proc_error = 1;
+                    }
                 }
             } else {
                 MPIFailure::abortWorld("read local PSF image", filename);
@@ -371,7 +384,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                     } else if (lensing.psf_type == 2) {
                         double dstar = 0.0;
                         PSFModel::getPSFModelVeryLocal(
-                            psfmap, x, y, psf_model, dstar, nx);
+                            psfmap, x, y, psf_model, dstar, chipnx);
                     }
                 }
 

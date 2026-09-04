@@ -171,11 +171,11 @@ namespace {
     }
 
     // ==========================================
-    // Function: Verify equivalence after Type-1 and Type-2 noise-power preparation
-    // Method: FFT one fixed real-space noise stamp for Type 1, feed that explicit power to
-    //         Type 2, and compare corrected products for modes 0/1/2 plus unsupported mode 3.
+    // Function: Verify the fixed blank-noise-stamp power preparation
+    // Method: Compare the helper with an explicit FFT for every corrected-power
+    //         smoothing mode and retain the invalid-size regression.
     // ==========================================
-    bool testNoiseProductModeEquivalence() {
+    bool testBlankNoisePowerPreparation() {
         constexpr int n = 8;
         std::vector<float> sourceStamp(n * n, 0.0f);
         std::vector<float> noiseStamp(n * n, 0.0f);
@@ -196,47 +196,88 @@ namespace {
         ImageProcessing::getPower(
             n, n, noiseStamp, explicitNoisePower, 0, noisePc);
 
-        std::vector<float> type1NoisePower;
-        std::vector<float> type2NoisePower;
+        std::vector<float> preparedNoisePower;
         if (!ImageProcessing::prepareNoisePower(
-                n, noiseStamp, 1, type1NoisePower)
-            || !ImageProcessing::prepareNoisePower(
-                n, explicitNoisePower, 2, type2NoisePower)
-            || !vectorsNear(type1NoisePower, type2NoisePower, 2.0e-7,
-                            "prepared noise mode equivalence")) {
+                n, noiseStamp, preparedNoisePower)
+            || !vectorsNear(preparedNoisePower, explicitNoisePower, 2.0e-7,
+                            "prepared blank-noise power")) {
             return false;
         }
 
         for (int smoothMode = 0; smoothMode <= 3; ++smoothMode) {
-            std::vector<float> type1Corrected;
-            std::vector<float> type2Corrected;
-            double type1Pc = 0.0;
-            double type2Pc = 0.0;
+            std::vector<float> preparedCorrected;
+            std::vector<float> explicitCorrected;
+            double preparedPc = 0.0;
+            double explicitPc = 0.0;
             if (!ImageProcessing::buildCorrectedPower(
-                    n, n, sourceStamp, type1NoisePower, smoothMode,
-                    type1Corrected, type1Pc)
+                    n, n, sourceStamp, preparedNoisePower, smoothMode,
+                    preparedCorrected, preparedPc)
                 || !ImageProcessing::buildCorrectedPower(
-                    n, n, sourceStamp, type2NoisePower, smoothMode,
-                    type2Corrected, type2Pc)
-                || std::abs(type1Pc - type2Pc) > 1.0e-12
-                || !vectorsNear(type1Corrected, type2Corrected, 2.0e-7,
-                                "corrected noise mode equivalence")) {
+                    n, n, sourceStamp, explicitNoisePower, smoothMode,
+                    explicitCorrected, explicitPc)
+                || std::abs(preparedPc - explicitPc) > 1.0e-12
+                || !vectorsNear(preparedCorrected, explicitCorrected, 2.0e-7,
+                                "corrected blank-noise power")) {
                 return false;
             }
         }
 
         std::vector<float> rejected;
-        return !ImageProcessing::prepareNoisePower(n, noiseStamp, 0, rejected)
-            && !ImageProcessing::prepareNoisePower(n, noiseStamp, 3, rejected)
-            && !ImageProcessing::prepareNoisePower(n + 1, noiseStamp, 1, rejected);
+        return !ImageProcessing::prepareNoisePower(n + 1, noiseStamp, rejected);
+    }
+
+    // ==========================================
+    // Function: Exercise the primary-source mask protection contract
+    // Method: Place a bad pixel at the core, next to the connected source, or
+    //         only in the periphery and require the established outcomes.
+    // ==========================================
+    bool testPrimarySourceMaskProtection() {
+        constexpr int n = 32;
+        constexpr int center = n / 2;
+        auto runCase = [](int badX, int badY, int& outputFlag,
+                          std::vector<int>& outputWeight) {
+            std::vector<float> stamp(n * n, 0.0f);
+            outputWeight.assign(n * n, 1);
+            stamp[static_cast<std::size_t>(center) * n + center] = 10.0f;
+            outputWeight[static_cast<std::size_t>(badY) * n + badX] = 0;
+            int boundx[2] = {0, 0};
+            int boundy[2] = {0, 0};
+            double totalFlux = 0.0;
+            int totalArea = 0;
+            double peak = 0.0;
+            double halfLightFlux = 0.0;
+            int halfLightArea = 0;
+            double radius = 0.0;
+            int xp = 0;
+            int yp = 0;
+            outputFlag = 0;
+            ImageProcessing::markSource(
+                n, stamp, outputWeight, 1.0, 2.0, 4.0,
+                boundx, boundy, totalFlux, totalArea, peak,
+                halfLightFlux, halfLightArea, outputFlag, radius, xp, yp);
+        };
+
+        int coreFlag = 0;
+        std::vector<int> coreWeight;
+        runCase(center, center, coreFlag, coreWeight);
+        int adjacentFlag = 0;
+        std::vector<int> adjacentWeight;
+        runCase(center + 1, center, adjacentFlag, adjacentWeight);
+        int peripheralFlag = 0;
+        std::vector<int> peripheralWeight;
+        runCase(center + 8, center, peripheralFlag, peripheralWeight);
+
+        return coreFlag < 0 && adjacentFlag < 0 && peripheralFlag >= 0
+            && std::any_of(peripheralWeight.begin(), peripheralWeight.end(),
+                           [](int value) { return value == 0; });
     }
 
 }
 
 // ==========================================
 // Function: Run downstream corrected-power regression tests
-// Method: Validate signed log safety, positive-only compatibility, raw source FFT behavior, exact
-//         subtract-smooth-edge ordering, all galaxy modes, and final star regularization.
+// Method: Validate signed log safety, corrected-power ordering, fixed blank-noise
+//         preparation, source-mask protection, and final star regularization.
 // ==========================================
 int main() {
     if (!testSignedLogSmoothing()) {
@@ -247,8 +288,12 @@ int main() {
         std::cerr << "corrected-power order tests failed\n";
         return 1;
     }
-    if (!testNoiseProductModeEquivalence()) {
-        std::cerr << "noise-product mode equivalence tests failed\n";
+    if (!testBlankNoisePowerPreparation()) {
+        std::cerr << "blank-noise power preparation tests failed\n";
+        return 1;
+    }
+    if (!testPrimarySourceMaskProtection()) {
+        std::cerr << "primary-source mask protection test failed\n";
         return 1;
     }
     std::cout << "Power processing tests passed\n";

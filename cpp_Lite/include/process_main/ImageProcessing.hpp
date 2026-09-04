@@ -24,16 +24,6 @@ namespace ImageProcessing {
 
     // Grid decorating (replacing masked pixels with noise)
     void decorateStamp(int ns, double sig, const std::vector<int>& weights, std::vector<float>& stamp);
-    // ==========================================
-    // Function: Fill masked source pixels from one dynamic correlated-noise realization
-    // Method: Clip/normalize transient synthesis power, inverse transform on G, and central-crop.
-    // ==========================================
-    bool decorateStampCorrelated(int stampSize,
-                                 int synthesisSize,
-                                 const std::vector<float>& synthesisPower,
-                                 double zeroLagCovariance,
-                                 const std::vector<int>& weights,
-                                 std::vector<float>& stamp);
 
     // Image smoothing (3x3 grid)
     void smoothGrid33(std::vector<float>& f);
@@ -56,7 +46,6 @@ namespace ImageProcessing {
     void subtractPowerEdgeMean(int n, std::vector<float>& power);
     bool prepareNoisePower(int n,
                            const std::vector<float>& noiseProduct,
-                           int nstampType,
                            std::vector<float>& noisePower);
     bool buildCorrectedPower(int nx, int ny,
                              const std::vector<float>& sourceStamp,

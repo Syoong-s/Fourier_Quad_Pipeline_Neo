@@ -1,8 +1,10 @@
 #include "process_extcat/process_extcat.hpp"
 
+#include "general/CatalogTileNaming.hpp"
 #include "general/MPIUtils.hpp"
 #include "general/MPIScheduler.hpp"
 #include "general/PathUtils.hpp"
+#include "pathconfig.hpp"
 
 #include <mpi.h>
 
@@ -19,7 +21,6 @@
 #include <iostream>
 #include <limits>
 #include <map>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -32,9 +33,6 @@
 namespace {
 
 namespace fs = std::filesystem;
-
-constexpr const char* kTilePrefix = "des_y6_RA_";
-constexpr const char* kTileSuffix = ".dat";
 
 // ==========================================
 // Structure: Describe one inspected input catalog
@@ -149,12 +147,11 @@ bool matchesFilenameTokens(const std::string& basename,
 
 // ==========================================
 // Function: Recognize one pipeline-generated tile basename
-// Method: Match the exact des_y6 one-degree naming grammar used by catalog lookup.
+// Method: Apply the configured source-catalog prefix and shared fixed-suffix grammar.
 // ==========================================
 bool isGeneratedTileName(const std::string& basename) {
-    static const std::regex pattern(
-        R"(^des_y6_RA_[0-9]{3}_[0-9]{3}_Dec_[pm][0-9]{2}_[pm][0-9]{2}\.dat$)");
-    return std::regex_match(basename, pattern);
+    return CatalogTileNaming::isTileFilename(
+        basename, ExtCatConfig::SOURCE_CAT_TILE_PREFIX);
 }
 
 // ==========================================
@@ -450,27 +447,14 @@ bool coordinateTile(double ra, double dec, TileKey& tile, std::string& error) {
 }
 
 // ==========================================
-// Function: Format one signed declination boundary
-// Method: Prefix non-negative integers with p, negative integers with m, and zero-pad two digits.
-// ==========================================
-std::string formatDeclination(int value) {
-    std::ostringstream output;
-    output << (value >= 0 ? 'p' : 'm') << std::setw(2) << std::setfill('0')
-           << std::abs(value);
-    return output.str();
-}
-
-// ==========================================
 // Function: Build the pipeline filename for one one-degree tile
-// Method: Reproduce the des_y6 RA padding and pXX/mXX declination boundary convention.
+// Method: Apply the configured source prefix through the shared boundary grammar.
 // ==========================================
 std::string tileFilename(const TileKey& tile) {
-    std::ostringstream output;
-    output << kTilePrefix << std::setw(3) << std::setfill('0') << tile.ra_lower << '_'
-           << std::setw(3) << std::setfill('0') << tile.ra_lower + 1 << "_Dec_"
-           << formatDeclination(tile.dec_lower) << '_'
-           << formatDeclination(tile.dec_lower + 1) << kTileSuffix;
-    return output.str();
+    return CatalogTileNaming::tileFilename(
+        ExtCatConfig::SOURCE_CAT_TILE_PREFIX,
+        tile.ra_lower,
+        tile.dec_lower);
 }
 
 // ==========================================

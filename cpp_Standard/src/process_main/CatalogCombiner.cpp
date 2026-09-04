@@ -1,6 +1,5 @@
 #include "process_main/CatalogCombiner.hpp"
 #include "process_main/ProcessMainState.hpp"
-#include "process_main/CatalogRowCount.hpp"
 #include "process_main/OutputFile.hpp"
 #include "process_main/MPIFailure.hpp"
 #include "general/OutputLayout.hpp"
@@ -36,51 +35,86 @@ std::string trimRight(std::string str) {
     return str;
 }
 
-enum class ShearCatalogStatus {
-    HasSources,
-    Empty,
-    Missing,
-    ReadError
-};
-
-struct ShearCatalogProbe {
-    ShearCatalogStatus status = ShearCatalogStatus::ReadError;
-    std::string header;
-};
-
 // ==========================================
-// Function: Classify one Stage-7 shear catalog without opening its paired original catalog
-// Method: Require a nonempty header and scan only until the first nonblank data row,
-//         distinguishing a valid zero-source file from missing or unreadable input.
+// Function: Count every physical line in one Stage-9 input catalog
+// Method: Use a fresh getline stream and distinguish clean EOF from an I/O failure.
 // ==========================================
-ShearCatalogProbe probeShearCatalog(const std::string& filename) {
-    ShearCatalogProbe result;
+std::size_t countCatalogLines(const std::string& filename,
+                              const std::string& role) {
     std::ifstream input(filename);
     if (!input.is_open()) {
-        result.status = ShearCatalogStatus::Missing;
-        return result;
-    }
-    if (!std::getline(input, result.header)) {
-        result.status = ShearCatalogStatus::ReadError;
-        return result;
-    }
-    result.header = trimRight(result.header);
-    if (result.header.empty()) {
-        result.status = ShearCatalogStatus::ReadError;
-        return result;
+        MPIFailure::abortWorld(
+            "open catalog for row-count preflight", role + "=" + filename);
     }
 
+    std::size_t line_count = 0;
     std::string line;
     while (std::getline(input, line)) {
-        if (!trimRight(line).empty()) {
-            result.status = ShearCatalogStatus::HasSources;
-            return result;
-        }
+        ++line_count;
     }
-    result.status = input.bad()
-        ? ShearCatalogStatus::ReadError
-        : ShearCatalogStatus::Empty;
-    return result;
+    if (input.bad()) {
+        MPIFailure::abortWorld(
+            "read catalog for row-count preflight", role + "=" + filename);
+    }
+    return line_count;
+}
+
+// ==========================================
+// Function: Determine the fixed number of paired Stage-9 data rows
+// Method: Count shear then orig, retry both with fresh streams after one mismatch,
+//         and preserve a one-line shear catalog as the header-only sentinel.
+// ==========================================
+std::size_t determinePairedDataRows(const std::string& filename_shear,
+                                    const std::string& filename_orig,
+                                    const std::string& prefix) {
+    const std::size_t shear_1 = countCatalogLines(filename_shear, "shear");
+    if (shear_1 == 0) {
+        MPIFailure::abortWorld(
+            "preflight Stage 7 shear catalog",
+            "shear catalog contains no header prefix=" + prefix
+                + " shear=" + filename_shear);
+    }
+    if (shear_1 == 1) {
+        return 0;
+    }
+
+    const std::size_t orig_1 = countCatalogLines(filename_orig, "orig");
+    if (shear_1 == orig_1) {
+        return shear_1 - 1;
+    }
+
+    const std::size_t shear_2 = countCatalogLines(filename_shear, "shear");
+    if (shear_2 == 0) {
+        MPIFailure::abortWorld(
+            "preflight Stage 7 shear catalog",
+            "shear catalog contains no header prefix=" + prefix
+                + " shear=" + filename_shear);
+    }
+    if (shear_2 == 1) {
+        return 0;
+    }
+
+    const std::size_t orig_2 = countCatalogLines(filename_orig, "orig");
+    if (shear_2 != orig_2) {
+        std::ostringstream detail;
+        detail << "prefix=" << prefix
+               << " attempt1_shear_lines=" << shear_1
+               << " attempt1_orig_lines=" << orig_1
+               << " attempt2_shear_lines=" << shear_2
+               << " attempt2_orig_lines=" << orig_2
+               << " shear=" << filename_shear
+               << " orig=" << filename_orig;
+        MPIFailure::abortWorld(
+            "combine catalog row-count preflight", detail.str());
+    }
+
+    std::cout << "CATALOG_ROWCOUNT_RECOVERED"
+              << " prefix=" << prefix
+              << " attempt1_shear_lines=" << shear_1
+              << " attempt1_orig_lines=" << orig_1
+              << " attempt2_shear_lines=" << shear_2
+              << " attempt2_orig_lines=" << orig_2 << std::endl;
+    return shear_2 - 1;
 }
 
 // ==========================================
@@ -140,12 +174,17 @@ void applyCombinedCatalogCalibration(std::vector<float>& cat,
 
 // ==========================================
 // Function: Combine one exposure's chip catalogs into the final result catalog
-// Method: Remove stale output, gate every chip by norm and shear data presence, then lazily
-//         create the exposure catalog from the first contributing chip's live headers.
+// Method: Preflight external physical row counts with one fresh retry, preserve
+//         header-only shear sentinels, and consume matched pairs in a fixed loop.
 // ==========================================
 void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
                         const std::string& dirOutput, int expo_index,
                         float chi2) {
+    if (nchip <= 0 || imageFiles.empty()) {
+        MPIFailure::abortWorld(
+            "combine exposure catalog", "exposure contains no chip paths");
+    }
+
     const bool use_external_catalog =
         RuntimeConfigStore::get().lensing.ext_cat == 1;
     const std::string prefix_expo =
@@ -189,34 +228,32 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
 
         const std::string filename_shear = OutputLayout::chipPath(
             dirOutput, "stamps/dat_Shear", prefix, "_shear.dat");
-        const ShearCatalogProbe shear_probe =
-            probeShearCatalog(filename_shear);
-        if (shear_probe.status == ShearCatalogStatus::Missing) {
-            MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
-        }
-        if (shear_probe.status == ShearCatalogStatus::ReadError) {
-            MPIFailure::abortWorld("parse Stage 7 shear catalog", filename_shear);
-        }
-        if (shear_probe.status == ShearCatalogStatus::Empty) {
-            continue;
-        }
-
         std::string filename_orig;
+        std::size_t paired_data_rows = 0;
         if (use_external_catalog) {
             filename_orig = OutputLayout::chipPath(
                 dirOutput, "stamps/cat_Orig", prefix, "_orig.cat");
-            Internal::requireMatchingCatalogDataRows(
-                filename_shear, filename_orig);
-        }
-        if (chi2 > LensingConfig::chi2_thresh) {
-            std::cout << prefix << " contains no valid sources!" << std::endl;
-            return;
+            paired_data_rows = determinePairedDataRows(
+                filename_shear, filename_orig, prefix);
+            if (paired_data_rows == 0) {
+                continue;
+            }
         }
 
         std::ifstream fin10(filename_shear);
-        std::string ignored_shear_header;
-        if (!fin10.is_open() || !std::getline(fin10, ignored_shear_header)) {
+        if (!fin10.is_open()) {
             MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
+        }
+
+        std::string shear_header;
+        if (!std::getline(fin10, shear_header)) {
+            MPIFailure::abortWorld(
+                "read Stage 7 shear catalog header", filename_shear);
+        }
+        shear_header = trimRight(shear_header);
+        if (shear_header.empty()) {
+            MPIFailure::abortWorld(
+                "parse Stage 7 shear catalog header", filename_shear);
         }
 
         std::ifstream fin15;
@@ -238,32 +275,104 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             }
         }
 
+        std::string first_shear_line;
+        if (!use_external_catalog && !std::getline(fin10, first_shear_line)) {
+            if (fin10.bad()) {
+                MPIFailure::abortWorld(
+                    "read Stage 7 shear catalog", filename_shear);
+            }
+            continue;
+        }
+
+        if (chi2 > LensingConfig::chi2_thresh) {
+            std::cout << prefix << " contains no valid sources!" << std::endl;
+            return;
+        }
+
         if (!output_opened) {
             fout20.open(out_filename);
             fout20 << std::setprecision(10);
             if (use_external_catalog) {
                 fout20 << original_header << " EXPO_NUM ccD_NUM "
-                       << shear_probe.header << " Chi2\n";
+                       << shear_header << " Chi2\n";
             } else {
                 fout20 << " EXPO_NUM ccD_NUM "
-                       << shear_probe.header << " Chi2\n";
+                       << shear_header << " Chi2\n";
             }
             output_opened = true;
         }
 
         std::vector<float> cat(num_cols);
-        std::string line10;
-        while (std::getline(fin10, line10)) {
-            if (line10.empty()) continue;
-            if (!parseShearRow(line10, num_cols, cat)) continue;
-
+        std::size_t pair_index = 0;
+        while (!use_external_catalog || pair_index < paired_data_rows) {
+            std::string line10;
             std::string cat_content;
-            if (use_external_catalog) {
-                Internal::readRequiredPairedCatalogRow(
-                    fin15, cat_content, prefix);
-                cat_content = trimRight(cat_content);
+            bool shear_ok = true;
+            if (use_external_catalog || pair_index > 0) {
+                shear_ok = static_cast<bool>(std::getline(fin10, line10));
+            } else {
+                line10 = first_shear_line;
             }
 
+            bool orig_ok = true;
+            if (use_external_catalog) {
+                orig_ok = static_cast<bool>(std::getline(fin15, cat_content));
+                if (!shear_ok || !orig_ok) {
+                    std::ostringstream detail;
+                    detail << "prefix=" << prefix
+                           << " row_index_zero_based=" << pair_index
+                           << " row_index_one_based=" << (pair_index + 1)
+                           << " expected_data_rows=" << paired_data_rows
+                           << " shear_read_ok=" << shear_ok
+                           << " orig_read_ok=" << orig_ok
+                           << " shear=" << filename_shear
+                           << " orig=" << filename_orig;
+                    MPIFailure::abortWorld(
+                        "read fixed paired catalog row", detail.str());
+                }
+                cat_content = trimRight(cat_content);
+                if (cat_content.empty()) {
+                    std::ostringstream detail;
+                    detail << "empty external catalog data row prefix=" << prefix
+                           << " pair_index=" << (pair_index + 1)
+                           << " shear=" << filename_shear
+                           << " orig=" << filename_orig;
+                    MPIFailure::abortWorld(
+                        "parse paired external catalog row", detail.str());
+                }
+            } else if (!shear_ok) {
+                break;
+            }
+
+            ++pair_index;
+            if (line10.empty()) {
+                if (use_external_catalog) {
+                    std::ostringstream detail;
+                    detail << "empty shear data row prefix=" << prefix
+                           << " pair_index=" << pair_index
+                           << " shear=" << filename_shear
+                           << " orig=" << filename_orig;
+                    MPIFailure::abortWorld(
+                        "parse paired Stage 7 shear row", detail.str());
+                }
+                continue;
+            }
+            if (!parseShearRow(line10, num_cols, cat)) {
+                if (use_external_catalog) {
+                    std::ostringstream detail;
+                    detail << "incomplete shear data row prefix=" << prefix
+                           << " pair_index=" << pair_index
+                           << " shear=" << filename_shear
+                           << " orig=" << filename_orig;
+                    MPIFailure::abortWorld(
+                        "parse paired Stage 7 shear row", detail.str());
+                }
+                continue;
+            }
+
+            // A parsed shear row and its original catalog row form one pair.
+            // Consume both before scientific rejection so omitted pairs cannot
+            // shift the remaining external fields out of alignment.
             if (!passesCombinedCatalogCuts(cat)) {
                 ++m;
                 continue;
@@ -284,10 +393,9 @@ void combineExpoCatalog(int nchip, const std::vector<std::string>& imageFiles,
             fout20 << " " << chi2 << "\n";
         }
 
-        if (use_external_catalog) {
-            fin15.close();
+        if (!use_external_catalog && fin10.bad()) {
+            MPIFailure::abortWorld("read Stage 7 shear catalog", filename_shear);
         }
-        fin10.close();
     }
 
     std::cout << (last_prefix.empty() ? prefix_expo : last_prefix)

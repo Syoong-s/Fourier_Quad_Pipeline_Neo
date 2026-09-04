@@ -90,9 +90,9 @@ inline CandidatePowerStatus assessCandidatePower(
 //         selection or Stage-8 aggregation after recovery is removed.
 // ==========================================
 inline bool candidateDiagnosticsAreFinite(
-    double size, double e1, double e2, double fwhm) {
+    double size, double e1, double e2) {
     return std::isfinite(size) && std::isfinite(e1)
-        && std::isfinite(e2) && std::isfinite(fwhm);
+        && std::isfinite(e2);
 }
 
 }  // namespace Internal

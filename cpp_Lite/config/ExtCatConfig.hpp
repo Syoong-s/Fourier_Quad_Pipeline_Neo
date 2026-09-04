@@ -3,8 +3,8 @@
 
 // ==========================================
 // ExtCatConfig - External source-catalog repartitioning defaults
-// Method: Derive the tile output from the main pipeline SOURCE_CAT while keeping raw-input,
-//         parsing, and optional projection controls together for the first workflow phase.
+// Method: Keep producer output independent from the main catalog input while
+//         retaining parser and optional projection controls for this phase.
 //
 // Note: CatalogLayout requires RA, Dec, and ZP. Each magnitude is optional:
 //       set its raw one-based column to zero when that band is unavailable.
@@ -12,6 +12,7 @@
 //       represented in the layout or consumed by downstream algorithms.
 // ==========================================
 
+#include "Initialize.hpp"
 #include "LensingConfig.hpp"
 #include "pathconfig.hpp"
 
@@ -32,7 +33,7 @@ inline constexpr std::uint64_t EXTCAT_CHUNK_MIB = 64;  // MPI byte-range task si
 // Pass-through external-catalog width only. CatalogLayout uses this value only
 // when explicit projection is disabled; downstream phases must consume the
 // resolved runtime layout instead of deriving offsets from this constant.
-inline constexpr std::size_t EXTCAT_TOTAL_COLUMNS = 18;  // Pass-through external catalog width.
+inline constexpr std::size_t EXTCAT_TOTAL_COLUMNS = Initialize::EXTCAT_TOTAL_COLUMNS;  // Pass-through external catalog width.
 inline constexpr bool EXTCAT_USE_EXPLICIT_COLUMNS = false;  // Enable ordered column projection.
 inline const std::vector<std::size_t> EXTCAT_INPUT_COLUMNS_ONE_BASED = {
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
@@ -42,14 +43,14 @@ inline constexpr bool EXTCAT_USE_EXPLICIT_COORDINATE_COLUMNS = false;  // Overri
 // must be positive. A zero magnitude position means that band is unavailable.
 // Edit positive identities together with EXTCAT_TOTAL_COLUMNS when adopting a
 // different pass-through extcat schema.
-inline constexpr std::size_t EXTCAT_RA_COLUMN_ONE_BASED = 5;  // Raw one-based RA column.
-inline constexpr std::size_t EXTCAT_DEC_COLUMN_ONE_BASED = 6;  // Raw one-based Dec column.
+inline constexpr std::size_t EXTCAT_RA_COLUMN_ONE_BASED = Initialize::EXTCAT_RA_COLUMN_ONE_BASED;  // Raw one-based RA column.
+inline constexpr std::size_t EXTCAT_DEC_COLUMN_ONE_BASED = Initialize::EXTCAT_DEC_COLUMN_ONE_BASED;  // Raw one-based Dec column.
 inline constexpr std::size_t EXTCAT_MAG_G_COLUMN_ONE_BASED = 7;  // Raw one-based g-magnitude column.
 inline constexpr std::size_t EXTCAT_MAG_R_COLUMN_ONE_BASED = 9;  // Raw one-based r-magnitude column.
 inline constexpr std::size_t EXTCAT_MAG_I_COLUMN_ONE_BASED = 11;  // Raw one-based i-magnitude column.
 inline constexpr std::size_t EXTCAT_MAG_Z_COLUMN_ONE_BASED = 13;  // Raw one-based z-magnitude column.
 inline constexpr std::size_t EXTCAT_MAG_Y_COLUMN_ONE_BASED = 15;  // Raw one-based y-magnitude column.
-inline constexpr std::size_t EXTCAT_ZP_COLUMN_ONE_BASED = 17;  // Raw one-based photo-z column.
+inline constexpr std::size_t EXTCAT_ZP_COLUMN_ONE_BASED = Initialize::EXTCAT_ZP_COLUMN_ONE_BASED;  // Raw one-based photo-z column.
 
 }  // namespace ExtCatConfig
 

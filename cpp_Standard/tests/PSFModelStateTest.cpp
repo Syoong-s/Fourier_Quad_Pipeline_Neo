@@ -43,8 +43,9 @@ void testChipSize(int star_count) {
             "selection metadata must align one-to-one with candidate rows");
     if (star_count > 0) {
         require(chip.selection.back().chi_window.size() == 1
-                    && chip.selection.back().knn.size() == 1,
-                "last candidate must own bounded non-square cache vectors");
+                    && chip.selection.back().knn.size() == 1
+                    && chip.selection.back().bad_pair_fraction == 0.0,
+                "last candidate must own bounded caches and reset Type-3 state");
     }
 }
 

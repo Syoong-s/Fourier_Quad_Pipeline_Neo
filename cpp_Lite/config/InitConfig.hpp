@@ -1,6 +1,7 @@
 #ifndef INIT_CONFIG_HPP
 #define INIT_CONFIG_HPP
 
+#include "Initialize.hpp"
 #include "pathconfig.hpp"
 
 // ==========================================
@@ -13,17 +14,9 @@
 
 namespace InitConfig {
 
-struct DatasetSpec {
-    std::string target;  // Dataset output directory name.
-    std::string prefix;  // Archive basename prefix.
-};
-
-// {"Target1", "Prefix1"}, {"Target2", "Prefix2"} ...
-inline const std::vector<DatasetSpec> DATASETS = {
-    {"gband", "c4d_"}
-};  // Datasets processed sequentially.
-// "Contains1", "Contains2" ...
-inline const std::vector<std::string> CONTAINS = {"v1"};  // OR-matched archive basename tokens.
+using DatasetSpec = Initialize::DatasetSpec;
+inline const auto& DATASETS = Initialize::DATASETS;  // Datasets processed sequentially.
+inline const auto& CONTAINS = Initialize::CONTAINS;  // OR-matched archive basename tokens.
 inline constexpr const char* EXISTING = "fail";  // Existing-output policy.
 inline constexpr int F77_MAX_PATH = 0;  // Generated-path compatibility limit; zero disables it.
 
