@@ -9,6 +9,7 @@
 #include "process_main/PSFModel.hpp"
 #include "process_main/FitsIO.hpp"
 #include "process_main/UniversalUtils.hpp"
+#include "process_main/Universalblock.hpp"
 #include "general/MPIScheduler.hpp"
 #include "general/NumericalRecipes.hpp"
 #include "process_main/LinearSolve.hpp"
@@ -26,6 +27,36 @@
 // Extern exposures defined in main
 
 namespace PSFRecons {
+
+namespace Internal {
+
+    // ==========================================
+    // Function: Resolve one CCD image by the pipeline product-prefix identity
+    // Method: Match <exposure>_<chip> independently of exposure-list ordering and
+    //         reject duplicate identities while allowing a genuinely absent chip.
+    // ==========================================
+    const std::string* findChipImage(
+        const std::vector<std::string>& image_files,
+        const std::string& exposure_prefix,
+        int chip_id) {
+        const std::string expected_prefix =
+            exposure_prefix + "_" + std::to_string(chip_id);
+        const std::string* match = nullptr;
+        for (const std::string& image_file : image_files) {
+            if (UniversalUtils::getPrefix(image_file) != expected_prefix) {
+                continue;
+            }
+            if (match != nullptr) {
+                MPIFailure::abortWorld(
+                    "resolve PCA residual chip image",
+                    "duplicate chip prefix " + expected_prefix);
+            }
+            match = &image_file;
+        }
+        return match;
+    }
+
+}  // namespace Internal
 
     // ==========================================
     // Function: Validate one residual stamp
@@ -241,6 +272,22 @@ namespace PSFRecons {
             std::string dir_out;
             UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
             std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
+            const std::string* chip_image =
+                Internal::findChipImage(image_files, prefix_e, ichip);
+            if (chip_image == nullptr) {
+                continue;
+            }
+            const Universalblock::NormStatus norm_status =
+                Universalblock::checkNorm(*chip_image, dir_out);
+            if (norm_status == Universalblock::NormStatus::Invalid) {
+                continue;
+            }
+            if (norm_status != Universalblock::NormStatus::Valid) {
+                MPIFailure::abortWorld(
+                    "validate PCA residual chip norm",
+                    Universalblock::normErrorDetail(
+                        norm_status, *chip_image, dir_out));
+            }
             
             std::string filename_xy = OutputLayout::chipPath(
                 dir_out, "stamps/dat_StarXY",
@@ -438,6 +485,22 @@ namespace PSFRecons {
                 std::string dir_out;
                 UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
                 std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
+                const std::string* chip_image =
+                    Internal::findChipImage(image_files, prefix_e, ichip);
+                if (chip_image == nullptr) {
+                    continue;
+                }
+                const Universalblock::NormStatus norm_status =
+                    Universalblock::checkNorm(*chip_image, dir_out);
+                if (norm_status == Universalblock::NormStatus::Invalid) {
+                    continue;
+                }
+                if (norm_status != Universalblock::NormStatus::Valid) {
+                    MPIFailure::abortWorld(
+                        "validate PCA projection chip norm",
+                        Universalblock::normErrorDetail(
+                            norm_status, *chip_image, dir_out));
+                }
                 std::string filename_xy = OutputLayout::chipPath(
                     dir_out, "stamps/dat_StarXY",
                     prefix_e + "_" + std::to_string(ichip), "_star_xy.dat");

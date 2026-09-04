@@ -24,8 +24,8 @@ namespace FourierTransformSt2 {
 
 // ==========================================
 // Function: Transform one chip's source stamps into Fourier-space products
-// Method: Keep source-only smooth-2 diagnostics, prepare the configured noise product,
-//         and publish the shared corrected-power path through checked writers.
+// Method: Gate on the Stage-1 norm, require the Stage-3 catalog and header, keep
+//         source-only smooth-2 diagnostics, and publish through checked writers.
 // ==========================================
 void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dirOutput) {
     const LensingRuntimeConfig& lensing = RuntimeConfigStore::get().lensing;
@@ -53,12 +53,15 @@ void chipProcessFourierTSt2(const std::string& imageFile, const std::string& dir
 
     std::ifstream fin(info_filename);
     if (!fin.is_open()) {
-        std::cerr << "Error / FFT2 source_info catalog file error!! " << info_filename << std::endl;
-        return;
+        MPIFailure::abortWorld(
+            "read source info for galaxy FFT", info_filename);
     }
 
     std::string header;
-    std::getline(fin, header); // skip header line
+    if (!std::getline(fin, header)) {
+        MPIFailure::abortWorld(
+            "read source-info header for galaxy FFT", info_filename);
+    }
 
     std::string line;
     int iflag_col = LensingConfig::iflag + 1; // 10 columns

@@ -61,7 +61,13 @@ before Stage 9 rejects them.
 
 Every downstream Norm gate treats an invalid sentinel as an ordinary chip
 skip, but a missing or unreadable Norm FITS product is a pipeline-integrity
-failure and aborts the MPI world. For external catalogs, Stage 9 counts all
+failure and aborts the MPI world. Stages 4--6 likewise require their Stage-3
+catalog files and readable headers; header-only catalogs remain the valid
+zero-row representation. Standard PCA residual aggregation resolves each norm
+by the `<exposure>_<chip>` product identity rather than list position, so
+reordered lists and absent CCDs cannot make it validate another chip; missing
+per-exposure residual products remain optional aggregation inputs. For external
+catalogs, Stage 9 counts all
 physical shear/orig lines before production reads, retries one mismatch with
 fresh streams, and then consumes exactly the matched data-row count. A
 header-only shear catalog remains the zero-source sentinel and is skipped
@@ -72,9 +78,11 @@ probe. Shear values retain the fast `stringstream >> float` path: upstream
 Stage 7 guarantees no NaN/Inf tokens, so Stage 9 checks only that every row
 supplies all `shear_cat_ncols` fields. The Standard non-external path remains
 EOF-driven.
-`UniversalblockTest` and `CatalogCombinerLifecycleTest` provide focused local
-coverage for these contracts and are compiled explicitly with the same C++17
-MPI and science-library settings as the production build.
+`UniversalblockTest`, `RequiredInputFailureTest`, and
+`CatalogCombinerLifecycleTest` provide focused local coverage for these
+contracts. `PSFReconsOrientationTest` also covers reordered and gapped PCA
+chip lookup. Tests are compiled explicitly with the same C++17 MPI and science
+library settings as the production build.
 
 See the [main guide](../CPP_GUIDE.md) and
 [parameter reference](../CPP_PIPELINE_PARAMETERS.md).

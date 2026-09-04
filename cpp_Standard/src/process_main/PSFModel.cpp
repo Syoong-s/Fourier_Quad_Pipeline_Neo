@@ -937,9 +937,11 @@ namespace PSFModel {
                 MPIFailure::abortWorld("read PSF star-candidate info", filepath);
             }
 
-            // Skip header line
             std::string header;
-            std::getline(infile, header);
+            if (!std::getline(infile, header)) {
+                MPIFailure::abortWorld(
+                    "read PSF star-candidate header", filepath);
+            }
 
             std::string line;
             while (std::getline(infile, line)) {

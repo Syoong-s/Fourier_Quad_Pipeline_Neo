@@ -38,8 +38,8 @@ namespace FourierTransformSt1 {
 
     // ==========================================
     // Function: Transform one chip's star-candidate stamps to Fourier power
-    // Method: Prepare the configured noise product, build one shared corrected-power path,
-    //         regularize it, and reuse fixed-size scratch vectors.
+    // Method: Gate on the Stage-1 norm, require the Stage-3 candidate catalog and
+    //         header, then build and regularize the shared corrected-power path.
     // ==========================================
     void chipProcessFourierTSt1(const std::string& imageFile,
                                 const std::string& dirOutput) {
@@ -66,13 +66,13 @@ namespace FourierTransformSt1 {
 
         std::ifstream fin(filename);
         if (!fin.is_open()) {
-            std::cerr << filename << "\n";
-            std::cerr << "Error / FFT1 star_can_info catalog file error!!\n";
-            return;
+            MPIFailure::abortWorld("read star-candidate info", filename);
         }
 
         std::string header;
-        std::getline(fin, header); // skip header line
+        if (!std::getline(fin, header)) {
+            MPIFailure::abortWorld("read star-candidate header", filename);
+        }
 
         double val1, val2, val3, val4;
         while (fin >> val1 >> val2 >> val3 >> val4) {

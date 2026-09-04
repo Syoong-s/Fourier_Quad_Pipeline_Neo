@@ -48,7 +48,9 @@ Full-row `-99999` sentinels remain the invalid numerical-source contract.
 
 Every downstream Norm gate treats an invalid sentinel as an ordinary chip
 skip, but a missing or unreadable Norm FITS product is a pipeline-integrity
-failure and aborts the MPI world. Stage 9 counts all physical shear/orig lines
+failure and aborts the MPI world. Stages 4--6 likewise require their Stage-3
+catalog files and readable headers; header-only catalogs remain the valid
+zero-row representation. Stage 9 counts all physical shear/orig lines
 before production reads, retries one mismatch with fresh streams, and then
 consumes exactly the matched data-row count. A header-only shear catalog
 remains the zero-source sentinel and is skipped before the orig file is
@@ -58,9 +60,10 @@ scientific rejection, and performs no trailing EOF probe. Shear values retain
 the fast `stringstream >> float` path: upstream Stage 7 guarantees no NaN/Inf
 tokens, so Stage 9 checks only that every row supplies all
 `shear_cat_ncols` fields.
-`UniversalblockTest` and `CatalogCombinerLifecycleTest` provide focused local
-coverage for these contracts and are compiled explicitly with the same C++17
-MPI and science-library settings as the production build.
+`UniversalblockTest`, `RequiredInputFailureTest`, and
+`CatalogCombinerLifecycleTest` provide focused local coverage for these
+contracts and are compiled explicitly with the same C++17 MPI and
+science-library settings as the production build.
 
 See the [main guide](../CPP_GUIDE.md) and
 [parameter reference](../CPP_PIPELINE_PARAMETERS.md).

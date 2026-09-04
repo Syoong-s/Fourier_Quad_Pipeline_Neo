@@ -7,6 +7,18 @@
 #include "process_main/LinearSolve.hpp"
 
 namespace PSFRecons {
+    namespace Internal {
+        // ==========================================
+        // Function: Resolve one CCD image by the pipeline product-prefix identity
+        // Method: Match <exposure>_<chip> independently of list order and return
+        //         null only when that chip is genuinely absent from the exposure.
+        // ==========================================
+        const std::string* findChipImage(
+            const std::vector<std::string>& image_files,
+            const std::string& exposure_prefix,
+            int chip_id);
+    }
+
     // Stage 6 main entry: coordinates PSF fitting and reconstruction across chips and exposures
     void chipPSFRecons(int nexpo);
 

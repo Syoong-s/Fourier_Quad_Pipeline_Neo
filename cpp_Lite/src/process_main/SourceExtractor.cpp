@@ -138,8 +138,8 @@ namespace SourceExtractor {
 
     // ==========================================
     // Function: Process one chip for source and star catalog generation
-    // Method: Apply the shared norm gate before any chip input, then read the full valid norm map
-    //         for coefficients and source extraction through the Lite external-catalog branch.
+    // Method: Apply the shared norm gate before any chip input, then require the science
+    //         image and complete norm contract before the Lite external-catalog branch.
     // ==========================================
     void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput) {
         const RuntimeConfig& runtime_config = RuntimeConfigStore::get();
@@ -165,14 +165,12 @@ namespace SourceExtractor {
         std::vector<float> array;
 
         if (!FitsIO::readImage(imageFile, nx, ny, array)) {
-            std::cerr << "Error reading image: " << imageFile << std::endl;
-            return;
+            MPIFailure::abortWorld("read source-extraction image", imageFile);
         }
 
         std::string raw_prefix = UniversalUtils::getPrefix(imageFile);
         std::string PREFIX = raw_prefix;
-        std::string filename = OutputLayout::chipPath(
-            dirOutput, "stamps/Norm", PREFIX, "_norm.fits");
+        std::string filename = Universalblock::normFilename(imageFile, dirOutput);
 
         std::vector<float> normap;
         std::vector<double> bg_coeffs;
@@ -181,20 +179,15 @@ namespace SourceExtractor {
         if (!FitsIO::readNormHDU(filename, norm_nx, norm_ny, normap,
                                   bg_coeffs, sig_coeffs, lensing.ccd_split,
                                   LensingConfig::nct)) {
-            std::cerr << "Error reading normalized map: " << filename << std::endl;
-            return;
+            MPIFailure::abortWorld(
+                "read normalized map for source extraction", filename);
         }
         const size_t expected_size = static_cast<size_t>(nx) * static_cast<size_t>(ny);
-        const size_t expected_bg_count = static_cast<size_t>(lensing.ccd_split)
-                                       * static_cast<size_t>(LensingConfig::nct);
         const size_t expected_sig_count = static_cast<size_t>(lensing.ccd_split) * 3U;
         if (nx <= lensing.ccd_split
             || norm_nx != nx || norm_ny != ny || normap.size() != expected_size
-            || bg_coeffs.size() != expected_bg_count
             || sig_coeffs.size() != expected_sig_count) {
-            std::cerr << "Error / proc_source malformed norm chip "
-                      << imageFile << std::endl;
-            return;
+            MPIFailure::abortWorld("validate normalized map contract", filename);
         }
 
         std::vector<int> weight(nx * ny, 1);
