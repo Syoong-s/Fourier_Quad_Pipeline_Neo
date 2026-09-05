@@ -63,9 +63,10 @@ Every downstream Norm gate treats an invalid sentinel as an ordinary chip
 skip, but a missing or unreadable Norm FITS product is a pipeline-integrity
 failure and aborts the MPI world. Stages 4--6 likewise require their Stage-3
 catalog files and readable headers; header-only catalogs remain the valid
-zero-row representation. Standard PCA residual aggregation resolves each norm
-by the `<exposure>_<chip>` product identity rather than list position, so
-reordered lists and absent CCDs cannot make it validate another chip; missing
+zero-row representation. Before Standard PCA residual aggregation, rank zero
+reads each Science FITS `CCDNUM` once, broadcasts the physical-CCD-to-list index,
+and resolves each norm through the matched Science path's continuous basename;
+reordered lists and absent CCDs therefore cannot validate another chip. Missing
 per-exposure residual products remain optional aggregation inputs. For external
 catalogs, Stage 9 counts all
 physical shear/orig lines before production reads, retries one mismatch with
@@ -80,8 +81,9 @@ supplies all `shear_cat_ncols` fields. The Standard non-external path remains
 EOF-driven.
 `UniversalblockTest`, `RequiredInputFailureTest`, and
 `CatalogCombinerLifecycleTest` provide focused local coverage for these
-contracts. `PSFReconsOrientationTest` also covers reordered and gapped PCA
-chip lookup. Tests are compiled explicitly with the same C++17 MPI and science
+contracts. `PSFReconsCcdLookupTest` covers reordered Science lists, physical CCD
+gaps, and malformed CCDNUM mappings; `PSFReconsOrientationTest` covers PCA image
+orientation. Tests are compiled explicitly with the same C++17 MPI and science
 library settings as the production build.
 
 See the [main guide](../CPP_GUIDE.md) and

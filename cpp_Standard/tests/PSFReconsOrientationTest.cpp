@@ -1,5 +1,4 @@
 #include "process_main/PCAImageLayout.hpp"
-#include "process_main/PSFRecons.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -61,29 +60,6 @@ void testPcaInputFeatureOrder() {
         requireNear(static_cast<float>(centered[pixel]), residual[pixel] - 0.5f,
                     0.0f, "PCA centering transposed a pixel");
     }
-}
-
-// ==========================================
-// Function: Verify PCA norm lookup is independent of exposure-list position
-// Method: Resolve a reordered chip, preserve an interior gap, and reject prefix lookalikes.
-// ==========================================
-void testChipImageResolution() {
-    const std::vector<std::string> imageFiles = {
-        "/data/exposure_10.fits",
-        "/data/exposure_1.fits",
-        "/data/exposure_3.fits",
-        "/data/exposure_30.fits"
-    };
-    const std::string* chip3 =
-        PSFRecons::Internal::findChipImage(imageFiles, "exposure", 3);
-    require(chip3 == &imageFiles[2],
-            "reordered list resolved the wrong chip image");
-    require(PSFRecons::Internal::findChipImage(imageFiles, "exposure", 2)
-                == nullptr,
-            "an interior chip gap must remain absent");
-    require(PSFRecons::Internal::findChipImage(imageFiles, "exposure", 30)
-                == &imageFiles[3],
-            "chip identity must not match a shorter numeric prefix");
 }
 
 // ==========================================
@@ -156,7 +132,6 @@ void testNumericalEquivalenceToLegacyPermutation() {
 // Method: Exercise the same row-major helpers used by production PSFRecons.
 // ==========================================
 int main() {
-    testChipImageResolution();
     testPcaInputFeatureOrder();
     testNumericalEquivalenceToLegacyPermutation();
     std::cout << "PSFRecons orientation tests passed\n";

@@ -31,29 +31,130 @@ namespace PSFRecons {
 namespace Internal {
 
     // ==========================================
-    // Function: Resolve one CCD image by the pipeline product-prefix identity
-    // Method: Match <exposure>_<chip> independently of exposure-list ordering and
-    //         reject duplicate identities while allowing a genuinely absent chip.
+    // Function: Build the physical-CCD to Science-list index for one exposure
+    // Method: Read every Science FITS CCDNUM, reject invalid or duplicate
+    //         identities, and leave genuinely absent CCD slots at -1.
     // ==========================================
-    const std::string* findChipImage(
+    std::vector<int> buildChipImageIndex(
         const std::vector<std::string>& image_files,
-        const std::string& exposure_prefix,
-        int chip_id) {
-        const std::string expected_prefix =
-            exposure_prefix + "_" + std::to_string(chip_id);
-        const std::string* match = nullptr;
-        for (const std::string& image_file : image_files) {
-            if (UniversalUtils::getPrefix(image_file) != expected_prefix) {
-                continue;
-            }
-            if (match != nullptr) {
-                MPIFailure::abortWorld(
-                    "resolve PCA residual chip image",
-                    "duplicate chip prefix " + expected_prefix);
-            }
-            match = &image_file;
+        int max_chip_id) {
+        if (max_chip_id <= 0
+            || image_files.size()
+                   > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+            MPIFailure::abortWorld(
+                "build PCA chip-image index",
+                "invalid chip range or exposure-list size");
         }
-        return match;
+
+        std::vector<int> image_index_by_ccd(
+            static_cast<std::size_t>(max_chip_id), -1);
+        for (std::size_t image_index = 0;
+             image_index < image_files.size(); ++image_index) {
+            int ccd_num = 0;
+            if (!FitsIO::readCCDNUM(image_files[image_index], ccd_num)) {
+                MPIFailure::abortWorld(
+                    "read PCA Science CCDNUM", image_files[image_index]);
+            }
+            if (ccd_num < 1 || ccd_num > max_chip_id) {
+                MPIFailure::abortWorld(
+                    "validate PCA Science CCDNUM",
+                    image_files[image_index] + " CCDNUM="
+                        + std::to_string(ccd_num));
+            }
+            int& mapped_index = image_index_by_ccd[
+                static_cast<std::size_t>(ccd_num - 1)];
+            if (mapped_index >= 0) {
+                MPIFailure::abortWorld(
+                    "build PCA chip-image index",
+                    "duplicate CCDNUM=" + std::to_string(ccd_num)
+                        + " in " + image_files[static_cast<std::size_t>(mapped_index)]
+                        + " and " + image_files[image_index]);
+            }
+            mapped_index = static_cast<int>(image_index);
+        }
+        return image_index_by_ccd;
+    }
+
+    // ==========================================
+    // Function: Build and broadcast every exposure's PCA chip-image index
+    // Method: Let rank zero perform each FITS header read once, flatten the
+    //         per-exposure mappings, and share the immutable table with all ranks.
+    // ==========================================
+    std::vector<int> prepareChipImageIndices(int nexpo, int max_chip_id) {
+        if (nexpo <= 0 || max_chip_id <= 0
+            || ProcessMain::state.exposure_files.size()
+                   < static_cast<std::size_t>(nexpo)
+            || static_cast<std::size_t>(nexpo)
+                   > static_cast<std::size_t>(std::numeric_limits<int>::max())
+                         / static_cast<std::size_t>(max_chip_id)) {
+            MPIFailure::abortWorld(
+                "prepare PCA chip-image indices",
+                "invalid exposure or chip count");
+        }
+
+        const std::size_t total_size = static_cast<std::size_t>(nexpo)
+                                     * static_cast<std::size_t>(max_chip_id);
+        std::vector<int> flattened_indices(total_size, -1);
+        if (MPIScheduler::state.rank == 0) {
+            for (int exposure_index = 0; exposure_index < nexpo;
+                 ++exposure_index) {
+                std::vector<std::string> image_files;
+                std::string dir_output;
+                UniversalUtils::getImageList(
+                    ProcessMain::state.exposure_files[
+                        static_cast<std::size_t>(exposure_index)],
+                    image_files, dir_output);
+                const std::vector<int> exposure_indices =
+                    buildChipImageIndex(image_files, max_chip_id);
+                std::copy(
+                    exposure_indices.begin(), exposure_indices.end(),
+                    flattened_indices.begin()
+                        + static_cast<std::size_t>(exposure_index)
+                              * static_cast<std::size_t>(max_chip_id));
+            }
+        }
+
+        if (MPI_Bcast(flattened_indices.data(),
+                      static_cast<int>(total_size), MPI_INT, 0,
+                      MPIScheduler::state.communicator) != MPI_SUCCESS) {
+            MPIFailure::abortWorld(
+                "broadcast PCA chip-image indices",
+                "MPI_Bcast failed");
+        }
+        return flattened_indices;
+    }
+
+    // ==========================================
+    // Function: Resolve one physical CCD through the broadcast exposure index
+    // Method: Return null for an absent CCD and abort if its mapped list
+    //         position is outside the current exposure list.
+    // ==========================================
+    const std::string* indexedChipImage(
+        const std::vector<std::string>& image_files,
+        const std::vector<int>& flattened_indices,
+        int exposure_index, int chip_id, int max_chip_id) {
+        if (exposure_index < 0 || chip_id < 1 || chip_id > max_chip_id) {
+            MPIFailure::abortWorld(
+                "resolve PCA chip image", "invalid exposure or CCD index");
+        }
+        const std::size_t mapping_offset =
+            static_cast<std::size_t>(exposure_index)
+                * static_cast<std::size_t>(max_chip_id)
+            + static_cast<std::size_t>(chip_id - 1);
+        if (mapping_offset >= flattened_indices.size()) {
+            MPIFailure::abortWorld(
+                "resolve PCA chip image", "mapping table is incomplete");
+        }
+        const int image_index = flattened_indices[mapping_offset];
+        if (image_index < 0) {
+            return nullptr;
+        }
+        if (static_cast<std::size_t>(image_index) >= image_files.size()) {
+            MPIFailure::abortWorld(
+                "resolve PCA chip image",
+                "exposure list changed after CCDNUM indexing");
+        }
+        return &image_files[static_cast<std::size_t>(image_index)];
     }
 
 }  // namespace Internal
@@ -212,14 +313,18 @@ namespace Internal {
         std::vector<std::string> image_files;
         std::string dir_output;
         UniversalUtils::getImageList(ProcessMain::state.exposure_files[0], image_files, dir_output);
+        const int max_chip_id = RuntimeConfigStore::get().lensing.nmax_chip;
+        const std::vector<int> chip_image_indices =
+            Internal::prepareChipImageIndices(nexpo, max_chip_id);
 
         // Call forcecov to run PCA fitting on CCDs in parallel
         MPIScheduler::forcecov(
             LensingConfig::procs_pn,
             LensingConfig::work_pn,
-            RuntimeConfigStore::get().lensing.nmax_chip,
-            [](int ichip, int nexpo_inner) {
-                chipResPCAFit(ichip, nexpo_inner);
+            max_chip_id,
+            [&chip_image_indices, max_chip_id](int ichip, int nexpo_inner) {
+                chipResPCAFit(
+                    ichip, nexpo_inner, chip_image_indices, max_chip_id);
             },
             "fitting residual...",
             nexpo
@@ -246,9 +351,12 @@ namespace Internal {
 
     // ==========================================
     // Function: Fit residual PCA and its spatial coefficient surfaces for one CCD
-    // Method: Filter non-finite stars, retain only positive PCA modes, and route numerical failures to polynomial-only output.
+    // Method: Resolve the physical CCD through the broadcast Science index,
+    //         filter non-finite stars, and retain only positive PCA modes.
     // ==========================================
-    void chipResPCAFit(int ichip, int nexpo) {
+    void chipResPCAFit(int ichip, int nexpo,
+                       const std::vector<int>& chip_image_indices,
+                       int max_chip_id) {
         if (ichip == 2 || ichip == 61) {
             return;
         }
@@ -273,7 +381,9 @@ namespace Internal {
             UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
             std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
             const std::string* chip_image =
-                Internal::findChipImage(image_files, prefix_e, ichip);
+                Internal::indexedChipImage(
+                    image_files, chip_image_indices, i - 1, ichip,
+                    max_chip_id);
             if (chip_image == nullptr) {
                 continue;
             }
@@ -486,7 +596,9 @@ namespace Internal {
                 UniversalUtils::getImageList(ProcessMain::state.exposure_files[i - 1], image_files, dir_out);
                 std::string prefix_e = UniversalUtils::getPrefixExpo(image_files[0]);
                 const std::string* chip_image =
-                    Internal::findChipImage(image_files, prefix_e, ichip);
+                    Internal::indexedChipImage(
+                        image_files, chip_image_indices, i - 1, ichip,
+                        max_chip_id);
                 if (chip_image == nullptr) {
                     continue;
                 }
@@ -737,6 +849,13 @@ namespace Internal {
         int ichip = 0, nstar = 0, valid = 0;
         while (file10 >> ichip >> nstar >> valid) {
             int proc_error = 0;
+
+            if (ichip < 1
+                || static_cast<std::size_t>(ichip) > image_files.size()) {
+                MPIFailure::abortWorld(
+                    "validate PSF residual list index",
+                    in_filename + " ichip=" + std::to_string(ichip));
+            }
             
             if (valid < 0) {
                 writeInvalidChip(ichip, nstar, valid);

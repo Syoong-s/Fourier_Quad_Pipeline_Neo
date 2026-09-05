@@ -9,21 +9,34 @@
 namespace PSFRecons {
     namespace Internal {
         // ==========================================
-        // Function: Resolve one CCD image by the pipeline product-prefix identity
-        // Method: Match <exposure>_<chip> independently of list order and return
-        //         null only when that chip is genuinely absent from the exposure.
+        // Function: Build the physical-CCD to Science-list index for one exposure
+        // Method: Read every Science FITS CCDNUM, reject invalid or duplicate
+        //         identities, and leave genuinely absent CCD slots at -1.
         // ==========================================
-        const std::string* findChipImage(
+        std::vector<int> buildChipImageIndex(
             const std::vector<std::string>& image_files,
-            const std::string& exposure_prefix,
-            int chip_id);
+            int max_chip_id);
+
+        // ==========================================
+        // Function: Resolve one physical CCD through a flattened exposure index
+        // Method: Return its Science path, or null when that CCD is absent.
+        // ==========================================
+        const std::string* indexedChipImage(
+            const std::vector<std::string>& image_files,
+            const std::vector<int>& flattened_indices,
+            int exposure_index, int chip_id, int max_chip_id);
     }
 
     // Stage 6 main entry: coordinates PSF fitting and reconstruction across chips and exposures
     void chipPSFRecons(int nexpo);
 
-    // Dynamic PCA fitting for a specific CCD chip
-    void chipResPCAFit(int ichip, int nexpo);
+    // ==========================================
+    // Function: Fit residual PCA for one physical CCD
+    // Method: Reuse the broadcast CCDNUM-to-Science index for both residual passes.
+    // ==========================================
+    void chipResPCAFit(int ichip, int nexpo,
+                       const std::vector<int>& chip_image_indices,
+                       int max_chip_id);
 
     // Plot residuals and map modified residuals for a specific exposure
     void plotResidualsV2(int iexpo);
