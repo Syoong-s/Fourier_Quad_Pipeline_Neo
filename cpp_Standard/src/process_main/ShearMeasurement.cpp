@@ -201,8 +201,8 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         }
 
         proc_error = 0;
-        std::string PREFIX = UniversalUtils::getPrefix(imageFiles[ichip]);
-        int i_ccd = 0;
+        const std::string PREFIX = UniversalUtils::getPrefix(imageFiles[ichip]);
+        const int ccdnum = UniversalUtils::getChipId(imageFiles[ichip]);
         int nx = 0, ny = 0;
         std::vector<float> psfmap;
 
@@ -234,10 +234,6 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                     proc_error = 1;
                 }
                 fin.close();
-            }
-
-            if (lensing.psf_ms == 1) {
-                i_ccd = UniversalUtils::getChipId(imageFiles[ichip]);
             }
 
         } else if (lensing.ext_psf != 1 && lensing.psf_type == 2) {
@@ -292,7 +288,9 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         double PU[2][LensingConfig::npd] = {{0.0}, {0.0}};
 
         int astrometry_error = 0;
-        Astrometry::readAstrometryPara(headname, ichip + 1, cRPIX, cD, cRVAL, PU, LensingConfig::npd, astrometry_error);
+        Astrometry::readAstrometryPara(
+            headname, ccdnum, cRPIX, cD, cRVAL, PU, LensingConfig::npd,
+            astrometry_error);
         if (astrometry_error == 1) {
             write_empty_output();
             continue;
@@ -374,7 +372,7 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
                     if (lensing.psf_type == 1) {
                         if (lensing.psf_ms == 1) {
                             PSFRecons::getPSFModelHierarchical(
-                                i_ccd, x, y, res_factor, local_coe, psf_model);
+                                ccdnum, x, y, res_factor, local_coe, psf_model);
                         } else if (lensing.psf_ms == 0) {
                             double xx = 2.0 * (x / static_cast<double>(chipnx)) - 1.0;
                             double yy = 2.0 * (y / static_cast<double>(chipny)) - 1.0;

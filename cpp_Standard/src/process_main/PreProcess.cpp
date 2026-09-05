@@ -375,7 +375,11 @@ namespace PreProcess {
         }
     }
 
-    // Stage 1 driver
+    // ==========================================
+    // Function: Run Stage 1 preprocessing for one exposure
+    // Method: Resolve each optional calibration path from the physical CCDNUM encoded in the
+    //         canonical science filename, while chip-local products reuse that filename prefix.
+    // ==========================================
     void preProcess(int iexpo) {
         const LensingRuntimeConfig& lensing =
             RuntimeConfigStore::get().lensing;
@@ -389,14 +393,18 @@ namespace PreProcess {
         UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
         
         for (const auto& image_file : image_files) {
-            int cid = UniversalUtils::getChipId(image_file);
-            
-            std::ostringstream oss;
-            oss << std::setw(2) << std::setfill('0') << cid;
-            std::string flat_file = lensing.flat_path + "/flat_" + oss.str()
-                                    + "_weight.fits";
-            
-            chipPreProcess(image_file, dir_output, cid, flat_file);
+            std::string flat_file;
+            const bool needs_flat_file = lensing.include_flat == 1
+                || lensing.include_mask == 1 || lensing.include_mask == 3;
+            if (needs_flat_file) {
+                const int ccdnum = UniversalUtils::getChipId(image_file);
+                std::ostringstream oss;
+                oss << std::setw(2) << std::setfill('0') << ccdnum;
+                flat_file = lensing.flat_path + "/flat_" + oss.str()
+                          + "_weight.fits";
+            }
+
+            chipPreProcess(image_file, dir_output, flat_file);
         }
     }
 
@@ -404,7 +412,8 @@ namespace PreProcess {
     // Function: Individual chip preprocessing
     // Method: Match the Fortran Stage 1 flow while keeping diagnostics side-effect free.
     // ==========================================
-    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid, const std::string& maskFile) {
+    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput,
+                        const std::string& flatFile) {
         const LensingRuntimeConfig& lensing =
             RuntimeConfigStore::get().lensing;
         int proc_error = 0;
@@ -427,9 +436,9 @@ namespace PreProcess {
         std::vector<float> dqmask;
         if (proc_error == 0
             && (lensing.include_mask == 2 || lensing.include_mask == 3)) {
-            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
-            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
-                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
+            const std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
+            const std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
+                                              + prefix + ".fits";
             int dnx = 0, dny = 0;
             if (!FitsIO::readImage(local_mask_file, dnx, dny, dqmask)) {
                 std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
@@ -443,8 +452,8 @@ namespace PreProcess {
         std::vector<float> flat;
         if (proc_error == 0 && lensing.include_flat == 1) {
             int fnx = 0, fny = 0;
-            if (!FitsIO::readImage(maskFile, fnx, fny, flat)) {
-                std::cerr << "Error reading flat file: " << maskFile << std::endl;
+            if (!FitsIO::readImage(flatFile, fnx, fny, flat)) {
+                std::cerr << "Error reading flat file: " << flatFile << std::endl;
                 proc_error = 1;
             } else if (fnx != nx || fny != ny) {
                 std::cerr << "Error: flat file dimensions do not match image!" << std::endl;
@@ -558,8 +567,8 @@ namespace PreProcess {
             if (lensing.include_mask == 1 || lensing.include_mask == 3) {
                 int nxx = 0, nyy = 0;
                 std::vector<float> flat_weight;
-                if (!FitsIO::readImage(maskFile, nxx, nyy, flat_weight)) {
-                    std::cerr << "Error reading mask file: " << maskFile << std::endl;
+                if (!FitsIO::readImage(flatFile, nxx, nyy, flat_weight)) {
+                    std::cerr << "Error reading mask file: " << flatFile << std::endl;
                     proc_error = 1;
                     flat_weight.assign(nx * ny, -99999.0f);
                 } else if (nxx != nx || nyy != ny) {

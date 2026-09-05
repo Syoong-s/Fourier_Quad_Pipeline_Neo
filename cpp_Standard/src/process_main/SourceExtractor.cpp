@@ -131,21 +131,19 @@ namespace SourceExtractor {
         std::string dir_output;
         UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
         
-        int nchip = static_cast<int>(image_files.size());
-        for (int ichip = 1; ichip <= nchip; ++ichip) {
-            chipProcessSource(image_files, ichip, dir_output);
+        for (const std::string& image_file : image_files) {
+            chipProcessSource(image_file, dir_output);
         }
     }
 
     // ==========================================
     // Function: Process one chip for source and star catalog generation
-    // Method: Apply the shared norm gate before any chip input, then require the science
-    //         image and complete norm contract before the configured catalog branch.
+    // Method: Apply the shared norm gate before any chip input, then derive persistent
+    //         identity from the canonical filename before the configured catalog branch.
     // ==========================================
-    void chipProcessSource(const std::vector<std::string>& imageFiles, int ichip, const std::string& dirOutput) {
+    void chipProcessSource(const std::string& imageFile, const std::string& dirOutput) {
         const RuntimeConfig& runtime_config = RuntimeConfigStore::get();
         const LensingRuntimeConfig& lensing = runtime_config.lensing;
-        const std::string& imageFile = imageFiles[ichip - 1];
         const Universalblock::NormStatus normStatus =
             Universalblock::checkNorm(imageFile, dirOutput);
         if (normStatus == Universalblock::NormStatus::Invalid) {
@@ -271,7 +269,7 @@ namespace SourceExtractor {
                 genStarCandidate(dirOutput, PREFIX, nstar, proc_error);
             }
         } else {
-            std::string PREFIX_head = UniversalUtils::getPrefixExpo(imageFiles[0]);
+            const std::string PREFIX_head = UniversalUtils::getPrefixExpo(imageFile);
             filename = dirOutput + "/astrometry/Head/" + PREFIX_head + ".head";
             
             double cRPIX[2] = {0.0, 0.0};
@@ -279,7 +277,9 @@ namespace SourceExtractor {
             double cRVAL[2] = {0.0, 0.0};
             double PU[2][LensingConfig::npd] = {0};
 
-            Astrometry::readAstrometryPara(filename, ichip, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
+            const int ccdnum = UniversalUtils::getChipId(imageFile);
+            Astrometry::readAstrometryPara(
+                filename, ccdnum, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
 
             std::string catfile = runtime_config.extcat.output_directory;
             std::vector<std::string> sortfile(27);

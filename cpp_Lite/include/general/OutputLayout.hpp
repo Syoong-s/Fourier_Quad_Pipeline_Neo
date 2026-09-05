@@ -8,7 +8,7 @@
 
 namespace OutputLayout {
 
-// Extract the exposure component from the established <exposure>_<chip>
+// Extract the exposure component from the established <exposure>_<ccdnum>
 // prefix contract used by process_init and UniversalUtils::getPrefix.
 inline std::string exposureFromChipPrefix(const std::string& chip_prefix) {
     const std::size_t delimiter = chip_prefix.find_last_of('_');
@@ -19,7 +19,7 @@ inline std::string exposureFromChipPrefix(const std::string& chip_prefix) {
     return chip_prefix.substr(0, delimiter);
 }
 
-// Build <output-root>/<product-directory>/<exposure>/<chip><suffix>.
+// Build <output-root>/<product-directory>/<exposure>/<ccdnum-prefix><suffix>.
 inline std::string chipPath(const std::string& output_root,
                             const std::string& product_directory,
                             const std::string& chip_prefix,

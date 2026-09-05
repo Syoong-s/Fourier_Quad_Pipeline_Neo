@@ -56,6 +56,7 @@ namespace UniversalUtils {
     std::string getPrefix(const std::string& imagefile);
     std::string getDir(const std::string& imagefile, int level);
     std::string getPrefixExpo(const std::string& imagefile);
+    // Parse physical CCDNUM from the canonical <exposure>_<ccdnum> basename.
     int getChipId(const std::string& imagefile);
 
     // Median & Sigma computation

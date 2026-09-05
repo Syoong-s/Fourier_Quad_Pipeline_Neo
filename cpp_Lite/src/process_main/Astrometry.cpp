@@ -1304,7 +1304,12 @@ namespace Astrometry {
         }
     }
 
-    void readAstrometryPara(const std::string& filename, int ichip,
+    // ==========================================
+    // Function: Read one physical CCDNUM row from an exposure astrometry header
+    // Method: Read the shared projection block once, then scan keyed chip rows so file order
+    //         has no semantic meaning.
+    // ==========================================
+    void readAstrometryPara(const std::string& filename, int ccdnum,
                             double cRPIX[2], double cD[2][2], double cRVAL[2],
                             double PU[2][LensingConfig::npd], int npd, int& procError) {
         if (procError == 1) return;
@@ -1327,30 +1332,23 @@ namespace Astrometry {
             }
         }
 
-        std::string dummyLine;
-        std::getline(ifs, dummyLine); // clear newline from last PU
-        for (int k = 1; k < ichip; ++k) {
-            if (!std::getline(ifs, dummyLine)) {
-                procError = 1;
+        int row_ccdnum = 0;
+        int valid = 0;
+        while (ifs >> row_ccdnum >> valid
+                   >> cRPIX[0] >> cRPIX[1]
+                   >> cD[0][0] >> cD[0][1] >> cD[1][0] >> cD[1][1]) {
+            if (row_ccdnum == ccdnum) {
+                if (valid == 0) procError = 1;
                 return;
             }
         }
-
-        int j = 0, valid = 0;
-        if (!(ifs >> j >> valid >> cRPIX[0] >> cRPIX[1] >> cD[0][0] >> cD[0][1] >> cD[1][0] >> cD[1][1])) {
-            procError = 1;
-            return;
-        }
-
-        if (valid == 0) {
-            procError = 1;
-        }
+        procError = 1;
     }
 
     // ==========================================
-    // Function: Fit and write exposure astrometry parameters.
+    // Function: Fit and write exposure astrometry parameters
     // Method: Read every matched row into dynamically growing per-chip storage,
-    //         then preserve F77 header layout with 17-digit serialization.
+    //         choose the smallest valid CCDNUM as the shared projection center, and write keyed rows.
     // ==========================================
     void getAstrometry(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput) {
         std::string prefix_expo = UniversalUtils::getPrefixExpo(imageFiles[0]);
@@ -1368,6 +1366,8 @@ namespace Astrometry {
 
         std::vector<std::array<double, 2>> cRPIX2(nchip);
         std::vector<std::array<std::array<double, 2>, 2>> cD2(nchip);
+        std::vector<std::array<double, 2>> chip_cRVAL2(nchip);
+        std::vector<int> ccdnums(nchip, 0);
         double cRVAL2[2] = {0.0, 0.0};
         double PU[2][LensingConfig::npd];
         std::fill(&PU[0][0], &PU[0][0] + 2 * LensingConfig::npd, 0.0);
@@ -1377,7 +1377,10 @@ namespace Astrometry {
         int tot_source = 0;
 
         for (int ichip = 1; ichip <= nchip; ++ichip) {
-            std::string prefix = UniversalUtils::getPrefix(imageFiles[ichip - 1]);
+            const int slot = ichip - 1;
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[slot]);
+            ccdnums[slot] = ccdnum;
+            std::string prefix = UniversalUtils::getPrefix(imageFiles[slot]);
             std::string filename = OutputLayout::chipPath(
                 dirOutput, "astrometry/dat_Astro", prefix, "_astro.dat");
 
@@ -1401,15 +1404,15 @@ namespace Astrometry {
                 !std::isfinite(crval0) || !std::isfinite(crval1)) {
                 LinearSolve::reportFailure(
                     "Astrometry::getAstrometry", LinearSolve::SolveStatus::FailedSolver,
-                    "exposure=" + prefix_expo + " chip=" + std::to_string(ichip) +
+                    "exposure=" + prefix_expo + " ccdnum=" + std::to_string(ccdnum) +
                         " reason=NON_FINITE_INPUT action=MARK_CHIP_INVALID");
                 valid[ichip - 1] = 0;
                 continue;
             }
             cRPIX2[ichip - 1][0] = crpix0;
             cRPIX2[ichip - 1][1] = crpix1;
-            cRVAL2[0] = crval0;
-            cRVAL2[1] = crval1;
+            chip_cRVAL2[slot][0] = crval0;
+            chip_cRVAL2[slot][1] = crval1;
             double cd00 = 0.0;
             double cd01 = 0.0;
             double cd10 = 0.0;
@@ -1423,7 +1426,7 @@ namespace Astrometry {
                 !std::isfinite(cd10) || !std::isfinite(cd11)) {
                 LinearSolve::reportFailure(
                     "Astrometry::getAstrometry", LinearSolve::SolveStatus::FailedSolver,
-                    "exposure=" + prefix_expo + " chip=" + std::to_string(ichip) +
+                    "exposure=" + prefix_expo + " ccdnum=" + std::to_string(ccdnum) +
                         " reason=NON_FINITE_INPUT action=MARK_CHIP_INVALID");
                 valid[ichip - 1] = 0;
                 continue;
@@ -1483,7 +1486,7 @@ namespace Astrometry {
                 if (removed_non_finite > 0) {
                     LinearSolve::reportFailure(
                         "Astrometry::getAstrometry", LinearSolve::SolveStatus::FailedRankDeficient,
-                        "exposure=" + prefix_expo + " chip=" + std::to_string(ichip) +
+                        "exposure=" + prefix_expo + " ccdnum=" + std::to_string(ccdnum) +
                             " valid_samples=" + std::to_string(kept_nss) +
                             " required=10 removed_samples=" +
                             std::to_string(removed_non_finite) +
@@ -1492,9 +1495,21 @@ namespace Astrometry {
             }
         }
 
+        int reference_slot = -1;
+        for (int slot = 0; slot < nchip; ++slot) {
+            if (valid[slot] != 0
+                && (reference_slot < 0 || ccdnums[slot] < ccdnums[reference_slot])) {
+                reference_slot = slot;
+            }
+        }
+        if (reference_slot >= 0) {
+            cRVAL2[0] = chip_cRVAL2[reference_slot][0];
+            cRVAL2[1] = chip_cRVAL2[reference_slot][1];
+        }
+
         tot_valid = 0;
         tot_source = 0;
-        if (std::isfinite(cRVAL2[0]) && std::isfinite(cRVAL2[1])) {
+        if (reference_slot >= 0) {
             for (int ichip = 0; ichip < nchip; ++ichip) {
                 if (valid[ichip] == 0) continue;
                 int kept_nss = 0;
@@ -1526,7 +1541,8 @@ namespace Astrometry {
                     if (removed_projection > 0) {
                         LinearSolve::reportFailure(
                             "Astrometry::getAstrometry", LinearSolve::SolveStatus::FailedRankDeficient,
-                            "exposure=" + prefix_expo + " chip=" + std::to_string(ichip + 1) +
+                            "exposure=" + prefix_expo + " ccdnum="
+                                + std::to_string(ccdnums[ichip]) +
                                 " valid_samples=" + std::to_string(kept_nss) +
                                 " required=10 removed_samples=" +
                                 std::to_string(removed_projection) +
@@ -1576,19 +1592,20 @@ namespace Astrometry {
             for (int i = 0; i < LensingConfig::npd; ++i) {
                 ofs << std::setprecision(17) << PU[0][i] << " " << PU[1][i] << "\n";
             }
-            for (int k = 1; k <= nchip; ++k) {
-                ofs << k << " " << valid[k - 1] << " "
+            for (int slot = 0; slot < nchip; ++slot) {
+                ofs << ccdnums[slot] << " " << valid[slot] << " "
                     << std::setprecision(17)
-                    << cRPIX2[k - 1][0] << " " << cRPIX2[k - 1][1] << " "
-                    << cD2[k - 1][0][0] << " " << cD2[k - 1][0][1] << " "
-                    << cD2[k - 1][1][0] << " " << cD2[k - 1][1][1] << "\n";
+                    << cRPIX2[slot][0] << " " << cRPIX2[slot][1] << " "
+                    << cD2[slot][0][0] << " " << cD2[slot][0][1] << " "
+                    << cD2[slot][1][0] << " " << cD2[slot][1][1] << "\n";
             }
         }
     }
 
     // ==========================================
-    // Function: Apply exposure astrometry to each chip and write diagnostics.
-    // Method: Preserve F77 check-file layout with 17-digit double serialization.
+    // Function: Apply exposure astrometry to each chip and write diagnostics
+    // Method: Resolve every keyed header row by physical CCDNUM, then preserve the diagnostic
+    //         serialization for each dense traversal slot.
     // ==========================================
     void chipProcessAstrometry(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput) {
         getAstrometry(imageFiles, nchip, dirOutput);
@@ -1607,7 +1624,9 @@ namespace Astrometry {
         for (int ichip = 1; ichip <= nchip; ++ichip) {
             int proc_error = 0;
             std::string head_filename = dirOutput + "/astrometry/Head/" + prefix_expo + ".head";
-            readAstrometryPara(head_filename, ichip, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[ichip - 1]);
+            readAstrometryPara(
+                head_filename, ccdnum, cRPIX, cD, cRVAL, PU, LensingConfig::npd, proc_error);
 
             if (proc_error == 0) {
                 std::string prefix = UniversalUtils::getPrefix(imageFiles[ichip - 1]);

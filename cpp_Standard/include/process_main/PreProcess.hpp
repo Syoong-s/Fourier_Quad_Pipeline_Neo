@@ -7,11 +7,12 @@
 
 namespace PreProcess {
 
-    // Stage 1 driver
+    // Run Stage 1 preprocessing for one exposure.
     void preProcess(int iexpo);
 
-    // Individual chip preprocessing
-    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid, const std::string& maskFile);
+    // Preprocess one canonical science filename and its optional external flat.
+    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput,
+                        const std::string& flatFile);
 
     // Helper functions for preprocessing
     // ==========================================

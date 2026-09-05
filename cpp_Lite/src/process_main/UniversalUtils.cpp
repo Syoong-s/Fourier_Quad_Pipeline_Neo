@@ -1,9 +1,9 @@
 #include "process_main/UniversalUtils.hpp"
 #include "general/CatalogTileNaming.hpp"
 #include "process_main/PSFStarSelection.hpp"
-#include "process_main/FitsIO.hpp"
 #include "process_main/LinearSolve.hpp"
 #include "process_main/MPIFailure.hpp"
+#include <charconv>
 #include <cmath>
 #include <iostream>
 #include <fstream>
@@ -586,13 +586,29 @@ namespace UniversalUtils {
         return imagefile.substr(p_slash + 1, p_under - p_slash - 1);
     }
 
+    // ==========================================
+    // Function: Extract the physical CCDNUM from a canonical chip filename
+    // Method: Parse the complete decimal suffix after the final underscore and
+    //         abort collectively for missing, malformed, or non-positive IDs.
+    // ==========================================
     int getChipId(const std::string& imagefile) {
-        int id = 0;
-        if (!FitsIO::readCCDNUM(imagefile, id)) {
-            id = -99;
-            std::cout << "Error / GetChipId Failed" << std::endl;
+        const std::string prefix = getPrefix(imagefile);
+        const std::size_t delimiter = prefix.find_last_of('_');
+        if (delimiter == std::string::npos || delimiter + 1 >= prefix.size()) {
+            MPIFailure::abortWorld(
+                "extract CCDNUM from chip filename", imagefile);
         }
-        return id;
+
+        int ccdnum = 0;
+        const char* first = prefix.data() + delimiter + 1;
+        const char* last = prefix.data() + prefix.size();
+        const std::from_chars_result result =
+            std::from_chars(first, last, ccdnum);
+        if (result.ec != std::errc{} || result.ptr != last || ccdnum <= 0) {
+            MPIFailure::abortWorld(
+                "parse CCDNUM from chip filename", imagefile);
+        }
+        return ccdnum;
     }
 
     void getMedSig(const std::vector<float>& dat, float& med, float& sig) {

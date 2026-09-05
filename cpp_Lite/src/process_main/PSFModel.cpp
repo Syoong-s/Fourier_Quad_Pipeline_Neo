@@ -630,6 +630,7 @@ namespace PSFModel {
         nc = 0;
 
         for (int k = 0; k < nchip; ++k) {
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[k]);
             ChipPSFState& chip = state.chips[k];
             chip.stars.clear();
             chip.stars.reserve(LensingConfig::nstar_max);
@@ -654,7 +655,8 @@ namespace PSFModel {
             double PU[2][LensingConfig::npd];
             int ierror = 0;
 
-            Astrometry::readAstrometryPara(headname, k + 1, cRPIX, cD, cRVAL, PU, LensingConfig::npd, ierror);
+            Astrometry::readAstrometryPara(
+                headname, ccdnum, cRPIX, cD, cRVAL, PU, LensingConfig::npd, ierror);
 
             if (ierror == 1) continue;
 
@@ -957,6 +959,7 @@ namespace PSFModel {
     // ==========================================
     static void commitAdaptivePairSelection(
         int nchip,
+        const std::vector<int>& ccdnums,
         const ActiveIndicesByChip& proposed_indices,
         ExposurePSFState& state) {
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
@@ -984,7 +987,7 @@ namespace PSFModel {
                     std::vector<float>().swap(selection.chi_window);
                 }
             }
-            std::cout << "PSF_TYPE3_CHIP chip=" << (chip_index + 1)
+            std::cout << "PSF_TYPE3_CHIP ccdnum=" << ccdnums[chip_index]
                       << " proposed=" << proposed_count
                       << " retained=" << (keep_chip ? proposed_count : 0)
                       << " decision="
@@ -1029,6 +1032,7 @@ namespace PSFModel {
     // ==========================================
     static void applyAdaptivePairFractionSelection(
         int nchip,
+        const std::vector<int>& ccdnums,
         ExposurePSFState& state,
         const ActiveIndicesByChip& active_indices) {
         for (ChipPSFState& chip : state.chips) {
@@ -1054,7 +1058,7 @@ namespace PSFModel {
                     Internal::PSFUpperElbowStatus::InvalidInput;
                 logAdaptiveHistogram(
                     "PSF_TYPE3_PAIR", count_failure, "FAIL_OPEN");
-                commitAdaptivePairSelection(nchip, active_indices, state);
+                commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
                 return;
             }
             active_star_count += chip_active_count;
@@ -1082,7 +1086,7 @@ namespace PSFModel {
                 Internal::PSFUpperElbowStatus::AllocationFailure;
             logAdaptiveHistogram(
                 "PSF_TYPE3_PAIR", allocation_failure, "FAIL_OPEN");
-            commitAdaptivePairSelection(nchip, active_indices, state);
+            commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
             return;
         } catch (const std::length_error&) {
             Internal::PSFUpperElbowHistogramResult allocation_failure;
@@ -1090,7 +1094,7 @@ namespace PSFModel {
                 Internal::PSFUpperElbowStatus::AllocationFailure;
             logAdaptiveHistogram(
                 "PSF_TYPE3_PAIR", allocation_failure, "FAIL_OPEN");
-            commitAdaptivePairSelection(nchip, active_indices, state);
+            commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
             return;
         }
 
@@ -1106,7 +1110,7 @@ namespace PSFModel {
                 pair_chi, pair_config, pair_result)) {
             logAdaptiveHistogram(
                 "PSF_TYPE3_PAIR", pair_result, "FAIL_OPEN");
-            commitAdaptivePairSelection(nchip, active_indices, state);
+            commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
             return;
         }
         logAdaptiveHistogram("PSF_TYPE3_PAIR", pair_result, "APPLY");
@@ -1150,7 +1154,7 @@ namespace PSFModel {
                 Internal::PSFUpperElbowStatus::AllocationFailure;
             logAdaptiveHistogram(
                 "PSF_TYPE3_FRACTION", allocation_failure, "FAIL_OPEN");
-            commitAdaptivePairSelection(nchip, active_indices, state);
+            commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
             return;
         } catch (const std::length_error&) {
             Internal::PSFUpperElbowHistogramResult allocation_failure;
@@ -1158,7 +1162,7 @@ namespace PSFModel {
                 Internal::PSFUpperElbowStatus::AllocationFailure;
             logAdaptiveHistogram(
                 "PSF_TYPE3_FRACTION", allocation_failure, "FAIL_OPEN");
-            commitAdaptivePairSelection(nchip, active_indices, state);
+            commitAdaptivePairSelection(nchip, ccdnums, active_indices, state);
             return;
         }
 
@@ -1245,8 +1249,8 @@ namespace PSFModel {
                     proposed_indices[chip_index].push_back(active[index]);
                 }
             }
-            std::cout << "PSF_TYPE3_FRACTION_CHIP chip="
-                      << (chip_index + 1)
+            std::cout << "PSF_TYPE3_FRACTION_CHIP ccdnum="
+                      << ccdnums[chip_index]
                       << " active=" << active.size()
                       << " finite_denominator="
                       << chip_selection.finite_pair_count
@@ -1263,7 +1267,7 @@ namespace PSFModel {
                                      : "KEEP"))
                       << std::endl;
         }
-        commitAdaptivePairSelection(nchip, proposed_indices, state);
+        commitAdaptivePairSelection(nchip, ccdnums, proposed_indices, state);
     }
 
     // ==========================================
@@ -1335,6 +1339,11 @@ namespace PSFModel {
 
         const std::string prefix_e =
             UniversalUtils::getPrefixExpo(imageFiles[0]);
+        std::vector<int> ccdnums;
+        ccdnums.reserve(static_cast<std::size_t>(nchip));
+        for (const std::string& image_file : imageFiles) {
+            ccdnums.push_back(UniversalUtils::getChipId(image_file));
+        }
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
             ChipPSFState& chip = state.chips[chip_index];
             for (int star_index = 0; star_index < state.getNStar(chip_index); ++star_index) {
@@ -1385,7 +1394,8 @@ namespace PSFModel {
         }
         Internal::populateMinChiSurvivorCountHistogram(
             minchi_survivor_star_areas, locus_diagnostics);
-        applyAdaptivePairFractionSelection(nchip, state, active_indices);
+        applyAdaptivePairFractionSelection(
+            nchip, ccdnums, state, active_indices);
 
         std::vector<int> selected_group_star_areas;
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
@@ -1556,6 +1566,7 @@ namespace PSFModel {
         std::vector<float> exposure_standardized_scores;
 
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[chip_index]);
             ChipPSFState& chip = state.chips[chip_index];
             chip.fit.clear();
             std::vector<int> selected_indices;
@@ -1582,7 +1593,7 @@ namespace PSFModel {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelection",
                     LinearSolve::SolveStatus::FailedSolver,
-                    "chip=" + std::to_string(chip_index + 1)
+                    "ccdnum=" + std::to_string(ccdnum)
                         + " reason=INVALID_SELECTED_SAMPLE action=MARK_CHIP_INVALID");
                 invalidatePressChip(chip_index, state);
                 continue;
@@ -1596,7 +1607,7 @@ namespace PSFModel {
             if (status != LinearSolve::SolveStatus::Normal) {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelection", status,
-                    "chip=" + std::to_string(chip_index + 1) + " "
+                    "ccdnum=" + std::to_string(ccdnum) + " "
                         + LinearSolve::diagnosticsContext(diagnostics)
                         + " action=MARK_CHIP_INVALID");
                 invalidatePressChip(chip_index, state);
@@ -1661,7 +1672,7 @@ namespace PSFModel {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelection",
                     LinearSolve::SolveStatus::FailedIllConditioned,
-                    "chip=" + std::to_string(chip_index + 1)
+                    "ccdnum=" + std::to_string(ccdnum)
                         + " reason=INVALID_LOO action=MARK_CHIP_INVALID");
                 invalidatePressChip(chip_index, state);
                 continue;
@@ -1688,6 +1699,7 @@ namespace PSFModel {
                   << exposure_standardized_scores.size()
                   << " threshold=" << press_threshold << std::endl;
         for (int chip_index = 0; chip_index < nchip; ++chip_index) {
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[chip_index]);
             ChipPSFState& chip = state.chips[chip_index];
             if (!chip.fit.valid) continue;
 
@@ -1714,7 +1726,7 @@ namespace PSFModel {
                 LensingConfig::psf_press_max_removals);
             if (decision != Internal::PressRemovalDecision::Apply) {
                 chip.fit.press_removed_any = false;
-                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                std::cout << "PSF_PRESS ccdnum=" << ccdnum
                           << " first_fit=" << first_fit_indices.size()
                           << " flagged=" << rejected_indices.size()
                           << " decision=" << pressRemovalDecisionName(decision)
@@ -1731,10 +1743,10 @@ namespace PSFModel {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelectionRefit",
                     LinearSolve::SolveStatus::FailedSolver,
-                    "chip=" + std::to_string(chip_index + 1)
+                    "ccdnum=" + std::to_string(ccdnum)
                         + " reason=INVALID_RETAINED_SAMPLE action=PRESS_REFIT_FALLBACK");
                 chip.fit.press_removed_any = false;
-                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                std::cout << "PSF_PRESS ccdnum=" << ccdnum
                           << " first_fit=" << first_fit_indices.size()
                           << " flagged=" << rejected_indices.size()
                           << " decision=PRESS_REFIT_FALLBACK final="
@@ -1750,11 +1762,11 @@ namespace PSFModel {
             if (status != LinearSolve::SolveStatus::Normal) {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelectionRefit", status,
-                    "chip=" + std::to_string(chip_index + 1) + " "
+                    "ccdnum=" + std::to_string(ccdnum) + " "
                         + LinearSolve::diagnosticsContext(diagnostics)
                         + " action=PRESS_REFIT_FALLBACK");
                 chip.fit.press_removed_any = false;
-                std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+                std::cout << "PSF_PRESS ccdnum=" << ccdnum
                           << " first_fit=" << first_fit_indices.size()
                           << " flagged=" << rejected_indices.size()
                           << " decision=PRESS_REFIT_FALLBACK final="
@@ -1768,7 +1780,7 @@ namespace PSFModel {
                 LinearSolve::reportFailure(
                     "PSFModel::applyPressSelectionRefit",
                     LinearSolve::SolveStatus::FailedSolver,
-                    "chip=" + std::to_string(chip_index + 1)
+                    "ccdnum=" + std::to_string(ccdnum)
                         + " reason=INVALID_REFIT_CACHE action=PRESS_REFIT_FALLBACK");
                 chip.fit.press_removed_any = false;
                 continue;
@@ -1787,7 +1799,7 @@ namespace PSFModel {
                 const int original_index = chip.fit.star_indices[local_index];
                 chip.selection[original_index].leverage = chip.fit.leverage[local_index];
             }
-            std::cout << "PSF_PRESS chip=" << (chip_index + 1)
+            std::cout << "PSF_PRESS ccdnum=" << ccdnum
                       << " first_fit=" << first_fit_indices.size()
                       << " flagged=" << rejected_indices.size()
                       << " decision=REMOVAL_APPLIED final="
@@ -1859,7 +1871,7 @@ namespace PSFModel {
         MainIO::OutputFile outfile(info_filename);
         outfile << std::setprecision(10);
 
-        outfile << "# ichip nstar FWHM e1 e2 chi_d\n";
+        outfile << "# ccdnum nstar FWHM e1 e2 chi_d\n";
 
         const std::size_t initial_star_capacity = checkedElementCount(
             {static_cast<std::size_t>(
@@ -1870,6 +1882,7 @@ namespace PSFModel {
         sk.reserve(initial_star_capacity);
 
         for (int k = 0; k < nchip; ++k) {
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[k]);
             double FWHM_ave = 0.0;
             double e1_ave = 0.0;
             double e2_ave = 0.0;
@@ -1904,11 +1917,11 @@ namespace PSFModel {
                 e1_ave /= nums;
                 e2_ave /= nums;
                 chi_d_ave /= (nums - 1.0);
-                outfile << (k + 1) << " " << nums << " "
+                outfile << ccdnum << " " << nums << " "
                         << std::scientific << std::setprecision(10)
                         << FWHM_ave << " " << e1_ave << " " << e2_ave << " " << chi_d_ave << "\n";
             } else {
-                outfile << (k + 1) << " 0 -99.0 -99.0 -99.0 -99.0\n";
+                outfile << ccdnum << " 0 -99.0 -99.0 -99.0 -99.0\n";
             }
         }
 
@@ -1923,8 +1936,9 @@ namespace PSFModel {
     }
 
     // ==========================================
-    // Function: Fit and serialize local PSF models.
-    // Method: Preserve F77 model layout with 17-digit double serialization.
+    // Function: Fit and serialize local PSF models
+    // Method: Keep dense slots for state access while using canonical prefixes and physical
+    //         CCDNUM for every persistent row and diagnostic.
     // ==========================================
     void makePSFLocalFit(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
@@ -1943,7 +1957,8 @@ namespace PSFModel {
 
         for (int k = 0; k < nchip; ++k) {
             int nums = 0;
-            std::string prefix = UniversalUtils::getPrefix(imageFiles[k]);
+            const std::string prefix = UniversalUtils::getPrefix(imageFiles[k]);
+            const int ccdnum = UniversalUtils::getChipId(imageFiles[k]);
 
             std::vector<float> star;
             if (state.getNStar(k) > 0) {
@@ -1999,7 +2014,7 @@ namespace PSFModel {
                 fit_status == LinearSolve::SolveStatus::Normal &&
                 final_leverage.size() == static_cast<std::size_t>(nums)) {
 
-                file90 << (k + 1) << " " << nums << " 1\n";
+                file90 << ccdnum << " " << nums << " 1\n";
 
                 std::vector<float> poly_cochi2(nums);
                 float poly_ave = 0.0f, poly_std = 0.0f;
@@ -2024,7 +2039,7 @@ namespace PSFModel {
                             MPIFailure::abortWorld(
                                 "generate final Lite PSF LOO diagnostics",
                                 "exposure=" + prefix_e
-                                    + " chip=" + std::to_string(k + 1)
+                                    + " ccdnum=" + std::to_string(ccdnum)
                                     + " star=" + std::to_string(i));
                         }
                         loo_model[idx] = static_cast<float>(model_value);
@@ -2060,7 +2075,7 @@ namespace PSFModel {
                 if (nums < LensingConfig::nstar_min_local) {
                     LinearSolve::reportFailure(
                         "PSFModel::itpNormPSF", LinearSolve::SolveStatus::FailedRankDeficient,
-                        "exposure=" + prefix_e + " chip=" + std::to_string(k + 1) +
+                        "exposure=" + prefix_e + " ccdnum=" + std::to_string(ccdnum) +
                             " valid_samples=" + std::to_string(nums) +
                             " removed_samples=" + std::to_string(removed_non_finite) +
                             " required=" + std::to_string(LensingConfig::nstar_min_local) +
@@ -2068,13 +2083,13 @@ namespace PSFModel {
                 } else {
                     LinearSolve::reportFailure(
                         "PSFModel::itpNormPSF", fit_status,
-                        "exposure=" + prefix_e + " chip=" + std::to_string(k + 1) +
+                        "exposure=" + prefix_e + " ccdnum=" + std::to_string(ccdnum) +
                             " " + LinearSolve::diagnosticsContext(fit_diagnostics) +
                             " removed_samples=" + std::to_string(removed_non_finite) +
                             " action=MARK_CHIP_INVALID");
                 }
                 file10 << nums << " -1 -1 -1\n";
-                file90 << (k + 1) << " " << nums << " -1\n";
+                file90 << ccdnum << " " << nums << " -1\n";
             }
             file10.close();
         }

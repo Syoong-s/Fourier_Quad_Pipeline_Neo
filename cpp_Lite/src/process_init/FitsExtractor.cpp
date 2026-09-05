@@ -20,8 +20,7 @@ constexpr std::size_t kCopyBufferBytes = 16U * 1024U * 1024U;
 
 struct PlannedImage {
     int hdu_number = 0;
-    int expected_ccdnum = 0;
-    bool check_ccdnum = false;
+    int ccdnum = 0;
     std::filesystem::path final_path;
     std::filesystem::path staged_path;
 };
@@ -189,8 +188,8 @@ void copyCurrentImage(fitsfile* input, const std::filesystem::path& output_path)
 
 // ==========================================
 // Function: Verify a committed or resumed chip image
-// Method: Require a two-dimensional uncompressed primary image and, for DQ,
-//         require the configured DQ chip identifier used in its output filename.
+// Method: Require a two-dimensional uncompressed primary image whose CCDNUM
+//         matches the canonical chip number used in its output filename.
 // ==========================================
 bool validateOutput(const PlannedImage& plan, std::string& error) {
     fitsfile* file = nullptr;
@@ -212,12 +211,12 @@ bool validateOutput(const PlannedImage& plan, std::string& error) {
         closeFits(file);
         return false;
     }
-    if (status == 0 && plan.check_ccdnum) {
+    if (status == 0) {
         int ccdnum = 0;
         fits_read_key(file, TINT, Initialize::CCDNUM_KEYWORD,
                       &ccdnum, nullptr, &status);
-        if (status == 0 && ccdnum != plan.expected_ccdnum) {
-            error = "existing DQ output has the wrong "
+        if (status == 0 && ccdnum != plan.ccdnum) {
+            error = "existing chip output has the wrong "
                     + std::string(Initialize::CCDNUM_KEYWORD) + ": "
                     + plan.final_path.string();
             closeFits(file);
@@ -236,8 +235,8 @@ bool validateOutput(const PlannedImage& plan, std::string& error) {
 
 // ==========================================
 // Function: Discover the output name of every extractable HDU in one archive
-// Method: Number science images by two-dimensional HDU occurrence and DQ images
-//         by the configured chip-keyword header without changing either convention.
+// Method: Read the configured CCDNUM from every two-dimensional chip HDU,
+//         skip only HDUs without that keyword, and reject malformed identities.
 // ==========================================
 std::vector<PlannedImage> planImages(fitsfile* input,
                                      const std::filesystem::path& source,
@@ -254,7 +253,6 @@ std::vector<PlannedImage> planImages(fitsfile* input,
     const std::string output_stem = kind == ProductKind::Science
                                         ? archiveStem(source)
                                         : dqOutputStem(source);
-    int science_index = 0;
     std::set<std::string> unique_outputs;
     std::vector<PlannedImage> plans;
 
@@ -280,26 +278,35 @@ std::vector<PlannedImage> planImages(fitsfile* input,
             continue;
         }
 
-        int output_number = 0;
-        bool check_ccdnum = false;
-        if (kind == ProductKind::Science) {
-            output_number = ++science_index;
-        } else {
-            int key_status = 0;
-            fits_read_key(input, TINT, Initialize::CCDNUM_KEYWORD,
-                          &output_number, nullptr, &key_status);
-            if (key_status != 0) {
-                fits_clear_errmsg();
-                continue;
-            }
-            check_ccdnum = true;
-        }
-
-        const std::string filename = output_stem + "_" + std::to_string(output_number) + ".fits";
-        if (!unique_outputs.insert(filename).second) {
+        int ccdnum = 0;
+        int key_status = 0;
+        fits_read_key(input, TINT, Initialize::CCDNUM_KEYWORD,
+                      &ccdnum, nullptr, &key_status);
+        if (key_status == KEY_NO_EXIST) {
+            fits_clear_errmsg();
             continue;
         }
-        plans.push_back({hdu_number, output_number, check_ccdnum,
+        if (key_status != 0) {
+            throw std::runtime_error(
+                "cannot read " + std::string(Initialize::CCDNUM_KEYWORD)
+                + " in archive " + source.string()
+                + " HDU=" + std::to_string(hdu_number) + ": "
+                + fitsDiagnostic(key_status));
+        }
+        if (ccdnum <= 0) {
+            throw std::runtime_error(
+                "invalid CCDNUM=" + std::to_string(ccdnum)
+                + " in archive " + source.string()
+                + " HDU=" + std::to_string(hdu_number));
+        }
+
+        const std::string filename = output_stem + "_" + std::to_string(ccdnum) + ".fits";
+        if (!unique_outputs.insert(filename).second) {
+            throw std::runtime_error(
+                "duplicate CCDNUM=" + std::to_string(ccdnum)
+                + " in archive " + source.string());
+        }
+        plans.push_back({hdu_number, ccdnum,
                          final_directory / filename, staging_directory / filename});
     }
     if (plans.empty()) {

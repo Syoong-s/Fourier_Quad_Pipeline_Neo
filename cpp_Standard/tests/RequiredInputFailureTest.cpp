@@ -200,8 +200,7 @@ bool sourceStageFails(const TemporaryInputTree& tree) {
     const pid_t child = ::fork();
     require(child >= 0, "fork failed");
     if (child == 0) {
-        SourceExtractor::chipProcessSource(
-            {tree.imageFile()}, 1, tree.outputRoot());
+        SourceExtractor::chipProcessSource(tree.imageFile(), tree.outputRoot());
         std::_Exit(EXIT_SUCCESS);
     }
     int status = 0;

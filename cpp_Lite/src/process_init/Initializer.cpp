@@ -442,12 +442,13 @@ std::string makeManifest(const Config& config,
             : has_failures ? "partial" : "success";
     std::ostringstream manifest;
     manifest << "{\n"
-             << "  \"schema_version\": 2,\n"
+             << "  \"schema_version\": 3,\n"
              << "  \"status\": \"" << status_text << "\",\n"
              << "  \"direct_source_read\": true,\n"
              << "  \"copy_staging\": false,\n"
              << "  \"exposure_order\": \"corrected_lexical_no_rotation\",\n"
-             << "  \"science_numbering\": \"two_dimensional_hdu_occurrence\",\n"
+             << "  \"science_numbering\": \""
+             << jsonEscape(Initialize::CCDNUM_KEYWORD) << "\",\n"
              << "  \"dq_numbering\": \""
              << jsonEscape(Initialize::CCDNUM_KEYWORD) << "\",\n"
              << "  \"science_root\": \"" << jsonEscape(config.science_root.string()) << "\",\n"
@@ -631,16 +632,14 @@ int runInitializer(const Config& input_config) {
         if (task.kind == ProductKind::Science && result.success
             && !result.output_paths.empty()) {
             try {
-                std::vector<fs::path> sorted_paths = result.output_paths;
-                std::sort(sorted_paths.begin(), sorted_paths.end());
                 const std::string exposure = archiveStem(task.source);
                 const fs::path list_path = target_root / "stamps" / (exposure + ".list");
                 validatePipelinePath(list_path, config.f77_max_path);
-                for (const fs::path& image_path : sorted_paths) {
+                for (const fs::path& image_path : result.output_paths) {
                     validatePipelinePath(image_path, config.f77_max_path);
                 }
                 std::ostringstream exposure_list;
-                for (const fs::path& image_path : sorted_paths) {
+                for (const fs::path& image_path : result.output_paths) {
                     exposure_list << image_path.string() << '\n';
                 }
                 writeAtomic(list_path, exposure_list.str());

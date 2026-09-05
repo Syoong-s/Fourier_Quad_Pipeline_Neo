@@ -170,7 +170,8 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         }
 
         proc_error = 0;
-        std::string PREFIX = UniversalUtils::getPrefix(imageFiles[ichip]);
+        const std::string PREFIX = UniversalUtils::getPrefix(imageFiles[ichip]);
+        const int ccdnum = UniversalUtils::getChipId(imageFiles[ichip]);
         {
             std::string filename = OutputLayout::chipPath(
                 dirOutput, "stamps/dat_PsfFit", PREFIX, "_PSF_coe_local.dat");
@@ -227,7 +228,9 @@ void expoShear(int nchip, const std::vector<std::string>& imageFiles, const std:
         double PU[2][LensingConfig::npd] = {{0.0}, {0.0}};
 
         int astrometry_error = 0;
-        Astrometry::readAstrometryPara(headname, ichip + 1, cRPIX, cD, cRVAL, PU, LensingConfig::npd, astrometry_error);
+        Astrometry::readAstrometryPara(
+            headname, ccdnum, cRPIX, cD, cRVAL, PU, LensingConfig::npd,
+            astrometry_error);
         if (astrometry_error == 1) {
             write_empty_output();
             continue;

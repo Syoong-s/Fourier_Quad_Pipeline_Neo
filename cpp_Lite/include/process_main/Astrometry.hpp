@@ -87,7 +87,7 @@ namespace Astrometry {
 
     // Helpers inside proc_astrometry.f
     void getAstrometry(const std::vector<std::string>& imageFiles, int nchip, const std::string& dirOutput);
-    void readAstrometryPara(const std::string& filename, int ichip,
+    void readAstrometryPara(const std::string& filename, int ccdnum,
                             double cRPIX[2], double cD[2][2], double cRVAL[2],
                             double PU[2][LensingConfig::npd], int npd, int& procError);
 }

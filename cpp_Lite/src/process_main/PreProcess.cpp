@@ -374,7 +374,10 @@ namespace PreProcess {
         }
     }
 
-    // Stage 1 driver
+    // ==========================================
+    // Function: Run Stage 1 preprocessing for one exposure
+    // Method: Reuse each canonical science filename prefix for the matching DQ product.
+    // ==========================================
     void preProcess(int iexpo) {
         if (iexpo <= 0 || iexpo > static_cast<int>(ProcessMain::state.exposure_files.size())) {
             std::cerr << "Error: invalid iexpo index: " << iexpo << std::endl;
@@ -386,9 +389,7 @@ namespace PreProcess {
         UniversalUtils::getImageList(expo_file_path, image_files, dir_output);
         
         for (const auto& image_file : image_files) {
-            int cid = UniversalUtils::getChipId(image_file);
-
-            chipPreProcess(image_file, dir_output, cid);
+            chipPreProcess(image_file, dir_output);
         }
     }
 
@@ -396,7 +397,7 @@ namespace PreProcess {
     // Function: Individual chip preprocessing
     // Method: Match the Fortran Stage 1 flow while keeping diagnostics side-effect free.
     // ==========================================
-    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput, int cid) {
+    void chipPreProcess(const std::string& imageFile, const std::string& dirOutput) {
         const LensingRuntimeConfig& lensing = RuntimeConfigStore::get().lensing;
         int proc_error = 0;
         int nx = 0, ny = 0;
@@ -417,9 +418,9 @@ namespace PreProcess {
 
         std::vector<float> dqmask;
         if (proc_error == 0) {
-            std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
-            std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
-                                          + prefix_e + "_" + std::to_string(cid) + ".fits";
+            const std::string prefix_e = UniversalUtils::getPrefixExpo(imageFile);
+            const std::string local_mask_file = dirOutput + "/dqmask/" + prefix_e + "/"
+                                              + prefix + ".fits";
             int dnx = 0, dny = 0;
             if (!FitsIO::readImage(local_mask_file, dnx, dny, dqmask)) {
                 std::cerr << "Error / cant find mask file: " << local_mask_file << std::endl;
