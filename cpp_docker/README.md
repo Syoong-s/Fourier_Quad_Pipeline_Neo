@@ -1,26 +1,20 @@
 # Fourier_Quad C++ container
 
-This directory builds one x86_64 Linux toolchain image for `cpp_Standard` or
-`cpp_Lite`. Pipeline source, configuration, catalogs, observation data, and
-outputs are not copied into the image; they remain on bind-mounted storage.
+This directory builds an x86_64 Linux toolchain image for `cpp_Standard` or
+`cpp_Lite`. Source, configuration, catalogs, observation data, and outputs
+stay outside the image on bind-mounted storage.
 
 > 中文版：[README-CN.md](README-CN.md)
 
 ## Runtime
 
-| Component | Version |
-|---|---|
-| Rocky Linux | 8.10 |
-| G++ | 12.3.0 |
-| OpenMPI | 4.1.8 with PMI2 support |
-| CFITSIO | 4.6.4 |
-| FFTW | 3.3.11 |
-| Eigen | 3.4.0 |
-| LAPACK / OpenBLAS | 3.11.0 / 0.3.33 |
+The Rocky Linux 8.10 image contains G++ 12.3.0, OpenMPI 4.1.8 with PMI2,
+CFITSIO 4.6.4, FFTW 3.3.11, Eigen 3.4.0, LAPACK 3.11.0, and OpenBLAS 0.3.33.
 
-The portable HPC baseline is x86_64, Slurm `pmi2`, Apptainer/Singularity, a
-shared filesystem, and routable TCP. PMIx-only sites, ARM, other schedulers,
-and vendor-fabric acceleration need separate qualification.
+Its portable HPC baseline is x86_64, Slurm `pmi2`,
+Apptainer/Singularity, a shared filesystem, and routable TCP. Other
+architectures, PMIx-only sites, schedulers, or vendor fabrics require separate
+validation.
 
 ## Build and verify
 
@@ -32,9 +26,9 @@ docker pull ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest
 
 ### Download the source and build
 
-Download `cpp-docker-<tag>.zip` for the selected tag from
-[GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases), extract it,
-then run:
+Download `cpp-docker-<tag>.zip` from
+[GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases),
+extract it, and run:
 
 ```bash
 docker build --platform linux/amd64 --target runtime \
@@ -43,36 +37,33 @@ docker build --platform linux/amd64 --target runtime \
 bash scripts/verify-image.sh cpppipeline-dev:gxx12.3-openmpi4.1.8-pmi2
 ```
 
-The verification checks component versions, the scientific stack, two MPI
-ranks, PMI support, and the absence of pipeline source from the image.
+The verifier checks component versions, the scientific stack, two MPI ranks,
+PMI support, and the absence of pipeline source from the image.
 
 ## Local use
 
 ```bash
 cp .env.example .env
-# Set CPP_SOURCE_HOST and every host path used by the selected phases.
+# Set CPP_SOURCE_HOST and the host paths required by the selected phases.
 docker compose run --rm FourierQuad-CPP
 ```
 
 ### Common `.env` parameters
 
-Copy `.env.example`, then adapt the table to the host directories and selected phases.
-`*_HOST` values are host paths; `*_CONTAINER` values are the absolute paths seen by the
-pipeline and `pipeline.ini` inside the container.
+Copy `.env.example`, then update these values for the host layout. A
+`*_HOST` value is a host path; its paired `*_CONTAINER` value is the
+absolute path used by `pipeline.ini` or CLI inside the container.
 
-| Parameter | Typical change | Constraint |
+| Parameter | Typical setting | Constraint |
 |---|---|---|
-| `IMAGE_NAME` | Set the image tag to run or build locally. | It must match `docker build -t` or the pulled image. |
-| `BUILD_JOBS` | Set image-build parallelism. | Size it for available host CPU and memory. |
-| `HOST_UID`, `HOST_GID` | Set the current host user's UID/GID. | Change when host users must directly own and edit outputs. |
-| `CPP_SOURCE_HOST` | Point to a `cpp_Standard` or `cpp_Lite` source directory. | It is mounted read/write at `/workspace/src_pipe` for `pipeline.ini` and build products. |
-| `SCIENCE_ROOT_HOST/CONTAINER` | Set the Science-image archive and its container path. | Used by `process_init`; match `[init].science_root` or CLI and enable it through `compose.optional.yaml`. |
-| `DQ_ROOT_HOST/CONTAINER` | Set the DQ-mask archive and its container path. | Required whenever DQ is read and always for Lite; match `[init].dq_root` or CLI. |
-| `ASTROMETRY_CAT_HOST/CONTAINER` | Point to the Gaia catalog directory. | The container path must match `[lensing].astrometry_cat`; Type 1/2 must also match `[lensing].astrometry_cat_type`. |
-| `SOURCE_CAT_HOST/CONTAINER` | Point to normalized external-source tiles. | Match the effective `[extcat].output_directory`, `[lensing].source_cat`, or `--extcat-output` path. |
-| `FLAT_PATH_HOST/CONTAINER` | Point to flat calibration data. | Needed only for Standard with `[lensing].include_flat=1`; match `[lensing].flat_path`. |
-| `PROCESS_DATA_HOST/CONTAINER` | Point to writable processing storage. | Holds exposure lists, intermediates, and results; container default is `/data/DataProcess`. |
-| `EXTCAT_INPUT_*`, `REARR_OUTPUT_*`, `EXPOLIST_DIR_*`, `FD_OUTPUT_*` | Set only for phases that need independent mounts. | Add `compose.optional.yaml` and use the matching container paths in INI/CLI; otherwise prefer locations below processing data. |
+| `IMAGE_NAME` | Image tag to run or build locally. | Must match the pulled image or `docker build -t` value. |
+| `BUILD_JOBS` | Image-build parallelism. | Size for available CPU and memory. |
+| `HOST_UID`, `HOST_GID` | Current host-user UID/GID. | Set when outputs must be directly writable by the host user. |
+| `CPP_SOURCE_HOST` | `cpp_Standard` or `cpp_Lite` source directory. | Mounted read/write at `/workspace/src_pipe` so configuration and build products persist. |
+| `SCIENCE_ROOT_*`, `DQ_ROOT_*` | Science/DQ archive paths. | Enable through `compose.optional.yaml` when required; Lite always needs DQ for main processing. |
+| `ASTROMETRY_CAT_*`, `SOURCE_CAT_*`, `FLAT_PATH_*` | Gaia, external-source, and flat directories. | Container paths must match effective INI/CLI values; flat is needed only by its Standard branch. |
+| `PROCESS_DATA_*` | Writable processing directory. | Holds exposure lists, intermediates, and results; default container path is `/data/DataProcess`. |
+| `EXTCAT_INPUT_*`, `REARR_OUTPUT_*`, `EXPOLIST_DIR_*`, `FD_OUTPUT_*` | Optional independent phase paths. | Add `compose.optional.yaml` when used; otherwise prefer locations below processing data. |
 
 Inside the container:
 
@@ -80,33 +71,26 @@ Inside the container:
 make -C /workspace/src_pipe -j4
 cp /workspace/src_pipe/pipeline.example.ini \
    /workspace/src_pipe/pipeline.ini
-# Edit pipeline.ini with container paths, not host paths.
+# Edit pipeline.ini with container paths.
 mpirun -np 4 /workspace/src_pipe/Fourier_Quad_Pipe \
   --config /workspace/src_pipe/pipeline.ini
 ```
 
-Core binds are source (`/workspace/src_pipe`), astrometry/source catalogs,
-flat calibration, and writable processing data. Science/DQ archives and the
-extcat/rearr/exposure-list/FD mounts are optional; enable the latter group with
-`compose.optional.yaml` only when needed.
+Core binds are source, astrometry/source catalogs, flat calibration, and
+writable processing data. Science/DQ archives and independent phase paths are
+optional and should be mounted only when the selected phases need them.
+Run-time paths belong in `pipeline.ini` or supported CLI options; fixed
+`config/*.hpp` values require rebuilding.
 
-The current program can set astrometry/source paths and other run-selectable
-values in `pipeline.ini`. Fixed numerical constants still come from
-`config/*.hpp` and require rebuilding.
-
-For `process_astrocat`, expose the raw Gaia directory through a suitable
-read-only bind and configure its container path as `[astrocat].input_directory`
-or `--astrocat-input`. Catalog binds are read-only, so configure
-`[astrocat].output_directory` or `--astrocat-output` as a writable location,
-normally below the processing-data bind. This producer output is independent
-of `[lensing].astrometry_cat`; a later consumer run must separately point that
-setting at the generated directory and set
-`[lensing].astrometry_cat_type = 2`.
+For `process_astrocat`, bind the raw Gaia directory read-only and write tiles
+to a writable path, normally below the processing-data bind. Its producer
+output is independent of `[lensing].astrometry_cat`; configure that consumer
+path separately. Standard must also set `[lensing].astrometry_cat_type = 2`;
+Lite already uses the one-degree layout.
 
 ## Slurm
 
-The same image can be converted to one SIF. Copy
-`runner/cpppipeline.env.example`, then follow the
+Convert the same image to one SIF and follow the
 [runner guide](runner/README.md). The supported launch boundary is:
 
 ```text

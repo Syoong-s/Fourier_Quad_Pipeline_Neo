@@ -1,19 +1,18 @@
 # Fourier_Quad C++ 容器
 
-本目录构建一个供 `cpp_Standard` 或 `cpp_Lite` 使用的 x86_64 Linux 工具链镜像。
-流水线源码、配置、星表、观测数据和输出不写入镜像，始终由宿主 bind 挂载。
+本目录构建供 `cpp_Standard` 或 `cpp_Lite` 使用的 x86_64 Linux 工具链镜像。
+源码、配置、星表、观测数据和输出位于镜像外，通过宿主 bind 挂载。
 
 > English: [README.md](README.md)
 
 ## 运行环境
 
-镜像基于 Rocky Linux 8.10，包含 G++ 12.3.0、OpenMPI 4.1.8（PMI2）、
-CFITSIO 4.6.4、FFTW 3.3.11、Eigen 3.4.0、LAPACK 3.11.0 与
+Rocky Linux 8.10 镜像包含 G++ 12.3.0、OpenMPI 4.1.8（PMI2）、
+CFITSIO 4.6.4、FFTW 3.3.11、Eigen 3.4.0、LAPACK 3.11.0 和
 OpenBLAS 0.3.33。
 
-通用 HPC 基线要求 x86_64、Slurm `pmi2`、Apptainer/Singularity、所有节点同路径
-可见的共享文件系统和可路由 TCP。只提供 PMIx、ARM、其他调度器或 vendor fabric
-加速的站点需要另行验证。
+通用 HPC 基线要求 x86_64、Slurm `pmi2`、Apptainer/Singularity、共享文件系统和
+可路由 TCP。其他架构、只提供 PMIx 的站点、其他调度器或 vendor fabric 需另行验证。
 
 ## 构建与验证
 
@@ -26,7 +25,7 @@ docker pull ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest
 ### 下载源码并构建
 
 从 [GitHub Releases](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases)
-下载与所用 tag 对应的 `cpp-docker-<tag>.zip`，解压后执行：
+下载 `cpp-docker-<tag>.zip`，解压后执行：
 
 ```bash
 docker build --platform linux/amd64 --target runtime \
@@ -35,34 +34,31 @@ docker build --platform linux/amd64 --target runtime \
 bash scripts/verify-image.sh cpppipeline-dev:gxx12.3-openmpi4.1.8-pmi2
 ```
 
-验证脚本检查版本、科学库、双 MPI rank、PMI 支持，并确认镜像不含流水线源码。
+验证脚本检查组件版本、科学库、双 MPI rank、PMI 支持，并确认镜像不含 Pipeline 源码。
 
 ## 本地使用
 
 ```bash
 cp .env.example .env
-# 设置 CPP_SOURCE_HOST，以及本次启用阶段需要的宿主路径。
+# 设置 CPP_SOURCE_HOST 和启用阶段需要的宿主路径。
 docker compose run --rm FourierQuad-CPP
 ```
 
 ### 常改 `.env` 参数
 
-先复制 `.env.example`，再按实际宿主目录和所选阶段修改下表。`*_HOST` 是宿主路径，
-`*_CONTAINER` 是 Pipeline 和 `pipeline.ini` 在容器内看到的绝对路径。
+复制 `.env.example` 后按宿主目录修改下列值。`*_HOST` 是宿主路径；对应的
+`*_CONTAINER` 是容器内 `pipeline.ini` 或 CLI 使用的绝对路径。
 
 | 参数 | 通常如何修改 | 约束 |
 |---|---|---|
-| `IMAGE_NAME` | 设为准备运行或本地构建的镜像 tag。 | 必须与 `docker build -t` 或已拉取镜像一致。 |
-| `BUILD_JOBS` | 设为镜像构建允许的并行任务数。 | 按本机 CPU 和内存调整。 |
-| `HOST_UID`、`HOST_GID` | 设为当前宿主用户 UID/GID。 | 输出需要由宿主用户直接读写时修改。 |
-| `CPP_SOURCE_HOST` | 指向 `cpp_Standard` 或 `cpp_Lite` 源码目录。 | 以读写方式挂载到 `/workspace/src_pipe`，用于保存 `pipeline.ini` 和编译产物。 |
-| `SCIENCE_ROOT_HOST/CONTAINER` | 指向 Science image 归档及其容器路径。 | `process_init` 使用；容器路径须与 `[init].science_root` 或 CLI 一致，并通过 `compose.optional.yaml` 启用。 |
-| `DQ_ROOT_HOST/CONTAINER` | 指向 DQ mask 归档及其容器路径。 | 启用 DQ 访问时必须设置；Lite 必须提供。容器路径须与 `[init].dq_root` 或 CLI 一致。 |
-| `ASTROMETRY_CAT_HOST/CONTAINER` | 指向 Gaia 星表目录。 | 容器路径须与 `[lensing].astrometry_cat` 一致；Type 1/2 还须匹配 `[lensing].astrometry_cat_type`。 |
-| `SOURCE_CAT_HOST/CONTAINER` | 指向规范化 External source catalog 目录。 | 容器路径须与 `[extcat].output_directory`、`[lensing].source_cat` 或 `--extcat-output` 的有效值一致。 |
-| `FLAT_PATH_HOST/CONTAINER` | 指向平场标定目录。 | 仅 Standard 启用 `[lensing].include_flat=1` 时需要；容器路径须与 `[lensing].flat_path` 一致。 |
-| `PROCESS_DATA_HOST/CONTAINER` | 指向可写处理目录。 | 保存曝光表、中间文件和结果；容器内默认 `/data/DataProcess`。 |
-| `EXTCAT_INPUT_*`、`REARR_OUTPUT_*`、`EXPOLIST_DIR_*`、`FD_OUTPUT_*` | 只为需要独立挂载的相应阶段设置。 | 使用时叠加 `compose.optional.yaml`，并在 INI/CLI 中使用对应容器路径；未设置时优先使用处理目录下的位置。 |
+| `IMAGE_NAME` | 设为准备运行或本地构建的镜像 tag。 | 必须与已拉取镜像或 `docker build -t` 一致。 |
+| `BUILD_JOBS` | 设置镜像构建并行度。 | 按可用 CPU 和内存调整。 |
+| `HOST_UID`、`HOST_GID` | 设置当前宿主用户 UID/GID。 | 输出需要由宿主用户直接读写时设置。 |
+| `CPP_SOURCE_HOST` | 指向 `cpp_Standard` 或 `cpp_Lite` 源码目录。 | 以读写方式挂载到 `/workspace/src_pipe`，以保留配置和编译产物。 |
+| `SCIENCE_ROOT_*`、`DQ_ROOT_*` | 指向 Science/DQ 归档。 | 需要时通过 `compose.optional.yaml` 启用；Lite 主流程始终需要 DQ。 |
+| `ASTROMETRY_CAT_*`、`SOURCE_CAT_*`、`FLAT_PATH_*` | 指向 Gaia、External source catalog 和平场目录。 | 容器路径必须与有效 INI/CLI 值一致；flat 仅相应 Standard 分支需要。 |
+| `PROCESS_DATA_*` | 指向可写处理目录。 | 保存曝光表、中间文件和结果；容器内默认 `/data/DataProcess`。 |
+| `EXTCAT_INPUT_*`、`REARR_OUTPUT_*`、`EXPOLIST_DIR_*`、`FD_OUTPUT_*` | 设置可选的独立阶段路径。 | 使用时叠加 `compose.optional.yaml`；否则优先放在处理目录下。 |
 
 容器内执行：
 
@@ -70,29 +66,24 @@ docker compose run --rm FourierQuad-CPP
 make -C /workspace/src_pipe -j4
 cp /workspace/src_pipe/pipeline.example.ini \
    /workspace/src_pipe/pipeline.ini
-# pipeline.ini 必须写容器路径，而不是宿主路径。
+# 在 pipeline.ini 中填写容器路径。
 mpirun -np 4 /workspace/src_pipe/Fourier_Quad_Pipe \
   --config /workspace/src_pipe/pipeline.ini
 ```
 
-核心挂载为源码、测天/源星表、平场和可写处理目录。Science/DQ 归档以及
-extcat/rearr/曝光表/FD 挂载按阶段选用；Docker Compose 中仅在需要时叠加
-`compose.optional.yaml`。
+核心 bind 为源码、测天/源星表、平场和可写处理目录。Science/DQ 归档及独立阶段路径
+按所选阶段挂载。运行时路径写入 `pipeline.ini` 或受支持的 CLI；固定
+`config/*.hpp` 值修改后需要重新编译。
 
-当前程序可在 `pipeline.ini` 设置测天/源星表路径和其他运行期参数。仍位于
-`config/*.hpp` 的固定数值参数需要重新编译。
-
-运行 `process_astrocat` 时，应通过合适的只读 bind 暴露原始 Gaia 目录，并在
-`[astrocat].input_directory` 或 `--astrocat-input` 中使用其容器路径。星表 bind 是
-只读的，因此须把 `[astrocat].output_directory` 或 `--astrocat-output` 指到可写位置，
+运行 `process_astrocat` 时，应只读 bind 原始 Gaia 目录，并把分片写到可写路径，
 通常放在处理数据 bind 下。该生产端输出与 `[lensing].astrometry_cat` 相互独立；
-后续消费作业须另行让后者指向生成目录，并设置
-`[lensing].astrometry_cat_type = 2`。
+消费路径须另行配置。Standard 还须设置 `[lensing].astrometry_cat_type = 2`；Lite 已固定
+使用一度分片布局。
 
 ## Slurm
 
-同一镜像可转换为一个 SIF。复制 `runner/cpppipeline.env.example`，再按
-[runner 中文指南](runner/README-CN.md) 操作。支持的启动链为：
+将同一镜像转换为一个 SIF，然后按 [runner 中文指南](runner/README-CN.md) 操作。
+支持的启动链为：
 
 ```text
 srun --mpi=pmi2 -> run-apptainer.sh -> apptainer exec --cleanenv -> Fourier_Quad_Pipe
