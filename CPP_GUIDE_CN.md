@@ -73,63 +73,19 @@ Eigen 单独安装时再传入 `EIGEN_INCLUDE=/opt/eigen/include/eigen3`。当�
 Lite Makefile 只公开 `all` 和 `clean`；`make` 等同于 `make all`。修改编译期配置或
 工具链后，先执行 `make clean` 再重新编译。
 
-Stage 5 使用所有同 CCD star-area-locus 配对计算每颗候选体的 minChi，但曝光阈值只由
-触及受限大尺寸 reference 的唯一配对估计。raw analytic PRESS 保留为诊断；可选 rejection
-使用 leverage-standardized PRESS 和受保护的临时重拟合。关闭 rejection、触发删除保护或
-重拟合失败时均保留合法 first fit。这些科学开关仍是编译期设置，已有运行时 PSF 模式、
-芯片几何与 direct stamp-cube I/O 不变。
-
-Stage 5 将中心值 `exp(-1)` 阈值以上的 Fourier 像素精确整数个数保存为私有候选参数
-index 12 `star_area`，并用它进行曝光级 locus 科学选择。Cpp 的 Stage-5 私有行仅为此
-增加一个槽，`src_npara` 仍为 12，外部 catalog 格式不变。index 7 仍是 minChi reference
-排序使用的 0.02 阈值 legacy area，index 10 仍保存 FWHM。正 MAD 的 Gaia pilot
-（不足时退回全部候选）最多执行三轮 3-MAD clipping，并仅接受下一 population 仍为
-正 MAD 的 clip，然后使用局部 ±5-MAD range。初始 MAD 为零时保留完整输入，使用无
-padding 的插值 `Q(q)--Q(1-q)` bounds；
-`q = LensingConfig::psf_count_zero_mad_quantile`，默认 `0.05`。
-
-科学 histogram 的 bin 宽固定为 2 个整数 count level，名义中心为
-`first + 2 * bin + 0.5`，diagnostics 同时保存 pilot domain 实际包含的首末整数。
-raw count 始终不修改；只在 working histogram 中对两侧由正值封闭的 1 或 2 个 bin
-（即 2 或 4 个 count）的内部空洞做线性插值，再进行不变的 1-2-3-2-1 平滑。Gaia
-峰资格以名义 bin center 的全局最近距离再加 1 count 为界。所有严格满足
-`H > H_selected / e` 的局部峰组成一个 peak complex，不考虑内部 valley；seed basin
-从最外侧有效峰向外下降，遇到下一次上升停止。随后两轮不对称 MAD refinement 每轮都
-从 pilot histogram domain 内全部真实样本重建 population，允许重新吸收；等于中心的
-重复值仍不进入两侧 MAD，宽度下限仍为 1 count。左右两侧各自从第一个严格低于所选峰
-高度 10% 的 bin 向边界搜索，选择最大正有符号二阶差分作为 elbow；可用 elbow 只能向外
-放宽 pre-guard MAD cut。生产选择继续采用严格的 star-area cuts。
-
-`PsfGroupingType = 3` 保留同一套质量、Gaia/star-area、归一化窗口和 minChi 门控，
-随后完全绕过两种 graph grouping。曝光级 Freedman-Diaconis 的 IQR、范围和 histogram
-仍使用所有 minChi survivor 的同芯片、无序、有限 pair chi，但宽度的 `n^(-1/3)` 项
-使用全部 minChi survivor 星数，而不是高度相关的 pair 数。1-2-3-2-1 平滑只做边界归一化，
-不填空洞，plateau 峰折叠到较低的中间 bin。局部峰必须严格满足 `H > H_main / e`；
-从最右有效峰到其右侧第一个无效峰之间选择最大正有符号二阶差分，以对应 bin center
-为 pair chi cut，只有严格大于 cut 的 pair 才算 bad。第二次同芯片 pair pass 计算每颗
-星的 `bad / finite` 比例；FD 宽度只使用正比例（其 IQR 为零时用最小正值），但原点固定
-为零的 histogram 会包含所有零值，并用严格的 `H > 0.10 H_main` 峰规则。等于 fraction
-cut 的星保留；估计失败采用 fail-open，全零比例不增加拒绝；pair stage 成功后没有有限
-分母的星不能通过，且每芯片仍必须至少保留 `nstar_min_local` 颗星。`PSF_TYPE3_*` 日志
-完整记录两级 grid、峰、elbow、cut 与 fail-open 决策，并以 `fd_samples` 和
-`fd_scale_samples` 分别报告 distribution 与宽度缩放所用的样本数。
-
-两版仍写出 `stamps/svg_StarLocus/<exposure>_locus.svg`，但横轴现在直接使用科学选择的
-整数 `exp(-1)` pixel count。每个 histogram bin 覆盖两个整数 count level；raw、
-smoothed、Gaia、精确的 minChi 后/grouping 前 survivor，以及最终 PRESS 前 selected
-分布连同 pilot、所选峰、Gaia median、pre-guard MAD cuts、可用的左右
-elbow 和最终 guarded cuts 均使用同一 count grid。历史
-index-10 FWHM 及各版本原有 pixel-scale 来源仍供
-非 locus 消费者使用，但 SVG 不再读取或映射 FWHM。固定目录由 `process_init` 创建；旧
-数据树若跳过初始化，必须提前补齐。
-
 ## 配置
 
-先复制所选版本的模板：
+支持3种配置方式：
+1. 配置文件 `pipeline.ini`；
+
+复制所选版本的模板，修改为所需配置：
 
 ```bash
 cp pipeline.example.ini pipeline.ini
 ```
+
+2. 命令行参数；
+3. `config`下头文件中设置编译器常量。
 
 优先级为：
 
@@ -142,16 +98,6 @@ INI 分为五段：`[process]` 控制阶段和输出路径，`[astrocat]` 控制
 控制归档根目录和数据集，`[lensing]` 控制可在运行间改变的科学分支与相机参数。
 Lite 会拒绝 Standard 专属键；未知段、未知键、无效值及不一致的阶段/schema 组合均会在
 执行前报错。
-
-`[lensing].astrometry_cat_type=1` 读取旧式大 Gaia 瓦片；值 `2` 累积读取
-`process_astrocat` 生成的一度瓦片。生产者路径 `[astrocat].output_directory` 与消费者
-路径 `[lensing].astrometry_cat` 始终是两个独立设置；若同一次运行的后续阶段需要消费
-新发布的瓦片，应显式分别配置两者。
-
-`PathConfig::ASTROMETRY_TILE_PREFIX` 与
-`PathConfig::SOURCE_CAT_TILE_PREFIX` 分别控制 Type-2 Gaia 和外部源星表的一度瓦片。
-前缀不包含固定的 `RA_`；生产、消费及已有输出识别使用同一配置值。这两个前缀仅在
-编译时配置，修改后不会继续识别旧前缀文件。
 
 CLI 同时接受 `--name value` 与 `--name=value`。布尔值接受 `true/false`、`1/0`、
 `yes/no`、`on/off`。首次显式 `--dataset`、`--contains`、`--extcat-contains` 会替换
@@ -273,19 +219,14 @@ Science images、Gaia catalog、External source catalog 与 DQ masks 的统一�
 ```text
 <dataset>/result/<exposure>_all.cat
 <dataset>/<rearr-output-dir>/subcat_*.cat
-<dataset>/<rearr-output-dir>/catalog_summary.txt
 <dataset>/<fd-output-dir>/FD_test_comb.dat
 ```
 
-阶段 7 输出 28 个流水线字段；阶段 9 写入 `EXPO_NUM`、`ccD_NUM`，并附加一个曝光
-`chi2`。默认完整行因此是 18 个外部字段、两个身份字段和 29 个流水线字段，共 49 列。
-显式投影只改变外部前缀宽度；身份顺序始终是 `EXPO_NUM` 紧邻并位于 `ccD_NUM` 之前，
-FD 读取该真实曝光身份，不再从文件列表顺序推断。旧的 48 列产物与新 schema 不兼容，
-在重排或 FD 前必须重新生成。列身份、可选星等映射与 FD 波段选择顺序见
-[CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md)。
-
-无效数值源仍保持行号对齐：阶段 6 写 12 个 `-99999` 标记，阶段 7 对该源或后续非有限
-结果写完整 28 个 `-99999`，阶段 9 会丢弃该行。这是输出约定，不是额外配置项。
+`_all.cat`是按曝光为单位的剪切目录，默认包含外部星表字段、原始 1-based
+`EXPO_NUM`、1 个 CCD 编号和 25 个流水线字段，共 45 列。schema 升级后需重新生成
+Stage 9、rearr 与 FD 产物；旧 44 列数据不能与新版混用。
+`subcat_*.cat`是按RA/DEC 重新分块的目录，单个源的所有测量记录连续排列，便于快速去重。
+`FD_test_comb.dat`是程序process FD生成的场畸变测试表格文件，用于矫正剪切测量。
 
 ## 常见错误
 

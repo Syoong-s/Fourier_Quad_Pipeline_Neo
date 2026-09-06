@@ -93,78 +93,18 @@ The live Standard and Lite Makefiles expose only `all` and `clean`. `make` is
 equivalent to `make all`; use `make clean` before rebuilding after a compiled
 configuration or toolchain change.
 
-Stage 5 computes each candidate's minChi from all same-chip star-area-locus pairs,
-while its exposure cut is estimated from unique pairs touching capped
-large-size references. Raw analytic PRESS remains a diagnostic; optional
-rejection uses leverage-standardized PRESS and a guarded temporary refit. The
-valid first fit survives disabled rejection, removal safeguards, and refit
-failure. These scientific switches remain compile-time settings; the existing
-runtime PSF mode, chip geometry, and direct stamp-cube I/O are unchanged.
-
-Stage 5 stores the exact central-`exp(-1)` Fourier-pixel count as `star_area` at
-private candidate index 12 and uses it for exposure-wide locus science. The Cpp
-private Stage-5 row has one extra slot for this value, while `src_npara` remains
-12 and all external catalog schemas stay unchanged. Index 7 remains the legacy
-0.02-threshold area used for minChi reference ranking; index 10 remains FWHM.
-A positive-MAD Gaia pilot (or all-candidate fallback) accepts up to three 3-MAD
-clips while the proposed population keeps a positive MAD, then uses a local
-±5-MAD range. An initially zero-MAD pilot keeps its full input and uses unpadded
-interpolated `Q(q)--Q(1-q)` bounds, where
-`q = LensingConfig::psf_count_zero_mad_quantile` defaults to `0.05`.
-
-The science histogram has a fixed width of two integer count levels per bin;
-its nominal bin center is `first + 2 * bin + 0.5`, while diagnostics retain the
-actual inclusive first/last pilot-domain counts. Raw counts remain immutable.
-Only bounded internal holes of one or two bins (two or four counts) are linearly
-interpolated in a working histogram before the unchanged 1-2-3-2-1 smoothing.
-Gaia peak eligibility is anchored to global nearest nominal-center distance
-plus exactly one count. Every local peak strictly above `H_selected / e` forms
-one peak complex regardless of internal valleys, and the seed basin descends
-outward from its outermost peaks until the next rise. Each of two asymmetric-MAD
-passes rebuilds from all real samples in the pilot histogram domain, so eligible
-samples can re-enter; center duplicates stay excluded from side MADs and both
-widths retain their one-count floor. Independently on each side, the first bin
-strictly below ten percent of the selected height starts an outward search for
-the maximum positive signed second difference. An available elbow can only
-widen its pre-guard MAD cut. Production still applies strict star-area cuts.
-
-`PsfGroupingType = 3` keeps the same quality, Gaia/star-area, normalized-window,
-and minChi gates, then bypasses both graph grouping implementations. It uses
-every finite unordered same-chip minChi-survivor pair for the exposure-wide
-Freedman-Diaconis IQR, range, and histogram, while the width's `n^(-1/3)` scale
-uses the total minChi-survivor star count instead of the correlated pair count.
-The edge-renormalized 1-2-3-2-1 smoother does
-not fill holes; flat local maxima collapse to their lower middle bin. Peaks are
-valid only when strictly above `H_main / e`; the first invalid peak right of the
-rightmost valid peak bounds the search for the maximum positive signed-curvature
-elbow. Pairs strictly above that bin-center cut are bad. A second same-chip pass
-forms each star's bad/finite-pair fraction. Its FD width uses positive fractions
-only (falling back to the smallest positive value when their IQR is zero), while
-the origin-zero histogram includes zeros and uses the strict `0.10 H_main` peak
-rule. Fractions equal to the cut pass. Missing estimators fail open, all-zero
-fractions add no rejection, stars without a finite pair denominator do not pass
-a successful pair stage, and every chip still needs `nstar_min_local` stars.
-Detailed `PSF_TYPE3_*` logs expose both adaptive grids and decisions, including
-separate `fd_samples` and `fd_scale_samples` counts.
-
-Both variants still write `stamps/svg_StarLocus/<exposure>_locus.svg`, now
-directly in the integer `exp(-1)` pixel-count coordinate used by science. Each
-histogram bin spans two integer count levels; raw, smoothed, Gaia, exact
-post-minChi/pre-grouping survivors, and final pre-PRESS selected distributions
-plus pilot, selected peak, Gaia median, pre-guard MAD cuts, available outer
-elbows, and final guarded cuts all share that grid. Historical index-10
-FWHM and each variant's existing pixel-scale source remain available to
-non-locus consumers, but the SVG no longer reads or
-maps FWHM. The fixed directory is created by `process_init`; legacy data trees
-that skip initialization must provide it.
 
 ## Configure a run
 
+Supports three configuration methods:
+1. Configuration file pipeline.ini;
 Copy the template belonging to the selected variant:
 
 ```bash
 cp pipeline.example.ini pipeline.ini
 ```
+2. Command-line arguments;
+3. Setting compiler constants in the header files under the config directory.
 
 Configuration is resolved as:
 
@@ -183,19 +123,6 @@ The INI has five sections:
 Lite rejects Standard-only lensing keys. Unknown sections, keys, malformed
 values, and inconsistent stage/schema choices are errors. The INI is applied
 transactionally on every rank before any phase runs.
-
-`[lensing].astrometry_cat_type=1` reads legacy large Gaia tiles; value `2`
-accumulates the one-degree tiles generated by `process_astrocat`. The producer
-path in `[astrocat].output_directory` and the consumer path in
-`[lensing].astrometry_cat` remain separate settings. Configure both explicitly
-when a later phase in the same run should consume the newly published tiles.
-
-`PathConfig::ASTROMETRY_TILE_PREFIX` and
-`PathConfig::SOURCE_CAT_TILE_PREFIX` independently name Type-2 Gaia and
-external-source one-degree tiles. Prefixes exclude the fixed `RA_` token;
-producers, consumers, and existing-output recognition use the same selected
-value. These two prefix settings are build-time only, and changing one does not
-recognize tiles carrying its old value.
 
 CLI options accept `--name value` and `--name=value`. Booleans accept
 `true/false`, `1/0`, `yes/no`, and `on/off`. The first explicit `--dataset`,
@@ -347,25 +274,17 @@ The most important downstream products are:
 ```text
 <dataset>/result/<exposure>_all.cat
 <dataset>/<rearr-output-dir>/subcat_*.cat
-<dataset>/<rearr-output-dir>/catalog_summary.txt
 <dataset>/<fd-output-dir>/FD_test_comb.dat
 ```
 
-Stage 7 writes 28 pipeline fields; Stage 9 writes `EXPO_NUM`, `ccD_NUM`, and
-one exposure chi-square. The default complete row is therefore 18 external
-fields + two identity fields + 29 pipeline fields = 49 fields. Explicit
-external-catalog projection changes only the external prefix width. The
-canonical identity order is always `EXPO_NUM` immediately before `ccD_NUM`;
-FD uses this serialized exposure identity rather than file-list order. Older
-48-field products are schema-incompatible and must be regenerated before
-rearrangement or FD processing. Column identities, optional-band mapping, and
-the FD band-selection priority are defined in
-[CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md).
-
-Invalid numerical sources retain row alignment. Stage 6 records a 12-value
-`-99999` source marker; Stage 7 emits a full 28-value `-99999` row for that
-source or any later non-finite result; Stage 9 rejects the marked row. This is
-an output contract, not an additional configuration option.
+`_all.cat` is a per-exposure shear catalog. By default, each row contains the
+external source catalog fields, the original 1-based `EXPO_NUM`, one CCD number,
+and 25 pipeline fields (45 columns total). Regenerate Stage 9, rearrangement,
+and FD products after this schema change; legacy 44-column rows are incompatible.
+`subcat_*.cat` spatially repartitions those rows by Dec and RA; repeated
+measurements at identical coordinates are adjacent, which simplifies
+deduplication. `FD_test_comb.dat` is the field-distortion test table written by
+`process_fd` and is used to calibrate shear measurements.
 
 ## Frequent errors
 
