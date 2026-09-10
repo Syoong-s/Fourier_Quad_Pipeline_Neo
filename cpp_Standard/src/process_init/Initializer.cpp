@@ -308,15 +308,15 @@ void validatePipelinePath(const fs::path& path, int f77_max_path) {
 // ==========================================
 // Function: Publish top-level exposure and compatibility FITS lists
 // Method: After every rank has written its per-exposure chip lists into
-//         stamps/ during extraction, rank zero scans stamps/, sorts the
+//         expolists/ during extraction, rank zero scans expolists/, sorts the
 //         per-exposure lists, and atomically writes expo_<target>.list
 //         ("<list path>" <chip count>) and the flat fits_<target>.list.
 //         No re-stat of science images is required.
 // ==========================================
 void publishPipelineLists(const Config& config, const fs::path& target_root) {
-    const fs::path stamps_dir = target_root / "stamps";
+    const fs::path expolists_dir = target_root / "expolists";
     std::vector<fs::path> exposure_lists;
-    for (const auto& entry : fs::directory_iterator(stamps_dir)) {
+    for (const auto& entry : fs::directory_iterator(expolists_dir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".list") {
             exposure_lists.push_back(entry.path());
         }
@@ -368,7 +368,7 @@ void createExposureDirectoriesFromPublishedList(const Config& config,
                                  + top_path.string());
     }
 
-    const fs::path expected_parent = (target_root / "stamps").lexically_normal();
+    const fs::path expected_parent = (target_root / "expolists").lexically_normal();
     std::set<std::string> exposures;
     std::string list_path_text;
     int chip_count = 0;
@@ -633,7 +633,7 @@ int runInitializer(const Config& input_config) {
             && !result.output_paths.empty()) {
             try {
                 const std::string exposure = archiveStem(task.source);
-                const fs::path list_path = target_root / "stamps" / (exposure + ".list");
+                const fs::path list_path = target_root / "expolists" / (exposure + ".list");
                 validatePipelinePath(list_path, config.f77_max_path);
                 for (const fs::path& image_path : result.output_paths) {
                     validatePipelinePath(image_path, config.f77_max_path);

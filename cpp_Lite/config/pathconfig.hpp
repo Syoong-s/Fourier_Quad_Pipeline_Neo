@@ -75,10 +75,11 @@ inline constexpr std::string_view SUMMARY_FILENAME = "catalog_summary.txt";  // 
 namespace OutputLayout {
 
 // Complete process_init base-directory contract without per-chip products.
-inline constexpr std::array<const char*, 15> NON_CHIP_BASE_DIRECTORIES = {
+inline constexpr std::array<const char*, 16> NON_CHIP_BASE_DIRECTORIES = {
     "science",
     "dqmask",
     "stamps",
+    "expolists",
     "result",
     "stamps/dat_StarInfo",
     "stamps/svg_StarLocus",

@@ -369,7 +369,7 @@ the runtime dataset root is prepended by the existing path helpers.
 
 | Parameter | Type | Standard / Lite compiled value | Function | Rebuild after change |
 |---|---|---|---|---|
-| `NON_CHIP_BASE_DIRECTORIES` | `std::array<const char*, 15>` | `science`, `dqmask`, `stamps`, `result`, `stamps/dat_StarInfo`, `stamps/svg_StarLocus`, `stamps/fits_StarP`, `stamps/fits_PsfSrc`, `stamps/dat_ExpoInfo`, `stamps/dat_StarComp`, `stamps/dat_Rescale`, `stamps/dat_Pcs`, `stamps/dat_StarCompV2`, `astrometry/Head`, `astrometry/dat_Chk` | Complete fixed base-directory contract created without a chip suffix. | Yes |
+| `NON_CHIP_BASE_DIRECTORIES` | `std::array<const char*, 16>` | `science`, `dqmask`, `stamps`, `expolists`, `result`, `stamps/dat_StarInfo`, `stamps/svg_StarLocus`, `stamps/fits_StarP`, `stamps/fits_PsfSrc`, `stamps/dat_ExpoInfo`, `stamps/dat_StarComp`, `stamps/dat_Rescale`, `stamps/dat_Pcs`, `stamps/dat_StarCompV2`, `astrometry/Head`, `astrometry/dat_Chk` | Complete fixed base-directory contract created without a chip suffix. | Yes |
 | `CHIP_PRODUCT_DIRECTORIES` | `std::array<const char*, 16>` | `stamps/Norm`, `stamps/cat_Orig`, `stamps/dat_StarCanInfo`, `stamps/fits_StarCan`, `stamps/fits_StarCanN`, `stamps/fits_StarCanP`, `stamps/dat_SrcInfo`, `stamps/fits_Src`, `stamps/fits_Noise`, `stamps/fits_SrcP`, `stamps/dat_PsfFit`, `stamps/fits_PsfLocal`, `stamps/dat_Shear`, `stamps/dat_StarXY`, `stamps/fits_PsfResi`, `astrometry/dat_Astro` | Complete fixed per-chip product-directory contract. | Yes |
 
 `include/general/OutputLayout.hpp` now contains only the functions that derive

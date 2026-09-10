@@ -117,7 +117,7 @@ void testPublication(const TemporaryTree& tree) {
 
     const std::filesystem::path target_root = tree.outputRoot() / "target";
     const std::vector<std::string> rows = readLines(
-        target_root / "stamps" / (exposure + ".list"));
+        target_root / "expolists" / (exposure + ".list"));
     require(rows.size() == 3, "per-exposure list has the wrong chip count");
     const std::vector<int> expected = {7, 1, 3};
     for (std::size_t index = 0; index < expected.size(); ++index) {

@@ -213,8 +213,9 @@ Science images、Gaia catalog、External source catalog 与 DQ masks 的统一�
 支持带引号的路径。
 
 初始化器读取原始压缩归档但不移动它们，在 `output_root/<target>/` 下创建 `science/`、
-`dqmask/`、`stamps/`、`result/`，并发布 `expo_<target>.list`、
-`fits_<target>.list` 与 manifest。主要下游结果为：
+`dqmask/`、`stamps/`、`expolists/`、`result/`，并发布 `expo_<target>.list`、
+`fits_<target>.list` 与 manifest。逐曝光 CCD 列表保存在 `<dataset>/expolists/`，
+数值阶段产物仍保存在 `<dataset>/stamps/`。主要下游结果为：
 
 ```text
 <dataset>/result/<exposure>_all.cat

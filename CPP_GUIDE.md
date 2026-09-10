@@ -265,9 +265,11 @@ legacy chip count is accepted. Quoted paths are supported by the current C++
 reader.
 
 Initialization reads compressed archives in place and creates a dataset tree
-below `output_root/<target>/`, including `science/`, `dqmask/`, `stamps/`, and
-`result/`. It also publishes `expo_<target>.list`, `fits_<target>.list`, and an
-initializer manifest.
+below `output_root/<target>/`, including `science/`, `dqmask/`, `stamps/`,
+`expolists/`, and `result/`. It also publishes `expo_<target>.list`,
+`fits_<target>.list`, and an initializer manifest. Per-exposure chip lists are
+stored in `<dataset>/expolists/`, while numerical products remain under
+`<dataset>/stamps/`.
 
 The most important downstream products are:
 
