@@ -39,6 +39,7 @@ SRCS = main.cpp \
        src/process_init/Initializer.cpp \
        src/process_init/FitsExtractor.cpp \
        src/process_main/PreProcess.cpp \
+       src/process_main/PreProcessLegacy.cpp \
        src/process_main/Astrometry.cpp \
        src/process_main/SourceExtractor.cpp \
        src/process_main/NoiseCovariance.cpp \

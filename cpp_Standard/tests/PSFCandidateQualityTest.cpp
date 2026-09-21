@@ -11,6 +11,7 @@ namespace {
 
 using PSFModel::Internal::CandidatePowerStatus;
 using PSFModel::Internal::assessCandidatePower;
+using PSFModel::Internal::assessF77CandidatePower;
 using PSFModel::Internal::candidateDiagnosticsAreFinite;
 
 // ==========================================
@@ -150,6 +151,42 @@ void testNonPositiveChiWindowSum() {
 }
 
 // ==========================================
+// Function: Verify the compatibility read-in omits modern scientific gates
+// Method: Accept finite negative-core/window/total cases when normalization is
+//         defined, but retain structural, finite, and zero-sum safety checks.
+// ==========================================
+void testF77CompatibilityPolicy() {
+    double sum_power = 0.0;
+    double chi_window_sum = 0.0;
+    std::vector<float> power(25, 0.0f);
+    power[12] = 20.0f;
+    const int neighbors[] = {6, 7, 8, 11, 13, 16, 17, 18};
+    for (int index : neighbors) power[index] = -1.0f;
+    require(assessF77CandidatePower(
+                5, 5, power, sum_power, chi_window_sum)
+                == CandidatePowerStatus::Accepted,
+            "F77 policy must not apply the modern negative-core gate");
+
+    power[0] = -20.0f;
+    require(assessF77CandidatePower(
+                5, 5, power, sum_power, chi_window_sum)
+                == CandidatePowerStatus::Accepted
+                && sum_power < 0.0 && chi_window_sum < 0.0,
+            "finite negative sums remain mathematically normalizable in F77 mode");
+    power[0] = -12.0f;
+    require(assessF77CandidatePower(
+                5, 5, power, sum_power, chi_window_sum)
+                == CandidatePowerStatus::NonPositiveSum
+                && sum_power == 0.0,
+            "a zero full sum must fail the hard normalization guard");
+    power[0] = std::numeric_limits<float>::quiet_NaN();
+    require(assessF77CandidatePower(
+                5, 5, power, sum_power, chi_window_sum)
+                == CandidatePowerStatus::NonFinitePower,
+            "F77 policy must still reject non-finite input");
+}
+
+// ==========================================
 // Function: Verify structural and derived-diagnostic guards
 // Method: Reject incomplete images and every non-finite diagnostic field.
 // ==========================================
@@ -186,6 +223,7 @@ int main() {
     testNegativeCoreMedian();
     testNonPositiveSum();
     testNonPositiveChiWindowSum();
+    testF77CompatibilityPolicy();
     testStructuralAndDiagnosticValidity();
     std::cout << "PSF candidate quality tests passed\n";
     return EXIT_SUCCESS;

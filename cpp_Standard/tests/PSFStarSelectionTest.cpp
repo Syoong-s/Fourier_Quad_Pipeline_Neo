@@ -797,6 +797,150 @@ void testMinChiReferencesAndPairs() {
 }
 
 // ==========================================
+// Function: Verify per-candidate F77 safety and safe-population boundaries
+// Method: Collect around one invalid candidate, exercise the exact 192-star
+//         boundary, preserve negative sums, and exclude an invalid extreme size.
+// ==========================================
+void testF77CandidateSafetyPopulation() {
+    auto countSafeCandidates = [](int raw_count) {
+        std::vector<std::vector<float>> windows(
+            static_cast<std::size_t>(raw_count), {0.8f, 0.2f});
+        std::vector<F77PSFCandidateView> candidates;
+        for (int index = 0; index < raw_count; ++index) {
+            F77PSFCandidateView candidate;
+            if (prepareF77PSFCandidate(
+                    index, 1.0, index == 0 ? 0.0 : 1.0,
+                    static_cast<double>(index + 1), windows[index], candidate)) {
+                candidates.push_back(candidate);
+            }
+        }
+        return candidates.size();
+    };
+
+    require(countSafeCandidates(21) == 20U,
+            "one invalid F77 candidate must not reject twenty safe chip peers");
+    const std::size_t below_minimum = countSafeCandidates(192);
+    const std::size_t at_minimum = countSafeCandidates(193);
+    require(below_minimum == 191U
+                && !hasMinimumF77PSFCandidates(below_minimum, 96),
+            "192 raw candidates with one invalid must fail the 192-safe minimum");
+    require(at_minimum == 192U
+                && hasMinimumF77PSFCandidates(at_minimum, 96),
+            "193 raw candidates with one invalid must meet the 192-safe minimum");
+
+    std::vector<float> negative_sum_window = {-0.8f, -0.2f};
+    F77PSFCandidateView negative_sum_candidate;
+    require(prepareF77PSFCandidate(
+                4, 1.0, -1.0, 2.0,
+                negative_sum_window, negative_sum_candidate)
+                && negative_sum_candidate.star_index == 4
+                && negative_sum_window[0] > 0.0f,
+            "negative finite nonzero full sums must remain F77-compatible");
+
+    std::vector<float> nonfinite_window = {
+        0.8f, std::numeric_limits<float>::quiet_NaN()};
+    F77PSFCandidateView rejected_candidate;
+    require(!prepareF77PSFCandidate(
+                5, 1.0, 1.0, 2.0,
+                nonfinite_window, rejected_candidate),
+            "a non-finite chi-window value must be rejected individually");
+    std::vector<float> finite_window = {0.8f, 0.2f};
+    require(!prepareF77PSFCandidate(
+                5, std::numeric_limits<double>::quiet_NaN(), 1.0, 2.0,
+                finite_window, rejected_candidate),
+            "a non-finite selection flag must not enter the safe population");
+    std::vector<float> overflow_window = {
+        std::numeric_limits<float>::max()};
+    require(!prepareF77PSFCandidate(
+                5, 1.0, std::numeric_limits<double>::denorm_min(), 2.0,
+                overflow_window, rejected_candidate),
+            "a non-finite normalized chi window must be rejected individually");
+
+    std::vector<std::vector<float>> windows(7, {0.8f, 0.2f});
+    std::vector<std::vector<F77PSFCandidateView>> candidates(1);
+    for (int index = 0; index < 7; ++index) {
+        F77PSFCandidateView candidate;
+        const bool safe = prepareF77PSFCandidate(
+            index, 1.0, index == 6 ? 0.0 : 1.0,
+            index == 6 ? 1.0e9 : static_cast<double>(index + 1),
+            windows[index], candidate);
+        if (safe) candidates[0].push_back(candidate);
+    }
+    F77PSFPairStatistics statistics;
+    require(computeF77PSFPairStatistics(candidates, statistics)
+                && statistics.size_threshold == 4.0,
+            "an invalid extreme-size candidate must not affect the safe size rank");
+}
+
+// ==========================================
+// Function: Verify F77 size rank, index mapping, and largest-component policy
+// Method: Exercise one-based rank conversion, both-large threshold sampling,
+//         compact-to-original mapping, first-group ties, and both local minima.
+// ==========================================
+void testF77SelectionPolicy() {
+    std::vector<std::vector<float>> rank_windows = {
+        {0.80f, 0.20f}, {0.79f, 0.21f}, {0.78f, 0.22f},
+        {0.77f, 0.23f}, {0.76f, 0.24f}, {0.75f, 0.25f}};
+    std::vector<std::vector<F77PSFCandidateView>> rank_candidates(1);
+    for (int index = 0; index < 6; ++index) {
+        rank_candidates[0].push_back({
+            index, static_cast<double>(index + 1), &rank_windows[index]});
+    }
+    F77PSFPairStatistics rank_statistics;
+    require(computeF77PSFPairStatistics(
+                rank_candidates, rank_statistics),
+            "finite F77 pair statistics must succeed");
+    require(rank_statistics.size_threshold == 4.0,
+            "six candidates must use the fourth one-based sorted size");
+    require(rank_statistics.threshold_pair_chi.size() == 3,
+            "only the three pairs among sizes four/five/six enter the sample");
+
+    std::vector<std::vector<float>> group_windows = {
+        {0.80f, 0.20f}, {0.82f, 0.18f},
+        {0.20f, 0.80f}, {0.18f, 0.82f}};
+    std::vector<std::vector<F77PSFCandidateView>> group_candidates(1);
+    for (std::size_t index = 0; index < group_windows.size(); ++index) {
+        group_candidates[0].push_back({
+            static_cast<int>(index), static_cast<double>(index + 1),
+            &group_windows[index]});
+    }
+    F77PSFPairStatistics group_statistics;
+    require(computeF77PSFPairStatistics(
+                group_candidates, group_statistics),
+            "two-component F77 fixture must produce pair statistics");
+    std::vector<std::vector<int>> selected;
+    require(selectF77PSFLargestGroups(
+                group_candidates, group_statistics, 0.05f, 2, selected),
+            "finite F77 graph selection must succeed");
+    require(selected.size() == 1
+                && selected[0] == std::vector<int>({0, 1}),
+            "equal largest components must keep only the first component");
+    require(selectF77PSFLargestGroups(
+                group_candidates, group_statistics, 0.05f, 3, selected)
+                && selected[0].empty(),
+            "largest component below the final local minimum must reject the chip");
+
+    std::vector<std::vector<float>> mapped_windows = {
+        {0.80f, 0.20f}, {0.20f, 0.80f},
+        {0.81f, 0.19f}, {0.82f, 0.18f}};
+    const std::array<int, 4> original_indices = {0, 2, 5, 7};
+    std::vector<std::vector<F77PSFCandidateView>> mapped_candidates(1);
+    for (std::size_t compact = 0; compact < mapped_windows.size(); ++compact) {
+        mapped_candidates[0].push_back({
+            original_indices[compact], static_cast<double>(compact + 1),
+            &mapped_windows[compact]});
+    }
+    F77PSFPairStatistics mapped_statistics;
+    require(computeF77PSFPairStatistics(
+                mapped_candidates, mapped_statistics)
+                && selectF77PSFLargestGroups(
+                    mapped_candidates, mapped_statistics, 0.05f, 2, selected),
+            "non-contiguous original-index F77 grouping must succeed");
+    require(selected[0] == std::vector<int>({0, 5, 7}),
+            "largest compact group must map back to original star indices");
+}
+
+// ==========================================
 // Function: Verify leverage-standardized PRESS and removal safeguards
 // Method: Check the exact score formula, denominator guard, removal cap, and
 //         inclusive retained-star minimum boundaries.
@@ -966,6 +1110,8 @@ int main() {
     testGrouping();
     testKNNRebuiltAfterMinChiCut();
     testMinChiReferencesAndPairs();
+    testF77CandidateSafetyPopulation();
+    testF77SelectionPolicy();
     testAnalyticLOO();
     testPressStandardizationAndDecision();
     std::cout << "PSF star-selection tests passed\n";

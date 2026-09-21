@@ -38,6 +38,14 @@ scientific branches are exposed in `[lensing]`; fixed numerical thresholds
 and archive/FITS naming conventions remain in `config/*.hpp` and require
 rebuilding.
 
+Three Standard-only compile-time compatibility selectors live in
+`config/LensingConfig.hpp`: `PreprocsType=2`, `NstampType=2`, and
+`PsfGroupingType=4` preserve this repository's current C++ preprocessing,
+QC/random blank-noise, and adaptive PSF-grouping defaults. Value 1 selects the
+corresponding historical F77-compatible route; modern PSF grouping is numbered
+2/3/4 for threshold/KNN/adaptive. These selectors are intentionally absent
+from Lite.
+
 `process_astrocat` and `process_extcat` are optional producer phases. Their
 output directories must be configured separately from the catalog paths later
 consumed by `process_main`.
@@ -54,6 +62,12 @@ Stage 7 writes 28 fields and Stage 9 adds exposure chi-square. With the default
 regenerate older 48-field products before rearrangement or FD. Header-only
 catalogs remain the valid zero-row representation, while missing or unreadable
 required products stop the MPI job.
+
+For the local-polynomial PSF branch, `*_star_comp_expo.dat` records the model
+shape from the ordinary model fitted with all retained stars and evaluated at
+each fitted star. Leave-one-out calculations remain confined to optional PRESS
+selection. The Hybrid writer keeps its existing fitted very-local-map
+diagnostics, and PCA pixel residuals remain ordinary full-fit residuals.
 
 See the [C++ guide](../CPP_GUIDE.md) for phase, I/O, schema, and failure
 contracts, and the

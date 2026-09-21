@@ -19,7 +19,7 @@ namespace LensingConfig {
     // Configuration: Astrometric reference catalog layout
     // Method: Select legacy large Gaia tiles (1) or repartitioned 1-degree tiles (2).
     // ==========================================
-    constexpr int AstroCatType = 1;
+    constexpr int AstroCatType = 1;        // Select legacy large Gaia tiles (1) or repartitioned 1-degree tiles (2).
     constexpr int PROCESS_stage =          // Prime-product stage selector.
                                 2 *        // Pre-Process
                                 3 *        // Astrometry
@@ -31,9 +31,10 @@ namespace LensingConfig {
                                 19 *       // Exposure info
                                 23 *       // Catalog Combiners
                                 1;
-    constexpr int include_FLAT = 0;  // Apply super-flat correction when one.
-    constexpr int include_Mask = 2;  // Select the DQ-mask input mode.
-    constexpr int include_BGsub = 1;  // Subtract the fitted science-image background.
+    constexpr int include_FLAT = 0;    // Apply super-flat correction when one.
+    constexpr int include_Mask = 2;    // Select the DQ-mask input mode.
+    constexpr int include_BGsub = 1;   // Subtract the fitted science-image background.
+    constexpr int PreprocsType = 2;    // Stage-1 preprocessing estimator selector, 1 for legacy, 2 for the new.
 
     // Split parameters
     constexpr int ext_cat = 1;  // Use the external source catalog when one.
@@ -53,7 +54,7 @@ namespace LensingConfig {
     // Method: Keep the common scientific cuts compile-time selectable while
     //         runtime configuration continues to own geometry and PSF modes.
     // ==========================================
-    constexpr int PsfGroupingType = 3;  // 1 threshold graph; 2 mutual KNN; 3 adaptive pair fractions.
+    constexpr int PsfGroupingType = 4;  // 1 F77; 2 threshold graph; 3 mutual KNN; 4 adaptive pair fractions.
     // ---
     constexpr int psf_exposure_min_candidates = 60;  // Minimum exposure-wide PSF candidates.
     constexpr double psf_count_pilot_clip_sigma = 3.0;  // Robust star-area pilot clipping multiplier.
@@ -72,7 +73,7 @@ namespace LensingConfig {
     constexpr int psf_gaia_locus_min_matches = 5;  // Minimum Gaia matches for locus support.
     constexpr double psf_pair_chi_valid_peak_fraction = 0.3678794411714423216;  // exp(-1) pair-chi peak threshold.
     constexpr double psf_bad_fraction_valid_peak_fraction = 0.10;  // Bad-pair-fraction peak threshold.
-    constexpr double psf_type3_elbow_search_height_fraction = 0.10;  // Elbow candidates must lie below this smoothed main-peak fraction.
+    constexpr double psf_adaptive_elbow_search_height_fraction = 0.10;  // Elbow candidates must lie below this smoothed main-peak fraction.
     constexpr bool psf_press_rejection_enabled = false;  // Enable optional post-fit PRESS cleanup.
     constexpr double psf_press_sigma_cut = 4.0;  // Standardized PRESS rejection sigma.
     constexpr int psf_press_max_removals = 5;  // Maximum PRESS removals permitted per chip.
@@ -85,7 +86,8 @@ namespace LensingConfig {
 
     constexpr int PSF_type = 1;  // One selects local polynomial; two selects hybrid PSF.
     constexpr int PSF_Ms = 0;  // Enable PCA/multi-scale PSF reconstruction when one.
-
+    // ==========================================
+    
     // Stamp dimensions
     constexpr int ns = 64;  // Science stamp and Fourier-grid side length.
     constexpr int nsns = ns * ns;  // Pixels in one science stamp.
@@ -102,7 +104,7 @@ namespace LensingConfig {
     // source or star limits; vectors may grow beyond them as needed.
     // Maximum number of flux-ranked image detections passed to astrometric pattern matching.
     // This is a scientific selection limit, not a catalog-storage capacity limit.
-    constexpr int n_user_max = 200;  // Bright detections used for astrometric matching.
+    constexpr int n_user_max = 500;  // Bright detections used for astrometric matching.
     constexpr int ngal_max = 2000;  // Initial galaxy-vector reservation hint.
     constexpr int nstar_max = 1000;  // Initial star-vector reservation hint.
     constexpr int src_npara = 12;  // Source-catalog metadata field count.
@@ -127,9 +129,10 @@ namespace LensingConfig {
 
     // ==========================================
     // Configuration: Stage-3 noise-product construction method
-    // Method: Select a physical blank-noise stamp (1) or local covariance noise power (2).
+    // Method: Select deterministic F77 blank noise (1), the current QC/random
+    //         physical blank stamp (2), or local covariance noise power (3).
     // ==========================================
-    constexpr int NstampType = 1;  // One uses blank stamps; two uses covariance power.
+    constexpr int NstampType = 2;  // Preserve the pre-migration physical blank-stamp default.
     // ==========================================
     // Configuration: Stage-3 unbiased noise-stamp quality gates
     // Method: Accept physically compatible candidates with fixed pass/fail cuts before random
@@ -194,6 +197,7 @@ namespace LensingConfig {
     constexpr double sig_scale_s1 = 0.673475;  // Stage-1 noise calibration candidate.
     constexpr double sig_scale_s2 = 1.027786;  // Stage-2 noise calibration.
     constexpr double sig_scale = sig_scale_s2;  // Active noise calibration selector.
+    // ==========================================
 
     constexpr int area_max = ns * ns;  // Maximum connected source area.
     constexpr int area_thresh = 6;  // Minimum connected source area.
@@ -267,11 +271,13 @@ namespace LensingConfig {
     // ==========================================
     static_assert(AstroCatType == 1 || AstroCatType == 2,
                   "AstroCatType must be 1 or 2");
-    static_assert(NstampType == 1 || NstampType == 2,
-                  "NstampType must be 1 or 2");
+    static_assert(PreprocsType == 1 || PreprocsType == 2,
+                  "PreprocsType must be 1 or 2");
+    static_assert(NstampType == 1 || NstampType == 2 || NstampType == 3,
+                  "NstampType must be 1, 2, or 3");
     static_assert(PsfGroupingType == 1 || PsfGroupingType == 2
-                      || PsfGroupingType == 3,
-                  "PsfGroupingType must be 1, 2, or 3");
+                      || PsfGroupingType == 3 || PsfGroupingType == 4,
+                  "PsfGroupingType must be 1, 2, 3, or 4");
     static_assert(psf_exposure_min_candidates > 0,
                   "PSF exposure minimum must be positive");
     static_assert(psf_minchi_reference_fraction > 0.0
@@ -294,9 +300,9 @@ namespace LensingConfig {
     static_assert(psf_bad_fraction_valid_peak_fraction > 0.0
                       && psf_bad_fraction_valid_peak_fraction < 1.0,
                   "PSF bad-pair peak fraction must lie in (0,1)");
-    static_assert(psf_type3_elbow_search_height_fraction > 0.0
-                      && psf_type3_elbow_search_height_fraction < 1.0,
-                  "PSF Type-3 elbow search height fraction must lie in (0,1)");
+    static_assert(psf_adaptive_elbow_search_height_fraction > 0.0
+                      && psf_adaptive_elbow_search_height_fraction < 1.0,
+                  "PSF adaptive elbow search height fraction must lie in (0,1)");
     static_assert(psf_knn_k > 0, "PSF KNN count must be positive");
     static_assert(psf_press_max_removals >= 0,
                   "PSF PRESS removal cap must be non-negative");

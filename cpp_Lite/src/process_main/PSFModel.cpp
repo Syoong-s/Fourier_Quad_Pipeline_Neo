@@ -1937,8 +1937,8 @@ namespace PSFModel {
 
     // ==========================================
     // Function: Fit and serialize local PSF models
-    // Method: Keep dense slots for state access while using canonical prefixes and physical
-    //         CCDNUM for every persistent row and diagnostic.
+    // Method: Keep dense slots for state access and write ordinary full-fit
+    //         model diagnostics with physical CCDNUM for every persistent row.
     // ==========================================
     void makePSFLocalFit(int nchip, const std::vector<std::string>& imageFiles, const std::string& dirOutput, ExposurePSFState& state) {
         int ns = LensingConfig::ns;
@@ -1980,7 +1980,6 @@ namespace PSFModel {
 
             std::vector<std::array<double, 2>> posi;
             std::vector<std::array<double, 3>> sshape;
-            std::vector<float> star_local;
             int removed_non_finite = 0;
 
             const Internal::ChipPSFFitState& cached_fit = state.chips[k].fit;
@@ -1999,12 +1998,8 @@ namespace PSFModel {
                 nums++;
                 posi.push_back({px, py});
                 sshape.push_back({shape_size, shape_e1, shape_e2});
-                for (int idx = 0; idx < ns * ns; ++idx) {
-                    star_local.push_back(star[star_offset + idx]);
-                }
             }
             std::vector<double> PSF_coe_l = cached_fit.coefficients;
-            std::vector<double> final_leverage = cached_fit.leverage;
             LinearSolve::SolveDiagnostics fit_diagnostics;
             LinearSolve::SolveStatus fit_status = cached_fit.valid
                 ? LinearSolve::SolveStatus::Normal
@@ -2012,7 +2007,8 @@ namespace PSFModel {
 
             if (nums >= LensingConfig::nstar_min_local &&
                 fit_status == LinearSolve::SolveStatus::Normal &&
-                final_leverage.size() == static_cast<std::size_t>(nums)) {
+                cached_fit.star_indices.size()
+                    == static_cast<std::size_t>(nums)) {
 
                 file90 << ccdnum << " " << nums << " 1\n";
 
@@ -2026,28 +2022,9 @@ namespace PSFModel {
                     getPSFModel(ns, npl, PSF_coe_l, xx, yy, model, model0);
                     ExStar::anaChi2Simple(ns, model.data(), model0.data(), poly_cochi2[i]);
 
-                    std::vector<float> loo_model(static_cast<std::size_t>(ns) * ns);
-                    for (int idx = 0; idx < ns * ns; ++idx) {
-                        const double observed = star_local[
-                            static_cast<std::size_t>(i) * ns * ns + idx];
-                        double residual_value = 0.0;
-                        double model_value = 0.0;
-                        if (!Internal::computeAnalyticLOO(
-                                observed, model[idx], final_leverage[i],
-                                LensingConfig::psf_loo_min_denom,
-                                residual_value, model_value)) {
-                            MPIFailure::abortWorld(
-                                "generate final Lite PSF LOO diagnostics",
-                                "exposure=" + prefix_e
-                                    + " ccdnum=" + std::to_string(ccdnum)
-                                    + " star=" + std::to_string(i));
-                        }
-                        loo_model[idx] = static_cast<float>(model_value);
-                    }
-
                     std::array<double, 2> ee = {0.0, 0.0};
                     double size = 0.0;
-                    getPowerAll(ns, ns, loo_model, ee, size, 0.02f);
+                    getPowerAll(ns, ns, model, ee, size, 0.02f);
 
                     double msshape_size = size;
                     double msshape_e1 = ee[0];

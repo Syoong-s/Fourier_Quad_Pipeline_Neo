@@ -1,4 +1,5 @@
 #include "process_main/SourceExtractor.hpp"
+#include "process_main/F77NoiseSelection.hpp"
 #include "process_main/ProcessMainState.hpp"
 #include "process_main/OutputFile.hpp"
 #include "process_main/MPIFailure.hpp"
@@ -798,6 +799,76 @@ namespace SourceExtractor {
     }
 
     // ==========================================
+    // Function: Extract the deterministic historical F77 blank-noise stamp
+    // Method: Select argmin(max(image)) on the 5x5 outer ring, flatten only
+    //         that candidate once, and decorate it with the source sigma.
+    // ==========================================
+    void findNoiseF77(
+        int& flag, std::vector<float>& stamps, int nx, int ny,
+        const std::vector<float>& array, const std::vector<int>& weight,
+        double xp, double yp, double sourceSig, int& imax, int& jmax) {
+        flag = 0;
+        (void)imax;
+        (void)jmax;
+        if (!std::isfinite(sourceSig) || sourceSig <= 0.0) {
+            flag = -1;
+            return;
+        }
+
+        const Internal::F77NoiseCandidate selected =
+            Internal::selectF77NoiseCandidate(
+                nx, ny, array, weight, xp, yp,
+                LensingConfig::nl, LensingConfig::nl_2,
+                LensingConfig::chip_edge_margin);
+        if (!selected.found) {
+            flag = -1;
+            return;
+        }
+
+        std::vector<float> expanded(
+            static_cast<std::size_t>(LensingConfig::nl) * LensingConfig::nl,
+            0.0f);
+        std::vector<int> expanded_weight(
+            static_cast<std::size_t>(LensingConfig::nl) * LensingConfig::nl,
+            0);
+        for (int y = 0; y < LensingConfig::nl; ++y) {
+            for (int x = 0; x < LensingConfig::nl; ++x) {
+                const std::size_t source_index =
+                    static_cast<std::size_t>(selected.y0 + y) * nx
+                    + selected.x0 + x;
+                const std::size_t destination_index =
+                    static_cast<std::size_t>(y) * LensingConfig::nl + x;
+                expanded[destination_index] = array[source_index];
+                expanded_weight[destination_index] = weight[source_index];
+            }
+        }
+
+        ImageProcessing::flattenStamp2D(
+            LensingConfig::ns, LensingConfig::nl,
+            expanded, expanded_weight, flag);
+        if (flag < 0) return;
+
+        ImageProcessing::markNoise(
+            LensingConfig::nl, expanded, expanded_weight, sourceSig,
+            LensingConfig::source_thresh, LensingConfig::core_thresh);
+        const int offset = LensingConfig::nl_2 - LensingConfig::ns_2;
+        stamps.assign(static_cast<std::size_t>(LensingConfig::nsns), 0.0f);
+        std::vector<int> stamp_weight(
+            static_cast<std::size_t>(LensingConfig::nsns), 0);
+        for (int y = 0; y < LensingConfig::ns; ++y) {
+            for (int x = 0; x < LensingConfig::ns; ++x) {
+                const int output_index = y * LensingConfig::ns + x;
+                const int input_index = (y + offset) * LensingConfig::nl
+                                      + x + offset;
+                stamps[output_index] = expanded[input_index];
+                stamp_weight[output_index] = expanded_weight[input_index];
+            }
+        }
+        ImageProcessing::decorateStamp(
+            LensingConfig::ns, sourceSig, stamp_weight, stamps);
+    }
+
+    // ==========================================
     // Function: Select an unbiased local-noise stamp for a detected source
     // Method: Apply fixed geometry, runtime amplifier, mask, local-sigma, MAD, and positive-tail
     //         gates; shuffle candidates with the existing rank-local ran1 stream and accept the
@@ -1140,8 +1211,9 @@ namespace SourceExtractor {
     }
 
     // ==========================================
-    // Function: Produce the legacy blank-noise and source-stamp pair
-    // Method: Preserve main-branch rejection and RNG order by finding noise before checking source.
+    // Function: Produce the current QC/random blank-noise and source-stamp pair
+    // Method: Preserve the modern branch's rejection and RNG order by finding
+    //         noise before checking the source.
     // ==========================================
     void BlankSrcStamp(
         int& flag, std::vector<float>& sourceStamp, std::vector<float>& noiseStamp,
@@ -1162,8 +1234,30 @@ namespace SourceExtractor {
     }
 
     // ==========================================
+    // Function: Produce the F77 blank-noise and source-stamp pair
+    // Method: Preserve the historical noise-before-source order without using
+    //         the modern candidate shuffle or blank-stamp quality gates.
+    // ==========================================
+    void F77BlankSrcStamp(
+        int& flag, std::vector<float>& sourceStamp, std::vector<float>& noiseStamp,
+        int nx, int ny, const std::vector<float>& array,
+        const std::vector<int>& weight, double xp, double yp, double sig,
+        int& imax, int& jmax, double& peak, double& half_light_flux,
+        int& half_light_area) {
+        flag = 0;
+        findNoiseF77(
+            flag, noiseStamp, nx, ny, array, weight,
+            xp, yp, sig, imax, jmax);
+        if (flag < 0) return;
+        checkSource(
+            flag, sourceStamp, nx, ny, array, weight,
+            xp, yp, sig, imax, jmax,
+            peak, half_light_flux, half_light_area);
+    }
+
+    // ==========================================
     // Function: Dispatch Stage-3 source and noise-product construction
-    // Method: Select the compile-time blank-stamp or covariance-power producer in one location.
+    // Method: Select F77 blank, QC/random blank, or covariance-power production.
     // ==========================================
     void extractSourceAndNoise(
         int& flag, std::vector<float>& sourceProduct, std::vector<float>& noiseProduct,
@@ -1171,16 +1265,20 @@ namespace SourceExtractor {
         const std::vector<int>& weight, const std::vector<float>& sigmap,
         double xp, double yp, double sig, int& imax, int& jmax,
         double& peak, double& half_light_flux, int& half_light_area) {
-        if (LensingConfig::NstampType == 1) {
+        if constexpr (LensingConfig::NstampType == 1) {
+            F77BlankSrcStamp(
+                flag, sourceProduct, noiseProduct, nx, ny, array, weight,
+                xp, yp, sig, imax, jmax, peak, half_light_flux,
+                half_light_area);
+        } else if constexpr (LensingConfig::NstampType == 2) {
             BlankSrcStamp(
                 flag, sourceProduct, noiseProduct, nx, ny, array, weight, sigmap,
                 xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
-            return;
+        } else {
+            CovarSrcStamp(
+                flag, sourceProduct, noiseProduct, nx, ny, array, weight,
+                xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
         }
-
-        CovarSrcStamp(
-            flag, sourceProduct, noiseProduct, nx, ny, array, weight,
-            xp, yp, sig, imax, jmax, peak, half_light_flux, half_light_area);
     }
 
     // ==========================================

@@ -1,8 +1,10 @@
 #include "RuntimeConfig.hpp"
+#include "process_main/FitsIO.hpp"
 #include "process_main/PSFModelState.hpp"
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +23,14 @@ void plotStars(
 void makePSFLocalFit(
     int nchip, const std::vector<std::string>& imageFiles,
     const std::string& dirOutput, Internal::ExposurePSFState& state);
+void getPSFModel(
+    int ns, int npp, const std::vector<double>& coefficients,
+    double x, double y, std::vector<float>& model,
+    std::vector<float>& constant_model);
+void getPowerAll(
+    int nx, int ny, const std::vector<float>& power,
+    std::array<double, 2>& ellipticity, double& size,
+    float threshold_ratio);
 }
 
 namespace {
@@ -52,6 +62,8 @@ public:
         std::filesystem::create_directories(root_ / "stamps" / "dat_StarComp");
         std::filesystem::create_directories(
             root_ / "stamps" / "dat_PsfFit" / "exposure");
+        std::filesystem::create_directories(
+            root_ / "stamps" / "fits_StarCanP" / "exposure");
     }
 
     ~TemporaryTree() {
@@ -122,6 +134,132 @@ void testExposureTables(const TemporaryTree& tree) {
             "StarComp first column follows dense/list position");
 }
 
+// ==========================================
+// Function: Verify local-fit StarComp rows use the all-star fitted model
+// Method: Publish a cached constant polynomial whose ordinary and analytic-LOO
+//         shapes differ, then compare the live writer with both predictions.
+// ==========================================
+void testFullFitModelDiagnostics(const TemporaryTree& tree) {
+    constexpr int star_count = LensingConfig::nstar_min_local;
+    constexpr int ns = LensingConfig::ns;
+    constexpr int npl = LensingConfig::npl;
+    const std::vector<std::string> image_files = {
+        (tree.root() / "science" / "exposure" / "exposure_7.fits").string()};
+    PSFModel::Internal::ExposurePSFState state(1);
+    auto& chip = state.chips[0];
+
+    std::vector<float> fitted_power(static_cast<std::size_t>(ns) * ns, 0.0f);
+    const int center = ns / 2;
+    for (int y = 0; y < ns; ++y) {
+        for (int x = 0; x < ns; ++x) {
+            const double dx = static_cast<double>(x - center);
+            const double dy = static_cast<double>(y - center);
+            fitted_power[static_cast<std::size_t>(y) * ns + x] =
+                static_cast<float>(std::exp(-dx * dx / 40.0 - dy * dy / 24.0));
+        }
+    }
+    std::vector<float> observed_power = fitted_power;
+    observed_power[static_cast<std::size_t>(center) * ns + center + 4] += 1.5f;
+
+    chip.stars.reserve(star_count);
+    chip.selection.resize(star_count);
+    chip.fit.valid = true;
+    chip.fit.initial_star_count = star_count;
+    chip.fit.coefficients.assign(
+        static_cast<std::size_t>(ns) * ns * (npl + 1), 0.0);
+    for (int pixel = 0; pixel < ns * ns; ++pixel) {
+        chip.fit.coefficients[static_cast<std::size_t>(pixel) * (npl + 1)] =
+            fitted_power[pixel];
+        chip.fit.coefficients[static_cast<std::size_t>(pixel) * (npl + 1) + npl] =
+            fitted_power[pixel];
+    }
+
+    std::vector<float> stamp_cube;
+    stamp_cube.reserve(static_cast<std::size_t>(star_count) * ns * ns);
+    for (int star_index = 0; star_index < star_count; ++star_index) {
+        PSFModel::Internal::ChipPSFState::StarRow row{};
+        row[1] = 500.0 + star_index;
+        row[2] = 900.0 + star_index;
+        row[4] = 1.0;
+        row[7] = 1.0;
+        row[8] = 0.0;
+        row[9] = 0.0;
+        chip.stars.push_back(row);
+        chip.fit.star_indices.push_back(star_index);
+        chip.fit.leverage.push_back(0.5);
+        stamp_cube.insert(
+            stamp_cube.end(), observed_power.begin(), observed_power.end());
+    }
+
+    const std::filesystem::path cube_path =
+        tree.root() / "stamps" / "fits_StarCanP" / "exposure"
+        / "exposure_7_star_can_power.fits";
+    require(FitsIO::writeStampCube(
+                cube_path.string(), ns, ns, star_count, stamp_cube),
+            "cannot write the synthetic fitted-star cube");
+    PSFModel::makePSFLocalFit(
+        1, image_files, tree.root().string(), state);
+
+    std::ifstream input(
+        tree.root() / "stamps" / "dat_StarComp"
+            / "exposure_star_comp_expo.dat");
+    int ccdnum = 0;
+    int serialized_count = 0;
+    int status = 0;
+    require(static_cast<bool>(input >> ccdnum >> serialized_count >> status),
+            "cannot read the synthetic StarComp chip header");
+    require(ccdnum == 7 && serialized_count == star_count && status == 1,
+            "synthetic StarComp header lost CCDNUM or fit status");
+
+    double px = 0.0;
+    double py = 0.0;
+    double observed_size = 0.0;
+    double observed_e1 = 0.0;
+    double observed_e2 = 0.0;
+    double serialized_size = 0.0;
+    double serialized_e1 = 0.0;
+    double serialized_e2 = 0.0;
+    require(static_cast<bool>(
+                input >> px >> py >> observed_size >> observed_e1 >> observed_e2
+                      >> serialized_size >> serialized_e1 >> serialized_e2),
+            "cannot read the first synthetic StarComp model row");
+
+    const LensingRuntimeConfig& lensing = RuntimeConfigStore::get().lensing;
+    const double normalized_x =
+        2.0 * (px / static_cast<double>(lensing.chipnx)) - 1.0;
+    const double normalized_y =
+        2.0 * (py / static_cast<double>(lensing.chipny)) - 1.0;
+    std::vector<float> full_model;
+    std::vector<float> constant_model;
+    PSFModel::getPSFModel(
+        ns, npl, chip.fit.coefficients, normalized_x, normalized_y,
+        full_model, constant_model);
+    std::array<double, 2> expected_shape = {0.0, 0.0};
+    double expected_size = 0.0;
+    PSFModel::getPowerAll(
+        ns, ns, full_model, expected_shape, expected_size, 0.02f);
+
+    std::vector<float> old_loo_model(full_model.size(), 0.0f);
+    for (std::size_t pixel = 0; pixel < full_model.size(); ++pixel) {
+        old_loo_model[pixel] =
+            2.0f * full_model[pixel] - observed_power[pixel];
+    }
+    std::array<double, 2> old_loo_shape = {0.0, 0.0};
+    double old_loo_size = 0.0;
+    PSFModel::getPowerAll(
+        ns, ns, old_loo_model, old_loo_shape, old_loo_size, 0.02f);
+    const bool fixture_distinguishes_loo =
+        expected_size != old_loo_size
+        || std::abs(expected_shape[0] - old_loo_shape[0]) > 1.0e-8
+        || std::abs(expected_shape[1] - old_loo_shape[1]) > 1.0e-8;
+    require(fixture_distinguishes_loo,
+            "synthetic fixture does not distinguish full-fit from LOO output");
+    require(std::abs(serialized_size - expected_size) < 1.0e-12
+                && std::abs(serialized_e1 - expected_shape[0]) < 1.0e-12
+                && std::abs(serialized_e2 - expected_shape[1]) < 1.0e-12,
+            "StarComp row does not serialize the ordinary full-fit model");
+}
+
 }  // namespace
 
 // ==========================================
@@ -135,6 +273,7 @@ int main() {
             "cannot initialize runtime configuration: " + error);
     TemporaryTree tree;
     testExposureTables(tree);
+    testFullFitModelDiagnostics(tree);
     std::cout << "PSF exposure-table CCDNUM tests passed\n";
     return EXIT_SUCCESS;
 }

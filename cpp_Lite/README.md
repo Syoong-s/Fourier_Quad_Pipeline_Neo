@@ -44,6 +44,13 @@ them. It always uses per-chip DQ masks and repartitioned one-degree Gaia tiles.
 `process_astrocat` and `process_extcat` producer outputs must be configured
 separately from the catalog paths consumed by `process_main`.
 
+Lite also keeps its fixed preprocessing, noise, and PSF-selection structure;
+the Standard compatibility selectors are not mirrored here. Its
+`*_star_comp_expo.dat` output nevertheless shares the corrected diagnostic
+contract: each fitted star is compared with the ordinary model fitted using
+all retained stars. Leave-one-out calculations remain internal to PRESS
+selection and do not define this table.
+
 ## Data compatibility
 
 Initializer manifest schema 3 names Science and DQ products with physical

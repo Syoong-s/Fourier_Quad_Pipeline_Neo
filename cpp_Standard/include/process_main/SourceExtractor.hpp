@@ -34,6 +34,12 @@ namespace SourceExtractor {
         const std::vector<int>& weight, const std::vector<float>& sigmap,
         double xp, double yp, double sourceSig, int& imax, int& jmax);
 
+    void findNoiseF77(
+        int& flag, std::vector<float>& stamps,
+        int nx, int ny, const std::vector<float>& array,
+        const std::vector<int>& weight, double xp, double yp,
+        double sourceSig, int& imax, int& jmax);
+
     void checkSource(
         int& flag, std::vector<float>& stamps,
         int nx, int ny, const std::vector<float>& array,
@@ -47,6 +53,13 @@ namespace SourceExtractor {
         const std::vector<int>& weight, const std::vector<float>& sigmap,
         double xp, double yp, double sig, int& imax, int& jmax,
         double& peak, double& half_light_flux, int& half_light_area);
+
+    void F77BlankSrcStamp(
+        int& flag, std::vector<float>& sourceStamp, std::vector<float>& noiseStamp,
+        int nx, int ny, const std::vector<float>& array,
+        const std::vector<int>& weight, double xp, double yp, double sig,
+        int& imax, int& jmax, double& peak, double& half_light_flux,
+        int& half_light_area);
 
     void CovarSrcStamp(
         int& flag, std::vector<float>& sourceStamp, std::vector<float>& noisePower,

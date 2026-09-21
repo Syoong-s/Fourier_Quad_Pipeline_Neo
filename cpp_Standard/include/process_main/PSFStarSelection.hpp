@@ -475,6 +475,72 @@ float normalizedChiDistance(
     const std::vector<float>& second);
 
 // ==========================================
+// Structure: View one numerically safe candidate in F77 selection
+// Method: Preserve its original chip-local index while borrowing the normalized
+//         central window and exposing its legacy size.
+// ==========================================
+struct F77PSFCandidateView {
+    int star_index = -1;
+    double size = 0.0;
+    const std::vector<float>* chi_window = nullptr;
+};
+
+// ==========================================
+// Function: Prepare one candidate for the compact F77 selection population
+// Method: Apply candidate-level numerical gates, normalize its borrowed window,
+//         and retain the original chip-local star index without a positivity gate.
+// ==========================================
+bool prepareF77PSFCandidate(
+    int star_index,
+    double selection_flag,
+    double full_power_sum,
+    double size,
+    std::vector<float>& chi_window,
+    F77PSFCandidateView& candidate);
+
+// ==========================================
+// Function: Test the historical F77 exposure candidate minimum
+// Method: Compare only the compact numerically safe population with twice the
+//         configured per-exposure minimum.
+// ==========================================
+bool hasMinimumF77PSFCandidates(
+    std::size_t safe_candidate_count,
+    int minimum_stars);
+
+// ==========================================
+// Structure: Store the single-pass F77 pair statistics
+// Method: Preserve the exposure size rank, per-candidate 1000-sentinel minChi,
+//         and the both-large-endpoint threshold sample.
+// ==========================================
+struct F77PSFPairStatistics {
+    bool valid = false;
+    double size_threshold = 0.0;
+    std::vector<std::vector<float>> min_chi;
+    std::vector<float> threshold_pair_chi;
+};
+
+// ==========================================
+// Function: Compute the exact F77 exposure-size and same-chip pair statistics
+// Method: Use the one-based floor(2N/3) rank, visit every unordered pair once,
+//         and fail explicitly when a supposedly safe pair has non-finite chi.
+// ==========================================
+bool computeF77PSFPairStatistics(
+    const std::vector<std::vector<F77PSFCandidateView>>& candidates_by_chip,
+    F77PSFPairStatistics& statistics);
+
+// ==========================================
+// Function: Select only the largest F77 threshold component on every chip
+// Method: Apply inclusive minChi/edge cuts, both local-minimum checks, and the
+//         historical first-component tie behavior without secondary groups.
+// ==========================================
+bool selectF77PSFLargestGroups(
+    const std::vector<std::vector<F77PSFCandidateView>>& candidates_by_chip,
+    const F77PSFPairStatistics& statistics,
+    float chi_threshold,
+    int minimum_local_stars,
+    std::vector<std::vector<int>>& selected_by_chip);
+
+// ==========================================
 // Function: Maintain one exact sorted top-K neighbour list
 // Method: Insert or improve the candidate edge, sort by chi/index, and truncate.
 // ==========================================

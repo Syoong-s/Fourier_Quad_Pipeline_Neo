@@ -1,4 +1,5 @@
 #include "process_main/PreProcess.hpp"
+#include "process_main/PreProcessLegacy.hpp"
 #include "process_main/ProcessMainState.hpp"
 #include "general/OutputLayout.hpp"
 #include "LensingConfig.hpp"
@@ -494,44 +495,52 @@ namespace PreProcess {
 
         const auto collectBackground = [&](int x_start, int x_end) {
             amplifier_bg_coeffs.clear();
-            setBackground(x_start, x_end, 0, ny, nx, ny, normap, weight,
-                          LensingConfig::blocksize, LensingConfig::nct, LensingConfig::ncx,
-                          amplifier_bg_coeffs, proc_error);
+            if (LensingConfig::PreprocsType == 1) {
+                if (!PreProcessLegacy::setBackground(
+                        x_start, x_end, 0, ny, nx, ny, normap,
+                        LensingConfig::blocksize, LensingConfig::nct,
+                        LensingConfig::ncx, amplifier_bg_coeffs)) {
+                    proc_error = 1;
+                }
+            } else {
+                setBackground(x_start, x_end, 0, ny, nx, ny, normap, weight,
+                              LensingConfig::blocksize, LensingConfig::nct,
+                              LensingConfig::ncx, amplifier_bg_coeffs, proc_error);
+            }
             if (proc_error == 0) {
                 bg_coeffs.insert(bg_coeffs.end(), amplifier_bg_coeffs.begin(),
                                  amplifier_bg_coeffs.end());
             }
         };
 
+        const auto collectSigma = [&](int x_start, int x_end) {
+            if (proc_error != 0) return;
+            if (LensingConfig::PreprocsType == 1) {
+                if (!PreProcessLegacy::setSig(
+                        x_start, x_end, 0, ny, nx, ny, normap,
+                        aa, bb, cc)) {
+                    proc_error = 1;
+                }
+            } else {
+                setSig(x_start, x_end, 0, ny, nx, ny, normap, weight,
+                       aa, bb, cc, proc_error, LensingConfig::sig_scale);
+            }
+            if (proc_error == 0) {
+                sig_coeffs.push_back(aa);
+                sig_coeffs.push_back(bb);
+                sig_coeffs.push_back(cc);
+            }
+        };
+
         if (lensing.ccd_split == 2) {
             collectBackground(0, nxc);
             collectBackground(nxc, nx);
-            
-            setSig(0, nxc, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
-                   LensingConfig::sig_scale);
-            if (proc_error == 0) {
-                sig_coeffs.push_back(aa);
-                sig_coeffs.push_back(bb);
-                sig_coeffs.push_back(cc);
-            }
-            if (proc_error == 0) {
-                setSig(nxc, nx, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
-                       LensingConfig::sig_scale);
-            }
-            if (proc_error == 0) {
-                sig_coeffs.push_back(aa);
-                sig_coeffs.push_back(bb);
-                sig_coeffs.push_back(cc);
-            }
+
+            collectSigma(0, nxc);
+            collectSigma(nxc, nx);
         } else {
             collectBackground(0, nx);
-            setSig(0, nx, 0, ny, nx, ny, normap, weight, aa, bb, cc, proc_error,
-                   LensingConfig::sig_scale);
-            if (proc_error == 0) {
-                sig_coeffs.push_back(aa);
-                sig_coeffs.push_back(bb);
-                sig_coeffs.push_back(cc);
-            }
+            collectSigma(0, nx);
         }
 
         std::string astroFilename = OutputLayout::chipPath(
