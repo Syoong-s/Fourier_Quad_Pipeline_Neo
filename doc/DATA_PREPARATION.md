@@ -1,41 +1,21 @@
 # 🗂️ Data Preparation Guide
 
-[🏠 Home](README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🔗 Container Paths](PATHS.md)
+[🏠 Home](../README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🔗 Container Paths](PATHS.md)
 
 Prepare the four input data classes below before launching scientific processing. In native runs, paths are ordinary host filesystem paths; in containerized runs, paths must be mounted and referenced via their container destinations (see [PATHS.md](PATHS.md)).
+
+![Survey Data Preparation: Sky-Tile Partitioning and Archive Extraction](figures/data_preparation.png)
 
 ---
 
 ## 📦 Overview of Required Inputs
-
-```mermaid
-flowchart TD
-    subgraph Raw["Raw Survey Data & Catalogs"]
-        R1["🔭 Science & DQ Archives<br/>(*.fits.fz)"]
-        R2["🌟 Raw Gaia Catalog<br/>(2-column RA/Dec)"]
-        R3["🪐 Raw External Catalog<br/>(RA, Dec, zp, Mags)"]
-    end
-    subgraph Prep["Pipeline Preparation Phases"]
-        P1["process_init"]
-        P2["process_astrocat"]
-        P3["process_extcat"]
-    end
-    subgraph Ready["Ready-to-Consume Pipeline Inputs"]
-        C1["📁 Extracted CCD FITS +<br/>expo_<target>.list"]
-        C2["🗂️ Gaia Tiles<br/>(Type 1 or Type 2)"]
-        C3["🗂️ Canonical 1°×1° Source Tiles<br/>(extern_RA_*_Dec_*.dat)"]
-    end
-    R1 --> P1 --> C1
-    R2 --> P2 --> C2
-    R3 --> P3 --> C3
-```
 
 | Input Class | Purpose | Minimum Requirement |
 | :--- | :--- | :--- |
 | **Science images** | Primary CCD exposures for source detection, PSF modeling, and shear measurement. | Multi-extension FITS/FZ archives matching configured dataset prefixes and `CCDNUM` keywords. |
 | **Gaia catalog** | High-precision sky-coordinate reference for source matching and PU astrometry. | Covers the Science footprint using either the **Type 1** ($10^\circ \times 10^\circ$) or **Type 2** ($1^\circ \times 1^\circ$) tile layout. |
 | **External source catalog** | Supplies sky coordinates, photometric redshift (`zp`), and multi-band magnitudes. | Canonical $1^\circ \times 1^\circ$ tiles containing `ra`, `dec`, `zp`, and at least one observed-band magnitude. |
-| **DQ masks** *(config-dependent)* | Identifies bad, saturated, cosmic-ray, or defective pixels on each CCD. | **Required** by `cpp_Lite` (fixed per-chip DQ) and by `cpp_Standard` whenever `include_mask != 0`. |
+| **DQ masks** *(config-dependent)* | Identifies bad, saturated, cosmic-ray, or defective pixels on each CCD. | Required whenever `[lensing].include_mask != 0` (default `include_mask = 2` uses per-chip DQ masks). |
 
 ---
 
@@ -47,29 +27,26 @@ flowchart TD
 
 | Convention | Default Value | Where to Configure | Rebuild Required? |
 | :--- | :--- | :--- | :---: |
-| **Archive suffix** | `.fits.fz` | `InitConfig::ARCHIVE_SUFFIX` (`Initialize.hpp` in Lite) | Yes |
-| **CCD identity keyword** | `CCDNUM` | `InitConfig::CCDNUM_KEYWORD` (`Initialize.hpp` in Lite) | Yes |
+| **Archive suffix** | `.fits.fz` | `InitConfig::ARCHIVE_SUFFIX` (`config/InitConfig.hpp`) | Yes |
+| **CCD identity keyword** | `CCDNUM` | `InitConfig::CCDNUM_KEYWORD` (`config/InitConfig.hpp`) | Yes |
 | **DQ stem replacement** | `ood` → `ooi` | `DQ_STEM_REPLACE_FROM` / `DQ_STEM_REPLACE_TO` | Yes |
 | **Dataset mapping** | `gband:c4d_` | `[init].datasets` (`TARGET:PREFIX` pairs) | No (INI) |
 | **Basename token filter** | `v1` | `[init].contains` (case-sensitive OR match; empty `contains =` disables) | No (INI) |
 
 ### 2. Data Quality (DQ) Masks
 
-DQ masks flag invalid pixels (saturation, bleed trails, bad columns) so they are excluded from background estimation, source detection, and Fourier power spectra.
-
-- **`cpp_Lite`:** Fixed to per-chip DQ masks (`include_Mask = 2` behavior); DQ archives must always be provided.
-- **`cpp_Standard`:** Controlled via `[lensing].include_mask` (`0` = disabled, `1..3` = active mask modes). Verify that both `process_init` and `process_main` agree before omitting DQ inputs.
+DQ masks flag invalid pixels (saturation, bleed trails, bad columns) so they are excluded from background estimation, source detection, and Fourier power spectra. Controlled via `[lensing].include_mask` (`0` = disabled, `1..3` = active mask modes; default `2`). Verify that both `process_init` and `process_main` agree before omitting DQ inputs.
 
 ---
 
 ## Gaia Astrometric Catalog
 
-Every Gaia tile consumed by the pipeline must reside directly under `[lensing].astrometry_cat`, begin with **exactly one header line**, and provide numeric `RA` and `Dec` in its first two columns (comma- or whitespace-separated; extra columns are ignored).
+Every Gaia tile consumed by the pipeline must reside directly under `[lensing].astrometry_cat`, begin with **exactly one header line**, and provide numeric `RA` and `Dec` in its first two columns (comma- or whitespace-separated; extra columns are ignored). Select the tile layout via `LensingConfig::AstroCatType` or `[lensing].astrometry_cat_type`:
 
-| Variant | Supported Gaia Layouts | How to Select Type 2 ($1^\circ \times 1^\circ$) |
-| :--- | :--- | :--- |
-| **`cpp_Standard`** | **Type 1** ($10^\circ \times 10^\circ$, default) or **Type 2** ($1^\circ \times 1^\circ$) | Set `[lensing].astrometry_cat_type = 2` in `pipeline.ini`. |
-| **`cpp_Lite`** | **Type 2** ($1^\circ \times 1^\circ$) only | Fixed to Type 2 automatically (no `astrometry_cat_type` key). |
+| Layout Selector | Tile Size | Description |
+| :--- | :---: | :--- |
+| **`[lensing].astrometry_cat_type = 1`** *(default)* | $10^\circ \times 10^\circ$ | Legacy large-tile layout (`gaia_<p\|m><D>_<RR>.cat`). |
+| **`[lensing].astrometry_cat_type = 2`** | $1^\circ \times 1^\circ$ | Canonical one-degree layout (`astra_RA_<RA0>_<RA1>_Dec_<Dec0>_<Dec1>.dat`), generated by `process_astrocat`. |
 
 ### Type 1: Legacy Large Tiles ($10^\circ \times 10^\circ$)
 
@@ -96,7 +73,7 @@ Every Gaia tile consumed by the pipeline must reside directly under `[lensing].a
 - **Example:** `astra_RA_123_124_Dec_m05_m04.dat` covers `123° <= RA < 124°`, `-5° <= Dec < -4°`.
 
 > [!TIP]
-> **Generating Type-2 Tiles (`process_astrocat`):** Point `[astrocat].input_directory` to a flat directory of raw RA/Dec files and set `[astrocat].output_directory`. The tool deduplicates exact/1-ULP coordinates (`0 <= RA <= 360` with `360` stored as `0`, `-90 <= Dec <= 90` with `90` in the final tile) and writes compliant Type-2 tiles with a header line. Set `add_header = true` if raw files have no header, or `false` to skip one input header line.
+> **Generating Type-2 Tiles (`process_astrocat`):** Point `[astrocat].input_directory` to a flat directory of raw RA/Dec files and set `[astrocat].output_directory`. The tool deduplicates exact/1-ULP coordinates (`0 <= RA <= 360` with `360` stored as `0`, `-90 <= Dec <= 90` with `90` in the final tile) and writes compliant Type-2 tiles with a header line. Set `add_header = true` if raw files have no header, or `false` to skip one input header line. Remember to set `[lensing].astrometry_cat_type = 2` and `[lensing].astrometry_cat` when consuming these tiles in `process_main`.
 
 ---
 
@@ -130,7 +107,7 @@ All column indices in `[extcat]` are **1-based indices into the raw input files*
 - **Pass-Through Mode (`use_explicit_columns = false`):** Expects `total_columns` (default `18`) per row.
 - **Explicit Projection (`use_explicit_columns = true`):** Outputs only the columns listed in `input_columns` in that exact order. Must retain `ra`, `dec`, `zp`, and all non-zero magnitude columns.
 - **Coordinate Discovery:** Set `use_explicit_coordinate_columns = true` to use `ra_column` and `dec_column` directly instead of header-name discovery.
-- **Producer vs. Consumer Paths:** In `cpp_Standard`, `[extcat].output_directory` and `[lensing].source_cat` alias the same runtime setting. In `cpp_Lite`, they are independent fields—set both when consuming newly generated tiles.
+- **Producer vs. Consumer Alias:** `[extcat].output_directory` and `[lensing].source_cat` alias the same underlying runtime path in `Fourier_Quad_Pipe`.
 
 ---
 
@@ -150,6 +127,6 @@ When skipping `process_init` (`run_process_init = false`), supply an existing to
 
 - [ ] **Archive & Detector Match:** Science and DQ archives share matching exposures and physical `CCDNUM` headers.
 - [ ] **Catalog Sky Coverage:** Gaia and external source tiles completely cover the RA/Dec footprint of your exposures.
-- [ ] **Layout Consistency:** Standard `astrometry_cat_type` matches your Gaia tile format (`1` or `2`); Lite uses Type 2.
+- [ ] **Layout Consistency:** `[lensing].astrometry_cat_type` matches your Gaia tile format (`1` for $10^\circ$ tiles, `2` for $1^\circ$ tiles).
 - [ ] **Column Mapping:** 1-based `[extcat]` indices match your raw catalog schema, and at least one magnitude band is non-zero.
 - [ ] **Pilot Validation:** Always test on a small sample of exposures and inspect `<exposure>_all.cat` before launching a full survey run.

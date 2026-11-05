@@ -1,26 +1,10 @@
 # 🏔️ HPC Runner Guide (Slurm + Apptainer)
 
-[🏠 Home](README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [🐳 Docker Guide](DOCKER.md) · [🔗 Container Paths](PATHS.md)
+[🏠 Home](../README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [🐳 Docker Guide](DOCKER.md) · [🔗 Container Paths](PATHS.md)
 
 This guide covers multi-node **Slurm + PMI2** execution on x86_64 HPC clusters using **Apptainer / Singularity** (`--cleanenv --no-eval --no-mount`). For native cluster builds without containers, use the [C++ User Guide](CPP_GUIDE.md).
 
----
-
-## 🏗️ HPC Container Architecture
-
-```mermaid
-flowchart LR
-    subgraph Prep["1. Login / Head Node"]
-        J["📄 project.json"] -->|"fqctl.py configure"| E["⚙️ cpppipeline.env +<br/>pipeline.ini"]
-        P["🌐 OCI Registry"] -->|"apptainer pull"| S["📦 cpppipeline.sif"]
-    end
-    subgraph Build["2. Build Node / Job"]
-        S & E -->|"runner/build.sh"| B["🔨 Compiled Binary<br/>Fourier_Quad_Pipe"]
-    end
-    subgraph Compute["3. Slurm Allocation (Multi-Node)"]
-        B & E & S -->|"runner/run.sh (1× srun)"| M["🚀 1 Container per MPI Rank<br/>(OpenMPI 4.1.8 + PMI2)"]
-    end
-```
+![Containerized Deployment Architecture](figures/container_architecture.png)
 
 ---
 
@@ -69,7 +53,7 @@ bash /absolute/repo/cpp_docker/runner/run.sh --check \
 
 ### Single-Task Containerized Build
 
-Compile the selected C++ variant once inside the SIF image (run interactively on a build node or inside a **1-task** Slurm build job):
+Compile `cpp_Standard/` once inside the SIF image (run interactively on a build node or inside a **1-task** Slurm build job):
 
 ```bash
 bash /absolute/repo/cpp_docker/runner/build.sh /absolute/run/cpppipeline.env

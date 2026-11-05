@@ -1,37 +1,14 @@
 # 🛠️ C++ Pipeline User Guide
 
-[🏠 Home](README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🐳 Docker](DOCKER.md) · [🏔️ HPC](HPC.md)
+[🏠 Home](../README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🐳 Docker](DOCKER.md) · [🏔️ HPC](HPC.md)
 
-This guide covers **native Linux and HPC deployment** of `Fourier_Quad_Pipe`, including environment prerequisites, variant selection, INI configuration, compilation, MPI execution, and output inspection.
-
----
-
-## Choose a Variant
-
-Both source trees compile the same executable (`Fourier_Quad_Pipe`) and share the same INI configuration structure, but target different operational needs:
-
-| Feature / Branch | `cpp_Standard/` (Research & Full) | `cpp_Lite/` (Production) |
-| :--- | :--- | :--- |
-| **Executable** | `Fourier_Quad_Pipe` | `Fourier_Quad_Pipe` |
-| **Primary Header Entry** | `config/*.hpp` directly | `Initialize.hpp` + `config/*.hpp` |
-| **Astrometry Reference** | Gaia (Type 1 or Type 2) or identity mapping | Gaia (fixed Type 2 one-degree tiles) |
-| **Super-Flat Correction** | Optional (`[lensing].include_flat`) | Disabled (physically removed) |
-| **DQ Mask Handling** | Configurable (`[lensing].include_mask = 0..3`) | Fixed per-chip DQ masks |
-| **Source Selection** | External catalog or standalone detection | External catalog required |
-| **PSF Input** | Exposure stars or external PSF images | Exposure stars only |
-| **Source Deblending** | Configurable (`[lensing].deblending`) | Always enabled |
-| **PSF Spatial Model** | Local polynomial or hybrid model | Local polynomial only |
-| **PCA / Multi-Scale PSF** | Optional (`[lensing].psf_ms = 1`) | Removed |
-| **Default Enabled Phases** | `init`, `main`, `rearr`, `fd` | `init`, `main` |
-
-> [!IMPORTANT]
-> Branches physically removed from `cpp_Lite/` cannot be restored at runtime; supplying Standard-only INI keys to the Lite executable results in a configuration validation error.
+This guide covers **native Linux and HPC deployment** of `Fourier_Quad_Pipe` (`cpp_Standard/`), including environment prerequisites, INI configuration, compilation, MPI execution, and output inspection.
 
 ---
 
 ## Environment and Dependencies
 
-### Required Toolchain & Libraries
+### Required Toolchain & Scientific Libraries
 
 | Dependency | Purpose | Reference Stack Version |
 | :--- | :--- | :--- |
@@ -42,6 +19,19 @@ Both source trees compile the same executable (`Fourier_Quad_Pipe`) and share th
 | **BLAS & LAPACK** | Dense numerical linear algebra and eigensolvers | OpenBLAS / Reference LAPACK |
 | **GNU Make** | Build automation (`all` and `clean` targets) | `4.x+` |
 
+### Supported Scientific Capabilities (`cpp_Standard/`)
+
+| Capability | Configuration Key | Options & Behavior |
+| :--- | :--- | :--- |
+| **Astrometry Reference** | `[lensing].astrometry_trivial` / `astrometry_cat_type` | Gaia reference tiles (`0`, Type `1` $10^\circ$ or Type `2` $1^\circ$) or identity mapping (`1`). |
+| **Super-Flat Correction** | `[lensing].include_flat` | Disabled (`0`, default) or apply super-flat calibration (`1`). |
+| **DQ Mask Handling** | `[lensing].include_mask` | Configurable mask mode (`0..3`; default `2` per-chip DQ masks). |
+| **Source Selection** | `[lensing].ext_cat` | External source catalog matching (`1`, default) or standalone detection (`0`). |
+| **PSF Input & Model** | `[lensing].ext_psf` / `psf_type` | Exposure stars (`0`) or external PSF (`1`); local polynomial (`1`) or hybrid model (`2`). |
+| **PCA PSF Reconstruction** | `[lensing].psf_ms` | Optional multi-scale PCA residual reconstruction (`1`; default `0`). |
+| **Source Deblending** | `[lensing].deblending` | Enabled (`1`, default) or disabled (`0`). |
+| **Default Enabled Phases** | `[process].run_process_*` | `init`, `main`, `rearr`, and `fd` enabled by default (`astrocat` and `extcat` off). |
+
 > [!TIP]
 > If you prefer not to build the C++ scientific stack on your host machine, use the prebuilt toolchain container via [Docker](DOCKER.md) or [HPC Apptainer](HPC.md).
 
@@ -49,21 +39,16 @@ Both source trees compile the same executable (`Fourier_Quad_Pipe`) and share th
 
 ## Configuration
 
-The pipeline uses a **two-layer configuration architecture** that separates compile-time constants from runtime overrides:
+The pipeline uses a **two-layer configuration architecture** that separates compile-time constants (`cpp_Standard/config/*.hpp`) from runtime INI overrides (`--config pipeline.ini`):
 
-```mermaid
-flowchart LR
-    H["📄 Compiled Headers<br/>config/*.hpp & Initialize.hpp"] -->|"Baseline defaults"| R["⚙️ Runtime Config Parser"]
-    I["📝 Explicit INI File<br/>--config pipeline.ini"] -->|"Uncommented keys override"| R
-    R -->|"MPI Broadcast (Rank 0 → All)"| E["🚀 Fourier_Quad_Pipe Execution"]
-```
+![Configuration Hierarchy and 9-Stage Scientific Execution](figures/main_stages.png)
 
 ### Setting Up `pipeline.ini`
 
-Copy the annotated template inside your chosen variant directory:
+Copy the annotated template inside `cpp_Standard/`:
 
 ```bash
-cd cpp_Standard                 # Or cpp_Lite
+cd cpp_Standard
 cp pipeline.example.ini pipeline.ini
 ```
 
@@ -88,14 +73,14 @@ pixel_size = 0.2628             # Active: explicitly overrides runtime value.
 
 | INI Entry State | Runtime Behavior |
 | :--- | :--- |
-| **Omitted or commented (`# key =`)** | Retains the compiled default from `config/*.hpp` (or `Initialize.hpp`). |
+| **Omitted or commented (`# key =`)** | Retains the compiled default from `config/*.hpp`. |
 | **Active empty string (`key =`)** | Clears a string setting (enabling downstream path derivation where supported). |
 | **Active empty number or boolean** | Rejected with a configuration error (does not fall back to defaults). |
 | **Active empty list** | Clears token/dataset filters; column projection lists must remain non-empty. |
 
 - **Quoting & Comments:** Wrap paths containing `#`, `;`, or commas in quotes (`"..."`); unquoted `#` or `;` starts an inline comment.
 - **Booleans:** Accept `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off` (case-insensitive).
-- **Compile-Time Only Parameters:** Settings marked `INI override: No` in the [Parameter Reference](CPP_PIPELINE_PARAMETERS.md) must be edited in `config/*.hpp` (or Lite's `Initialize.hpp`) followed by `make clean && make -j4`.
+- **Compile-Time Only Parameters:** Settings marked `INI override: No` in the [Parameter Reference](CPP_PIPELINE_PARAMETERS.md) must be edited in `cpp_Standard/config/*.hpp` followed by `make clean && make -j4`.
 
 ---
 
@@ -106,7 +91,7 @@ pixel_size = 0.2628             # Active: explicitly overrides runtime value.
 Build directly with `make` when libraries are on standard system paths, or pass path overrides:
 
 ```bash
-cd cpp_Standard                 # Or cpp_Lite
+cd cpp_Standard
 
 # Standard system paths
 make -j4
@@ -163,19 +148,19 @@ Catalog preparation phases (`astrocat`, `extcat`) execute once per run. Enabled 
 
 ### 9-Stage Scientific Pipeline (`process_main`)
 
-Inside `process_main`, exposures are dynamically load-balanced across MPI ranks while chips within each exposure are processed sequentially. Active stages are controlled via **prime factor decomposition** in `[lensing].process_stage`:
+Inside `process_main`, exposures are dynamically load-balanced across MPI ranks while chips within each exposure are processed sequentially. Active stages are controlled via **prime factor decomposition** in `[lensing].process_stage` (as illustrated in Panel B of the figure above):
 
-```mermaid
-flowchart TD
-    S1["Stage 1 (Prime 2)<br/>Background & Noise Normalization + Gaia Match"] --> S2["Stage 2 (Prime 3)<br/>PU Polynomial Astrometric Solution"]
-    S2 --> S3["Stage 3 (Prime 5)<br/>SNR Source Detection, Deblending & Star Candidates"]
-    S3 --> S4["Stage 4 (Prime 7)<br/>FFT Power Spectra of Star Candidates"]
-    S4 --> S5["Stage 5 (Prime 11)<br/>PSF Star Selection (χ²) & Spatial Polynomial / PCA Model"]
-    S5 --> S6["Stage 6 (Prime 13)<br/>FFT Power Spectra & Noise Subtraction of Galaxies"]
-    S6 --> S7["Stage 7 (Prime 17)<br/>Fourier_Quad Deconvolution & 5 Shear Estimators (g1, g2, de, h1, h2)"]
-    S7 --> S8["Stage 8 (Prime 19)<br/>Exposure-Level Diagnostics Aggregation"]
-    S8 --> S9["Stage 9 (Prime 23)<br/>Catalog Assembly, Quality Cuts & Distortion Calibration"]
-```
+| Stage | Prime Factor | Core Function |
+| :---: | :---: | :--- |
+| **1** | `2` | Background/noise preprocessing and Gaia matching |
+| **2** | `3` | PU polynomial astrometric solution |
+| **3** | `5` | Source detection, deblending, and star-candidate identification |
+| **4** | `7` | Star-candidate 2D Fourier power spectra |
+| **5** | `11` | PSF star selection ($\chi^2$ clustering) and spatial polynomial / PCA modeling |
+| **6** | `13` | Galaxy 2D Fourier power spectra and noise subtraction |
+| **7** | `17` | Fourier_Quad deconvolution, 5 shear estimators ($g_1, g_2, de, h_1, h_2$), and morphology |
+| **8** | `19` | Exposure-level diagnostics aggregation (`MPI_Allreduce`) |
+| **9** | `23` | Catalog combination, quality cuts, and field-distortion calibration |
 
 - **Full 9-Stage Product:** `2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 = 223092870` (default).
 - **Partial Runs:** Multiply only the primes of the stages you wish to execute (prerequisite stage products must already exist on disk; **Stage 9 (`23`) strictly requires Stage 8 (`19`)**).
@@ -209,7 +194,7 @@ input_directory  = /data/sources/raw
 output_directory = /data/sources/tiles
 ```
 
-> Match `[lensing].astrometry_cat` (and `[lensing].astrometry_cat_type = 2` in Standard) and `[lensing].source_cat` to these output directories in subsequent measurement runs.
+> Match `[lensing].astrometry_cat` (with `[lensing].astrometry_cat_type = 2`) and `[lensing].source_cat` to these output directories in subsequent measurement runs.
 </details>
 
 <details>
@@ -279,7 +264,7 @@ process_stage  = 223092870
         └── FD_test_comb.dat            # Field-distortion calibration table (process_fd)
 ```
 
-- **Catalog Width:** By default (`ext_cat = 1` with 18 external columns), `<exposure>_all.cat` has **49 columns**: `18` external source fields + `EXPO_NUM` + `ccD_NUM` + `28` Stage-7 shear/morphology fields + exposure `Chi2`. Standard's `ext_cat = 0` branch outputs **31 columns**.
+- **Catalog Width:** By default (`ext_cat = 1` with 18 external columns), `<exposure>_all.cat` has **49 columns**: `18` external source fields + `EXPO_NUM` + `ccD_NUM` + `28` Stage-7 shear/morphology fields + exposure `Chi2`. When `ext_cat = 0` (no external catalog), the output catalog has **31 columns**.
 
 ---
 
@@ -289,7 +274,7 @@ process_stage  = 223092870
 | :--- | :--- |
 | **MPI compiler or library not found** | Check `CXX`, `STACK_PREFIX`, `EIGEN_INCLUDE`, and loaded `module` environment. |
 | **Unknown CLI option** | Only `--config PATH` is accepted; move all phase/path options into `pipeline.ini`. |
-| **Unknown INI key** | Verify key spelling and confirm the key is not a Standard-only branch used with `cpp_Lite`. |
+| **Unknown INI key** | Verify section and key spelling against [CPP_PIPELINE_PARAMETERS.md](CPP_PIPELINE_PARAMETERS.md). |
 | **Commented INI entry has no effect** | `# key =` retains compiled defaults; remove `#` and provide an explicit value. |
 | **Missing Gaia or source tiles** | Check directory path, Type-1 vs. Type-2 naming (`astrometry_cat_type`), prefix, and sky footprint. |
 | **Stage 9 (`23`) rejected** | Include Stage 8 (`19`) in `[lensing].process_stage`. |
