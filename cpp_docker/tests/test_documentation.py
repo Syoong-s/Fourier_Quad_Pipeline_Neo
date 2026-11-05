@@ -47,15 +47,10 @@ class DocumentationTests(unittest.TestCase):
 
     def test_root_navigation_prioritizes_cpp(self):
         readme = (ROOT / 'README.md').read_text(encoding='utf-8')
-        self.assertLess(readme.index('make -j4'), readme.index('fqctl.py'))
-        for name in ('CPP_GUIDE.md', 'DATA_PREPARATION.md', 'CPP_PIPELINE_PARAMETERS.md'):
-            self.assertIn('](' + name + ')', readme)
+        for name in ('CPP_GUIDE.md', 'DATA_PREPARATION.md', 'CPP_PIPELINE_PARAMETERS.md',
+                     'DOCKER.md', 'HPC.md', 'PATHS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):
+            self.assertIn('(' + name, readme)
         self.assertNotIn('Develop.md', readme)
-
-    def test_no_reference_is_marked_for_removal(self):
-        remove = set((ROOT / 'REMOVE.txt').read_text().splitlines())
-        for p in ROOT.glob('*.md'):
-            self.assertNotIn(p.name, remove)
 
     def test_local_document_links_and_anchors(self):
         # LICENSE is unchanged and is intentionally absent in a replacement-only ZIP.

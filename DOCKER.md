@@ -1,69 +1,71 @@
-# Docker
+# 🐳 Docker Workstation Guide
 
-[Home](README.md) · [C++ user guide](CPP_GUIDE.md) · [Container paths](PATHS.md)
+[🏠 Home](README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [🔗 Container Paths](PATHS.md) · [🏔️ HPC Apptainer](HPC.md)
 
-Docker is optional. It supplies the C++ toolchain; it does not replace data
-preparation or select scientific parameters. The current image targets
-`linux/amd64`. Use Linux or a Linux environment such as WSL2 with Python 3.8+
-and a working Docker installation. The launcher uses only the Python standard
-library and does not require Docker Compose.
+Docker provides a prebuilt `linux/amd64` scientific C++ toolchain (`GCC 12.3.0`, `OpenMPI 4.1.8`, `CFITSIO`, `FFTW3`, `Eigen3`, `BLAS/LAPACK`) without requiring local library compilation. The `cpp_docker/fqctl.py` utility uses only the Python 3.8+ standard library (no Docker Compose required).
 
-## 1. Configure host paths
+---
 
-From the repository root:
+## 🔄 Container Workflow Overview
+
+```mermaid
+flowchart LR
+    S1["1. init<br/>Create project.json"] --> S2["2. Edit JSON<br/>Set mounts & paths"]
+    S2 --> S3["3. configure<br/>Generate INI & env"]
+    S3 --> S4["4. Edit INI<br/>Set scientific params"]
+    S4 --> S5["5. check / pull / build<br/>Validate & compile"]
+    S5 --> S6["6. run<br/>Launch MPI container"]
+```
+
+---
+
+## 1. Initialize and Edit `project.json`
+
+From the repository root, initialize the project configuration file:
 
 ```bash
 python3 cpp_docker/fqctl.py init
 ```
 
-Edit `cpp_docker/project.json`. The important fields are:
+Edit `cpp_docker/project.json` to map your host directories into container paths:
 
-| Field | Meaning |
-| --- | --- |
-| `variant` | `standard` or `lite`; must match `source`. |
-| `source` | Directory containing the selected C++ Makefile. |
-| `image` | Toolchain image reference. Prefer a fixed tag or digest for production. |
-| `ranks` | Docker MPI process count; at least 2. |
-| `build_jobs` | Concurrent compiler jobs, not MPI ranks. |
-| `run_directory` | Generated INI/env directory, separate from the source tree. |
-| `mounts` | Host files/directories mapped to container locations. |
-| `paths` | Container-side paths assigned to C++ INI keys. |
-| `environment` | Explicit container environment; thread counts default to 1. |
-| `hpc` | SIF and runtime settings used only for the generated HPC env. |
+| JSON Field | Purpose & Rules |
+| :--- | :--- |
+| `variant` | `"standard"` or `"lite"` (must match the `source` directory). |
+| `source` | Path to the C++ Makefile directory (`../cpp_Standard` or `../cpp_Lite`). |
+| `image` | OCI toolchain image reference (pin a tag or `@sha256:...` digest for production). |
+| `ranks` | MPI process count for `fqctl.py run` (minimum `2`). |
+| `build_jobs` | Parallel compiler jobs (`make -j`) during `fqctl.py build`. |
+| `run_directory` | Output directory for generated `pipeline.ini` and `cpppipeline.env` (outside the source tree). |
+| `mounts` | List of host-to-container bind mounts (`host`, `container`, `mode`, optional `create`). |
+| `paths` | Container-side paths mapped into the managed `[...]` sections of `pipeline.ini`. |
+| `environment` | Container environment variables (thread counts default to `1`). |
+| `hpc` | Apptainer SIF and Slurm settings used when generating `cpppipeline.env` (see [HPC.md](HPC.md)). |
 
-Relative host paths are resolved against the JSON file's directory, not the
-shell's current directory. `project.example.json` shows archive/output mounts;
-`project.full.example.json` lists all path interfaces. Neither example is a
-complete scientific run configuration. Remove paths and mounts not needed for
-the phases you choose. See [Container paths](PATHS.md) for shared mounts and
-arbitrary additional inputs/outputs.
+> [!NOTE]
+> Relative host paths in `project.json` are resolved relative to the directory containing `project.json`. See **[Container Paths (PATHS.md)](PATHS.md)** for complete mount rules, shared parent mounts, and every supported `paths` key.
 
-## 2. Generate the run configuration
+---
+
+## 2. Generate Run Configuration (`configure`)
+
+Generate the container-managed INI and HPC environment files under `run_directory`:
 
 ```bash
 python3 cpp_docker/fqctl.py configure
 ```
 
-This generates both files under `run_directory`:
+| Generated File | Edit Policy |
+| :--- | :--- |
+| `pipeline.ini` | **Managed path block:** Auto-populated from `project.json` (do not edit paths here).<br/>**Scientific settings:** Uncomment and configure phases, datasets, geometry, and cuts outside the managed block. |
+| `cpppipeline.env` | Auto-generated snapshot for the [HPC Apptainer runner](HPC.md); always edit `project.json` and re-run `configure` instead of editing this file directly. |
 
-| File | Edit policy |
-| --- | --- |
-| `pipeline.ini` | Paths come from JSON. Fill/uncomment scientific settings outside the managed-path block. |
-| `cpppipeline.env` | Generated HPC launch environment; edit JSON instead of this file. |
+> [!IMPORTANT]
+> Only paths declared in `project.json` are active initially; all other INI keys start as commented blanks (`# key =`), inheriting the variant's compiled header defaults (`Standard`: `init`, `main`, `rearr`, `fd`; `Lite`: `init`, `main`). Explicitly configure your active phases and scientific settings in `pipeline.ini` before running. Re-running `configure` updates the managed path block while preserving your scientific edits (and saves a backup of the previous INI).
 
-Only declared paths are active initially. Other parameters are commented blank
-entries such as `# run_process_main =`, so compiled defaults remain effective.
-**Standard still defaults to init, main, rearrangement and FD; Lite to init and
-main.** Configure the catalogs those phases require, or explicitly disable the
-unneeded phases. Review `datasets`, `contains`, geometry, stages and output
-policy using the [full reference](CPP_PIPELINE_PARAMETERS.md).
+---
 
-Running `configure` again updates the managed paths, retains your scientific
-settings, and saves a backup of the preceding INI. Change paths in JSON, not
-inside its managed INI block. A manually created native INI is independent of
-this workflow; use the C++ guide to run it directly.
-
-## 3. Check, obtain the image and compile
+## 3. Validate, Pull Image & Compile
 
 ```bash
 python3 cpp_docker/fqctl.py check
@@ -71,40 +73,38 @@ python3 cpp_docker/fqctl.py pull
 python3 cpp_docker/fqctl.py build
 ```
 
-`check` inspects JSON, explicit INI settings and declared mounts without starting
-Docker or MPI. It does not inspect the effective compiled defaults, all paths
-inside exposure lists, FITS content or scientific suitability.
+- **`check`:** Validates `project.json`, explicit INI entries, and declared host mounts offline without starting Docker or MPI.
+- **`pull`:** Downloads the configured toolchain image.
+- **`build`:** Runs `make clean && make` inside the container against your mounted `source` tree. Re-run `build` only when C++ headers or source files change; INI edits do not require rebuilding.
 
-`build` cleans and rebuilds the selected C++ source in the container. Do not
-build into one source tree concurrently with another build or a running job.
-Header/source changes require another build; scientific INI edits do not.
+---
 
-## Run
+## 4. Run the Pipeline
 
 ```bash
 python3 cpp_docker/fqctl.py run
 ```
 
-The launcher uses `mpirun -np <ranks>` and passes exactly one application option:
-`--config /fq-config/pipeline.ini`. This read-only mount refers to the generated
-INI, never an INI inside the source directory. The source is read-only during
-execution; writable data/output mounts are explicit. Outputs use your host
-UID/GID on ordinary Linux bind mounts.
-
-Every command accepts `--json /path/project.json`. For example:
+To use a custom JSON location with any subcommand, pass `--json`:
 
 ```bash
 python3 cpp_docker/fqctl.py run --json /shared/project/project.json
 ```
 
-## Troubleshooting
+**Execution Guarantees:**
+- Launches `mpirun -np <ranks> /workspace/src_pipe/Fourier_Quad_Pipe --config /fq-config/pipeline.ini`.
+- Mounts the C++ source tree and generated INI **read-only** (`ro`) during execution.
+- Runs under your host `UID:GID` so output files written to `rw` mounts have normal host ownership.
 
-| Message or symptom | Action |
-| --- | --- |
-| JSON changed | Run `configure`, then `check`. Scientific settings are retained. |
-| Mount source missing | Correct the host path. Only a `rw` directory with `create: true` is created automatically. |
-| Program reads an old site path | Override that path or change the compiled default and rebuild; commented INI entries inherit defaults. |
-| Permission denied | Check host permissions, read/write mode and access from the Docker daemon host. |
-| Missing executable | Run `build` after selecting the source variant. |
-| MPI resource error | Choose a rank count supported by the CPUs assigned to Docker. |
-| Image unavailable | Select an accessible compatible toolchain image in JSON; registry access is separate from configuration validation. |
+---
+
+## 🔧 Troubleshooting
+
+| Symptom / Message | Resolution |
+| :--- | :--- |
+| **`project.json` modified** | Run `python3 cpp_docker/fqctl.py configure` followed by `check` (scientific INI edits are preserved). |
+| **Mount source missing** | Verify the `host` path exists. Only `rw` directories with `"create": true` are created automatically. |
+| **Program reads a legacy site path** | A commented `# key =` inherits compiled defaults; declare the path in `project.json` or uncomment it in `pipeline.ini`. |
+| **Permission denied on mounts** | Check host directory permissions, `ro`/`rw` mode in `mounts`, and Docker daemon access. |
+| **Missing `Fourier_Quad_Pipe` binary** | Run `python3 cpp_docker/fqctl.py build` for the selected variant. |
+| **MPI rank allocation failure** | Reduce `ranks` in `project.json` to match the CPU cores allocated to your Docker engine. |

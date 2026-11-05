@@ -1,43 +1,36 @@
-# C++ Pipeline Parameter Reference
+# 📋 C++ Pipeline Parameter Reference
 
-[Home](README.md) · [C++ user guide](CPP_GUIDE.md) · [Data preparation](DATA_PREPARATION.md)
+[🏠 Home](README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [🔗 Container Paths](PATHS.md)
 
-This is the complete reference for the user configuration headers of Standard
-and Lite, including Lite's `Initialize.hpp`, runtime INI fields, fixed scientific
-settings, derived constants, catalog indices and output-layout names. Defaults
-below describe the source at `9925f4f`; local header edits take precedence as the
-compiled baseline. Function-local implementation constants are not user settings.
+Complete reference for all compile-time configuration headers (`config/*.hpp` and Lite's `Initialize.hpp`) and runtime `pipeline.ini` keys across `cpp_Standard` and `cpp_Lite`.
 
-## How to use this reference
+---
 
-**Configuration order: compiled header defaults → explicitly selected INI.**
-The executable accepts only `--config PATH` or `--config=PATH`. No argument means
-compiled configuration only: it does not search for `pipeline.ini` and does not
-read a configuration-path environment variable.
+## ⚙️ How to Use This Reference
 
-| Entry | Effect |
-| --- | --- |
-| Parameter has an INI mapping | Change that INI key without rebuilding. |
-| INI override is **No** | Edit the indicated header and rebuild. |
-| INI entry is omitted or commented (`# key =`) | Retain the compiled value. |
-| Active string entry is empty (`key =`) | Clear the value; a downstream fallback may exist for that particular field. |
-| Active number or Boolean is empty | Configuration error; it does not inherit the compiled value. |
-| Active list is empty | Clear token/dataset lists; column projections must remain nonempty. |
-| Default is **same** | Same as the Standard default on that row. |
-| Default is **Not present** | The symbol/branch does not exist in that variant; do not add its INI key. |
+> [!NOTE]
+> **Configuration Precedence:** `Compiled Header Defaults` → `Explicitly Passed --config pipeline.ini`.
+> For general INI syntax rules, omitted vs. empty behavior, and build commands, see the **[C++ User Guide (CPP_GUIDE.md)](CPP_GUIDE.md#configuration)**.
 
-All edits to compiled headers require rebuilding, including edits to defaults
-that also have an INI mapping. Derived values are documented for completeness:
-change their source setting, not an index or size independently. Boolean values
-accept `true/false`, `1/0`, `yes/no` and `on/off`. INI section and key names are
-case-insensitive; path values and filename filters are not. Lists are comma
-separated; quote strings containing `#`, `;` or delimiters.
+| Table Value / Notation | Meaning |
+| :--- | :--- |
+| **`[section].key`** in *INI override* | Runtime-configurable via `--config pipeline.ini` (no rebuild required). |
+| **`No`** in *INI override* | Compile-time constant only; edit the header in `config/*.hpp` (or `Initialize.hpp`) and run `make clean && make -j4`. |
+| **`same`** in *Lite default* | Identical to the `Standard default` on the same row. |
+| **`Not present`** | Symbol or scientific branch is physically absent in that variant (do not add its INI key). |
+| **Derived constants** | Shown with their formula (e.g., `ns * ns = 4096`); always modify the source parameter rather than derived expressions or column indices. |
 
-## Contents
+---
 
-- [Workflow](#workflow-processconfig), [archive initialization](#archive-initialization-initconfig), [catalog preparation](#gaia-preparation-astrocatconfig), [external catalog schema](#external-catalog-preparation-extcatconfig).
-- [Catalog paths](#catalog-and-calibration-paths-lensingconfig), [branches and geometry](#branches-and-geometry-lensingconfig), [PSF selection](#psf-selection-lensingconfig), [stamps and detection](#stamps-and-detection-lensingconfig), [background](#background-estimation-lensingconfig), [noise](#noise-products-lensingconfig), [sigma estimation](#sigma-estimation-lensingconfig), [catalog indices](#catalog-indices-lensingconfig), [calibration and PCA](#calibration-and-pca-lensingconfig).
-- [Rearrangement](#spatial-rearrangement-processrearrconfig), [output directories](#output-layout-outputlayout), [FD settings](#field-distortion-fdconfig), [Lite initialization aliases](#lite-initializehpp).
+## 🧭 Quick Jump
+
+| Category | Sections |
+| :--- | :--- |
+| **Workflow & Data Ingestion** | [Workflow (`ProcessConfig`)](#workflow-processconfig) · [Archive Initialization (`InitConfig`)](#archive-initialization-initconfig) · [Tile Naming](#tile-naming) · [Gaia Preparation (`AstroCatConfig`)](#gaia-preparation-astrocatconfig) · [External Catalog (`ExtCatConfig`)](#external-catalog-preparation-extcatconfig) |
+| **Core Lensing Pipeline** | [Catalog & Calibration Paths](#catalog-and-calibration-paths-lensingconfig) · [Branches & Geometry](#branches-and-geometry-lensingconfig) · [PSF Selection](#psf-selection-lensingconfig) · [Stamps & Detection](#stamps-and-detection-lensingconfig) · [Background](#background-estimation-lensingconfig) · [Noise Products](#noise-products-lensingconfig) · [Sigma Estimation](#sigma-estimation-lensingconfig) · [Catalog Indices](#catalog-indices-lensingconfig) · [Calibration & PCA](#calibration-and-pca-lensingconfig) |
+| **Post-Processing & Lite** | [Spatial Rearrangement (`ProcessRearrConfig`)](#spatial-rearrangement-processrearrconfig) · [Output Layout (`OutputLayout`)](#output-layout-outputlayout) · [Field Distortion (`FDConfig`)](#field-distortion-fdconfig) · [Lite `Initialize.hpp`](#lite-initializehpp) · [Coupled Values Summary](#runtime-selection-and-coupled-values) |
+
+---
 
 ## Workflow (`ProcessConfig`)
 Edit `config/ProcessConfig.hpp` for phase defaults and `config/pathconfig.hpp` for paths. Lite phase defaults and `EXPO_LIST` originate in `Initialize.hpp`. At least one phase must be enabled. Phases execute in the fixed order shown in the C++ guide.
@@ -84,7 +77,7 @@ Both definitions are in `config/pathconfig.hpp`; Lite derives their values from 
 | `ExtCatConfig::SOURCE_CAT_TILE_PREFIX` (`std::string_view`) | `"extern_"` | same | No | External source one-degree tile prefix; excludes RA_. |
 
 ## Gaia preparation (`AstroCatConfig`)
-Edit `config/AstroCatConfig.hpp` and `config/pathconfig.hpp`; Lite input and header defaults originate in `Initialize.hpp`. Produces Type-2 one-degree tiles. Standard must select `astrometry_cat_type = 2` to consume them; Lite already uses that fixed layout. Set the main-phase Gaia path independently, or use the container generator's linked-path behavior.
+Edit `config/AstroCatConfig.hpp` and `config/pathconfig.hpp`; Lite input and header defaults originate in `Initialize.hpp`. See [Data Preparation: Gaia Catalog](DATA_PREPARATION.md#gaia-astrometric-catalog) for layout conventions and deduplication rules.
 | Parameter (type) | Standard default | Lite default | INI override | Meaning and constraints |
 | --- | --- | --- | --- | --- |
 | `ASTROCAT_INPUT_DIRECTORY` (`const char*`) | `""` | same | `[astrocat].input_directory` | Readable flat directory of raw RA/Dec files; only direct regular children are read. |
@@ -92,15 +85,8 @@ Edit `config/AstroCatConfig.hpp` and `config/pathconfig.hpp`; Lite input and hea
 | `ASTROCAT_ADD_HEADER` (`bool`) | `true` | same | `[astrocat].add_header` | true: input starts with data; false: skip exactly one line per input. Output always has a header. |
 | `ASTROCAT_EXISTING_POLICY` (`const char*`) | `"fail"` | same | `[astrocat].existing_policy` | fail or overwrite. Overwrite replaces only files matching the current generated-prefix contract. |
 
-The first two numeric columns are RA and Dec; extra columns are ignored. Rows
-without two parseable numbers are skipped. Input coordinates must be finite,
-with `0 <= RA <= 360` and `-90 <= Dec <= 90`; RA 360 is stored as zero and Dec 90
-belongs to the last tile. Exact/one-ULP coordinate duplicates are removed across
-input files and tile boundaries. Output begins with `RA    DEC` and retains
-round-trip double precision. See [data preparation](DATA_PREPARATION.md#gaia-catalog)
-for both filename conventions and the legacy coverage-overlap recommendation.
 ## External catalog preparation (`ExtCatConfig`)
-Edit `config/ExtCatConfig.hpp` and `config/pathconfig.hpp`. Lite inherits its raw input, base width and RA/Dec/ZP defaults from `Initialize.hpp`. In Standard, `[lensing].source_cat` aliases `[extcat].output_directory`; in Lite they are independent producer/consumer fields.
+Edit `config/ExtCatConfig.hpp` and `config/pathconfig.hpp`. Lite inherits its raw input, base width and RA/Dec/ZP defaults from `Initialize.hpp`. See [Data Preparation: External Source Catalog](DATA_PREPARATION.md#external-source-catalog) for schema and column-mapping rules.
 | Parameter (type) | Standard default | Lite default | INI override | Meaning and constraints |
 | --- | --- | --- | --- | --- |
 | `EXTCAT_INPUT_DIRECTORY` (`const char*`) | `""` | same | `[extcat].input_directory` | Readable raw catalog root. |
@@ -125,11 +111,6 @@ Edit `config/ExtCatConfig.hpp` and `config/pathconfig.hpp`. Lite inherits its ra
 | `EXTCAT_MAG_Y_COLUMN_ONE_BASED` (`std::size_t`) | `15` | same | `[extcat].mag_y_column` | One-based raw y magnitude column; 0 marks this band absent. |
 | `EXTCAT_ZP_COLUMN_ONE_BASED` (`std::size_t`) | `17` | same | `[extcat].zp_column` | Positive one-based raw zp/photo-z column; not a magnitude zero point. |
 
-Explicit projection must retain RA, Dec, photo-z and every configured nonzero
-magnitude column. FD requires at least one available magnitude and chooses the
-first available in **i → z → r → g → y** order. Raw indices are one-based;
-downstream column positions are resolved automatically. Do not edit output
-indices by hand to compensate for a new input schema.
 ## Catalog and calibration paths (`LensingConfig`)
 Compiled definitions are in `config/pathconfig.hpp`; Lite paths derive from `Initialize.hpp`. Runtime overrides do not modify header constants or automatically synchronize independent fields.
 | Parameter (type) | Standard default | Lite default | INI override | Meaning and constraints |

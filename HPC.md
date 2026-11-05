@@ -1,91 +1,109 @@
-# HPC with Apptainer
+# 🏔️ HPC Runner Guide (Slurm + Apptainer)
 
-[Home](README.md) · [C++ user guide](CPP_GUIDE.md) · [Container paths](PATHS.md)
+[🏠 Home](README.md) · [🛠️ C++ User Guide](CPP_GUIDE.md) · [🐳 Docker Guide](DOCKER.md) · [🔗 Container Paths](PATHS.md)
 
-For native builds, use the [C++ guide](CPP_GUIDE.md) and your site's MPI launcher.
-This page covers the optional container runner. It targets x86_64 systems with
-Slurm PMI2 and an Apptainer/Singularity runtime supporting `--cleanenv`,
-`--no-eval` and `--no-mount`. The supplied toolchain image uses its own OpenMPI
-4.1.8 and PMI2 client. Compatibility with the site's Slurm/MPI network is a site
-requirement, not something a configuration check can certify.
+This guide covers multi-node **Slurm + PMI2** execution on x86_64 HPC clusters using **Apptainer / Singularity** (`--cleanenv --no-eval --no-mount`). For native cluster builds without containers, use the [C++ User Guide](CPP_GUIDE.md).
 
-## Prepare once
+---
 
-Use `cpp_docker/fqctl.py init`, edit the JSON, then run `configure` as described
-in [Docker configuration](DOCKER.md#1-configure-host-paths). These steps need
-Python and shared filesystems, but **do not require Docker**. Set the following
-HPC fields before generating:
+## 🏗️ HPC Container Architecture
 
-| JSON field | Example / meaning |
-| --- | --- |
-| `hpc.sif` | `/shared/images/cpppipeline.sif`; an image readable by every compute node. |
-| `hpc.runtime` | `apptainer`, `singularity`, or its executable path. |
-| `hpc.srun_args` | Optional placement settings, e.g. `["--cpu-bind=cores"]`. |
-| `hpc.environment` | Additional container values, e.g. `{"OMP_NUM_THREADS":"1"}`. |
+```mermaid
+flowchart LR
+    subgraph Prep["1. Login / Head Node"]
+        J["📄 project.json"] -->|"fqctl.py configure"| E["⚙️ cpppipeline.env +<br/>pipeline.ini"]
+        P["🌐 OCI Registry"] -->|"apptainer pull"| S["📦 cpppipeline.sif"]
+    end
+    subgraph Build["2. Build Node / Job"]
+        S & E -->|"runner/build.sh"| B["🔨 Compiled Binary<br/>Fourier_Quad_Pipe"]
+    end
+    subgraph Compute["3. Slurm Allocation (Multi-Node)"]
+        B & E & S -->|"runner/run.sh (1× srun)"| M["🚀 1 Container per MPI Rank<br/>(OpenMPI 4.1.8 + PMI2)"]
+    end
+```
 
-Source, JSON-generated configuration, data and the runner itself must be
-accessible from the participating nodes. Load site modules in your own shell
-or job script. Do not bind a host MPI over the container's MPI.
+---
 
-Obtain a compatible SIF using your site's supported image-transfer procedure.
-For example, on a node allowed to download images:
+## 1. Prepare Configuration & SIF Image
+
+### Generate `cpppipeline.env` & `pipeline.ini`
+
+On a login node (requires Python 3.8+ and shared filesystem access; **Docker is not required**), initialize and configure `cpp_docker/project.json` as shown in [DOCKER.md](DOCKER.md#1-initialize-and-edit-projectjson), including the `hpc` block:
+
+| `project.json` Field | Example / Description |
+| :--- | :--- |
+| `hpc.sif` | `"/shared/images/cpppipeline.sif"` — SIF path readable by all compute nodes. |
+| `hpc.runtime` | `"apptainer"`, `"singularity"`, or an absolute executable path. |
+| `hpc.srun_args` | Optional Slurm placement flags, e.g., `["--cpu-bind=cores"]`. |
+| `hpc.environment` | Extra container environment variables, e.g., `{"OMP_NUM_THREADS": "1"}`. |
+
+Then generate `pipeline.ini` and `cpppipeline.env`:
+
+```bash
+python3 cpp_docker/fqctl.py configure
+```
+
+*(Ensure the repository, `run_directory`, data directories, and SIF image reside on shared filesystems accessible across all compute nodes.)*
+
+### Pull the Apptainer SIF Image
+
+On a node with network access, pull the toolchain image into your shared storage:
 
 ```bash
 apptainer pull /shared/images/cpppipeline.sif \
   docker://ghcr.io/syoong-s/fourier_quad_pipeline_neo:gxx12.3-openmpi4.1.8-pmi2
 ```
 
-The image is separate from the source and scientific data. No image download
-or conversion is hidden inside the run command.
+---
 
-## Check configuration
+## 2. Validate & Compile Once
+
+### Offline Configuration Check
+
+Validate explicit INI settings and declared bind mounts before submitting jobs (does not start a container or require a Slurm allocation):
 
 ```bash
 bash /absolute/repo/cpp_docker/runner/run.sh --check \
   /absolute/run/cpppipeline.env
 ```
 
-This explicitly runs the configuration check. It does not start a container,
-require an allocation or require the SIF to have been downloaded. It checks
-explicit settings and mounts, not actual compiled defaults or MPI compatibility.
+### Single-Task Containerized Build
 
-## Compile once
-
-After making the SIF available, call the following on a node where compilation
-is permitted. It can be placed in your own single-task build job:
+Compile the selected C++ variant once inside the SIF image (run interactively on a build node or inside a **1-task** Slurm build job):
 
 ```bash
 bash /absolute/repo/cpp_docker/runner/build.sh /absolute/run/cpppipeline.env
 ```
 
-The script runs `make clean` and `make` once inside the image. Rebuild after C++
-source/header changes. Do not prefix this build script with a many-task `srun`;
-all those tasks would otherwise clean and compile the same source tree.
+> [!CAUTION]
+> **Do not prefix `build.sh` with a multi-task `srun`!** Running multiple tasks against `build.sh` causes every task to concurrently run `make clean && make` in the same source tree. Re-run `build.sh` only when C++ headers or source files change.
 
-## Run from your own job script
+---
 
-Request the partition, account, task count, memory and time in your own Slurm
-script. Request at least two tasks for the distributed pipeline and add this
-single invocation after your module setup:
+## 3. Launch from Your Slurm Job Script
+
+Request your cluster partition, account, node/task count (at least **2 tasks**), memory, and walltime in your own `#SBATCH` script, then invoke `run.sh` **once**:
 
 ```bash
+#!/bin/bash
+#SBATCH --job-name=fq_pipe
+#SBATCH --nodes=2
+#SBATCH --ntasks=64
+#SBATCH --cpus-per-task=1
+#SBATCH --time=04:00:00
+
+# Load site Apptainer module if required (do NOT bind host MPI over container MPI)
+# module load apptainer
+
 bash /absolute/repo/cpp_docker/runner/run.sh /absolute/run/cpppipeline.env
 ```
 
-The wrapper executes **one `srun`**. Do not put another `srun` around it. Slurm
-controls the task count and placement; Docker's JSON `ranks` is not used here.
-Each task enters the container and executes:
+### Runtime Execution Rules
 
-```text
-/workspace/src_pipe/Fourier_Quad_Pipe --config /fq-config/pipeline.ini
-```
-
-The Bash runner does not inspect job IDs, reject invocation outside an
-allocation, submit jobs, infer a queue, run a smoke test or automatically run
-`--check`. Slurm and the container runtime report their own launch errors.
-Follow your site's rules about where `srun` is permitted.
-
-After changing JSON, rerun `configure` to refresh the env snapshot and INI paths.
-Scientific edits outside the managed INI block are retained. Run `--check`
-explicitly before production use. Generated env files are trusted Bash input;
-do not source another person's unreviewed env file.
+| Aspect | Behavior & Requirement |
+| :--- | :--- |
+| **`srun` Invocation** | `run.sh` executes **one internal `srun`** (`--mpi=pmi2`). **Never wrap `run.sh` in an outer `srun`.** |
+| **Task Count** | Controlled entirely by your Slurm allocation (`#SBATCH --ntasks`); `project.json`'s `ranks` field is ignored on HPC. |
+| **Per-Rank Command** | Each Slurm task enters `runtime.sh` and runs `/workspace/src_pipe/Fourier_Quad_Pipe --config /fq-config/pipeline.ini`. |
+| **Configuration Updates** | After editing `project.json`, re-run `python3 cpp_docker/fqctl.py configure` to refresh `cpppipeline.env` and `pipeline.ini` (scientific INI settings outside the managed block are preserved). |
+| **Security & Trust** | `cpppipeline.env` is sourced as trusted Bash input generated from your `project.json`; never source unreviewed `.env` files from untrusted users. |

@@ -1,334 +1,297 @@
-# C++ user guide
+# 🛠️ C++ Pipeline User Guide
 
-[Home](README.md) · [Data preparation](DATA_PREPARATION.md) · [Complete parameter reference](CPP_PIPELINE_PARAMETERS.md)
+[🏠 Home](README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🐳 Docker](DOCKER.md) · [🏔️ HPC](HPC.md)
 
-This guide covers **native Linux and HPC execution** of `Fourier_Quad_Pipe`.
-Docker is not required. The optional [Docker](DOCKER.md) and
-[Apptainer](HPC.md) guides cover container-specific setup only.
+This guide covers **native Linux and HPC deployment** of `Fourier_Quad_Pipe`, including environment prerequisites, variant selection, INI configuration, compilation, MPI execution, and output inspection.
 
-## Choose a variant
+---
 
-| Feature | Standard | Lite |
-| --- | --- | --- |
-| Source directory | `cpp_Standard/` | `cpp_Lite/` |
-| Executable | `Fourier_Quad_Pipe` | `Fourier_Quad_Pipe` |
-| Astrometry | Gaia or identity mapping | Gaia only |
-| Super-flat correction | Optional | Disabled |
-| DQ handling | Configurable mask mode | Per-chip DQ masks |
-| Source selection | External-catalog or no-catalog branch | External catalog |
-| PSF input | Exposure stars or external PSF | Exposure stars |
-| Deblending | Configurable | Enabled |
-| PSF model | Local polynomial or hybrid | Local polynomial |
-| PCA/multi-scale reconstruction | Optional | Removed |
-| Default enabled phases | Init, main, rearrangement, FD | Init, main |
+## Choose a Variant
 
-Lite's removed branches cannot be restored by adding INI keys. Ordinary Lite
-camera/workflow defaults are centralized in `Initialize.hpp`; advanced settings
-remain in `config/*.hpp`. Standard uses its `config/*.hpp` headers directly.
+Both source trees compile the same executable (`Fourier_Quad_Pipe`) and share the same INI configuration structure, but target different operational needs:
 
-Lite always consumes one-degree Gaia tiles. Standard defaults to the legacy
-large-tile layout and can select one-degree tiles with
-`[lensing].astrometry_cat_type = 2`. See [data preparation](DATA_PREPARATION.md).
+| Feature / Branch | `cpp_Standard/` (Research & Full) | `cpp_Lite/` (Production) |
+| :--- | :--- | :--- |
+| **Executable** | `Fourier_Quad_Pipe` | `Fourier_Quad_Pipe` |
+| **Primary Header Entry** | `config/*.hpp` directly | `Initialize.hpp` + `config/*.hpp` |
+| **Astrometry Reference** | Gaia (Type 1 or Type 2) or identity mapping | Gaia (fixed Type 2 one-degree tiles) |
+| **Super-Flat Correction** | Optional (`[lensing].include_flat`) | Disabled (physically removed) |
+| **DQ Mask Handling** | Configurable (`[lensing].include_mask = 0..3`) | Fixed per-chip DQ masks |
+| **Source Selection** | External catalog or standalone detection | External catalog required |
+| **PSF Input** | Exposure stars or external PSF images | Exposure stars only |
+| **Source Deblending** | Configurable (`[lensing].deblending`) | Always enabled |
+| **PSF Spatial Model** | Local polynomial or hybrid model | Local polynomial only |
+| **PCA / Multi-Scale PSF** | Optional (`[lensing].psf_ms = 1`) | Removed |
+| **Default Enabled Phases** | `init`, `main`, `rearr`, `fd` | `init`, `main` |
 
-## Build
+> [!IMPORTANT]
+> Branches physically removed from `cpp_Lite/` cannot be restored at runtime; supplying Standard-only INI keys to the Lite executable results in a configuration validation error.
 
-### Dependencies
+---
 
-| Requirement | Purpose |
-| --- | --- |
-| C++17 MPI compiler wrapper, such as `mpicxx` | Build and launch the parallel program |
-| CFITSIO | Read and write FITS data |
-| FFTW3, double and single precision | Fourier transforms |
-| Eigen3 | Matrix calculations |
-| BLAS and LAPACK | Numerical linear algebra |
-| GNU Make | Build the selected variant |
+## Environment and Dependencies
 
-The repository's optional reference toolchain uses GCC 12.3.0, OpenMPI 4.1.8,
-CFITSIO 4.6.4, FFTW 3.3.11 and Eigen 3.4.0. Native builds can use a compatible
-site-provided stack; compile and run against compatible MPI installations.
+### Required Toolchain & Libraries
+
+| Dependency | Purpose | Reference Stack Version |
+| :--- | :--- | :--- |
+| **C++17 MPI Wrapper** (`mpicxx`) | Parallel C++17 compilation and MPI dispatch | GCC `12.3.0` + OpenMPI `4.1.8` |
+| **CFITSIO** | Reading and writing FITS / `.fits.fz` images | `4.6.4` |
+| **FFTW3** (`fftw3` & `fftw3f`) | Double- and single-precision Fast Fourier Transforms | `3.3.11` |
+| **Eigen3** | Header-only linear algebra and matrix operations | `3.4.0` |
+| **BLAS & LAPACK** | Dense numerical linear algebra and eigensolvers | OpenBLAS / Reference LAPACK |
+| **GNU Make** | Build automation (`all` and `clean` targets) | `4.x+` |
+
+> [!TIP]
+> If you prefer not to build the C++ scientific stack on your host machine, use the prebuilt toolchain container via [Docker](DOCKER.md) or [HPC Apptainer](HPC.md).
+
+---
+
+## Configuration
+
+The pipeline uses a **two-layer configuration architecture** that separates compile-time constants from runtime overrides:
+
+```mermaid
+flowchart LR
+    H["📄 Compiled Headers<br/>config/*.hpp & Initialize.hpp"] -->|"Baseline defaults"| R["⚙️ Runtime Config Parser"]
+    I["📝 Explicit INI File<br/>--config pipeline.ini"] -->|"Uncommented keys override"| R
+    R -->|"MPI Broadcast (Rank 0 → All)"| E["🚀 Fourier_Quad_Pipe Execution"]
+```
+
+### Setting Up `pipeline.ini`
+
+Copy the annotated template inside your chosen variant directory:
 
 ```bash
 cd cpp_Standard                 # Or cpp_Lite
+cp pipeline.example.ini pipeline.ini
+```
+
+> [!WARNING]
+> `pipeline.example.ini` contains **commented blank entries** (`# key =`), not a ready-to-run survey setup. Commented keys retain the compiled header defaults (including original site-specific paths and default enabled phases). Always uncomment and populate your paths, datasets, and active phases before launching.
+
+| INI Section | Scope | Key Responsibilities |
+| :--- | :--- | :--- |
+| `[process]` | Workflow Control | Top-level phase switches (`run_process_*`), explicit `expo_list`, and `rearr`/`fd` output paths. |
+| `[astrocat]` | Gaia Tiling | Raw Gaia directory, output tile directory, header handling, and overwrite policy. |
+| `[extcat]` | Source Tiling | Raw external catalog directory, 1-based column indices, magnitude mapping, and chunk size. |
+| `[init]` | Archive Extraction | Science/DQ archive roots, `output_root`, `datasets` (`TARGET:PREFIX`), `contains` filters, and rerun policy. |
+| `[lensing]` | Shear Pipeline | Prime stage selector (`process_stage`), camera geometry (`pixel_size`, `chipnx`, `chipny`), and catalog paths. |
+
+### INI Syntax Rules: Omitted vs. Empty
+
+```ini
+[lensing]
+# pixel_size =                  # Commented: retains compiled header value (0.2628).
+pixel_size = 0.2628             # Active: explicitly overrides runtime value.
+```
+
+| INI Entry State | Runtime Behavior |
+| :--- | :--- |
+| **Omitted or commented (`# key =`)** | Retains the compiled default from `config/*.hpp` (or `Initialize.hpp`). |
+| **Active empty string (`key =`)** | Clears a string setting (enabling downstream path derivation where supported). |
+| **Active empty number or boolean** | Rejected with a configuration error (does not fall back to defaults). |
+| **Active empty list** | Clears token/dataset filters; column projection lists must remain non-empty. |
+
+- **Quoting & Comments:** Wrap paths containing `#`, `;`, or commas in quotes (`"..."`); unquoted `#` or `;` starts an inline comment.
+- **Booleans:** Accept `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off` (case-insensitive).
+- **Compile-Time Only Parameters:** Settings marked `INI override: No` in the [Parameter Reference](CPP_PIPELINE_PARAMETERS.md) must be edited in `config/*.hpp` (or Lite's `Initialize.hpp`) followed by `make clean && make -j4`.
+
+---
+
+## Build and Run
+
+### 1. Compile the Executable
+
+Build directly with `make` when libraries are on standard system paths, or pass path overrides:
+
+```bash
+cd cpp_Standard                 # Or cpp_Lite
+
+# Standard system paths
 make -j4
-```
 
-For dependencies under a common prefix:
-
-```bash
+# Custom scientific stack prefix
 make CXX=/path/to/mpicxx STACK_PREFIX=/opt/science-stack -j4
-```
 
-For a separate Eigen installation:
-
-```bash
+# Separate Eigen3 include path
 make CXX=/path/to/mpicxx STACK_PREFIX=/opt/science-stack \
      EIGEN_INCLUDE=/opt/eigen/include/eigen3 -j4
 ```
 
-| Make variable | Use |
-| --- | --- |
-| `CXX` | MPI C++ compiler wrapper; defaults to `mpicxx` |
-| `STACK_PREFIX` | Adds the prefix's include, Eigen and library directories |
-| `EIGEN_INCLUDE` | Directory containing `Eigen/Dense` |
+| Make Variable | Default | Description |
+| :--- | :--- | :--- |
+| `CXX` | `mpicxx` | MPI C++17 compiler wrapper. |
+| `STACK_PREFIX` | *(empty)* | Adds `<prefix>/include`, `<prefix>/include/eigen3`, and `<prefix>/lib`. |
+| `EIGEN_INCLUDE` | *(empty)* | Explicit directory containing `Eigen/Dense`. |
 
-The build targets are `all` and `clean`. After changing configuration headers or
-the toolchain, run `make clean` and rebuild. Do not compile or clean the same
-source tree concurrently with another build or a running job.
+> [!CAUTION]
+> Always run `make clean` before rebuilding after modifying any `.hpp` header or switching compilers. Never run concurrent builds or clean operations in the same source directory while a job is executing.
 
-## Configure
+### 2. Launch with MPI
 
-```text
-Compiled defaults in config/*.hpp (and Lite Initialize.hpp)
-                         ↓ overridden only by explicit INI entries
-                      --config PATH
-```
-
-From the selected source directory:
+Use at least **2 MPI ranks** for normal distributed processing:
 
 ```bash
-cp pipeline.example.ini pipeline.ini
+mpirun -np 4 ./Fourier_Quad_Pipe --config /absolute/path/to/pipeline.ini
 ```
 
-The template is an annotated catalog of settings. Its commented blank entries
-retain the compiled defaults; **it does not disable phases or replace the
-original site's data paths automatically**. Review paths, datasets, detector
-geometry, source-catalog schema and enabled phases before running.
+| Command-Line Invocation | Execution Behavior |
+| :--- | :--- |
+| `./Fourier_Quad_Pipe` | Uses compiled header defaults only (no automatic `pipeline.ini` lookup). |
+| `./Fourier_Quad_Pipe --config file.ini` | Applies `file.ini` overrides on top of compiled defaults. |
+| `./Fourier_Quad_Pipe --config=file.ini` | Equivalent single-argument syntax. |
 
-| INI section | What to configure |
-| --- | --- |
-| `[process]` | Top-level phase switches, exposure lists and downstream outputs |
-| `[astrocat]` | Raw Gaia input, tile output and header/replacement policy |
-| `[extcat]` | Raw source catalogs, column schema, projection and tile output |
-| `[init]` | Science/DQ roots, dataset names, archive filters and rerun policy |
-| `[lensing]` | Main-stage selection, surviving scientific branches, catalogs and geometry |
+*(All other application CLI flags are rejected; MPI launcher flags such as `mpirun -np` belong to the MPI runtime.)*
 
-### Omitted is not the same as empty
+---
 
-```ini
-[lensing]
-# pixel_size =                  # Keep the compiled value.
-pixel_size = 0.2628              # Explicitly override it.
+## Workflow Phases & Main Stages
+
+### Top-Level Phase Execution Order
+
+Catalog preparation phases (`astrocat`, `extcat`) execute once per run. Enabled dataset phases (`init`, `main`, `rearr`, `fd`) then execute sequentially for each configured `TARGET:PREFIX` dataset:
+
+| Order | Phase Name | `[process]` Switch | Input | Primary Output |
+| :---: | :--- | :--- | :--- | :--- |
+| **1** | `process_astrocat` | `run_process_astrocat` | Raw 2-column Gaia files | Canonical $1^\circ \times 1^\circ$ Gaia tiles (`astra_*.dat`) |
+| **2** | `process_extcat` | `run_process_extcat` | Raw external source catalogs | Canonical $1^\circ \times 1^\circ$ source tiles (`extern_*.dat`) |
+| **3** | `process_init` | `run_process_init` | Science & DQ `.fits.fz` archives | Extracted CCD FITS tree + `expo_<target>.list` |
+| **4** | `process_main` | `run_process_main` | Extracted CCDs + reference tiles | Per-exposure shear catalogs (`<exposure>_all.cat`) |
+| **5** | `process_rearr` | `run_process_rearr` | Per-exposure shear catalogs | Spatially partitioned subcatalogs (`baked/subcat_*.cat`) |
+| **6** | `process_fd` | `run_process_fd` | Spatial subcatalogs + metadata | Field-Distortion shear recovery (`fdout/FD_test_comb.dat`) |
+
+### 9-Stage Scientific Pipeline (`process_main`)
+
+Inside `process_main`, exposures are dynamically load-balanced across MPI ranks while chips within each exposure are processed sequentially. Active stages are controlled via **prime factor decomposition** in `[lensing].process_stage`:
+
+```mermaid
+flowchart TD
+    S1["Stage 1 (Prime 2)<br/>Background & Noise Normalization + Gaia Match"] --> S2["Stage 2 (Prime 3)<br/>PU Polynomial Astrometric Solution"]
+    S2 --> S3["Stage 3 (Prime 5)<br/>SNR Source Detection, Deblending & Star Candidates"]
+    S3 --> S4["Stage 4 (Prime 7)<br/>FFT Power Spectra of Star Candidates"]
+    S4 --> S5["Stage 5 (Prime 11)<br/>PSF Star Selection (χ²) & Spatial Polynomial / PCA Model"]
+    S5 --> S6["Stage 6 (Prime 13)<br/>FFT Power Spectra & Noise Subtraction of Galaxies"]
+    S6 --> S7["Stage 7 (Prime 17)<br/>Fourier_Quad Deconvolution & 5 Shear Estimators (g1, g2, de, h1, h2)"]
+    S7 --> S8["Stage 8 (Prime 19)<br/>Exposure-Level Diagnostics Aggregation"]
+    S8 --> S9["Stage 9 (Prime 23)<br/>Catalog Assembly, Quality Cuts & Distortion Calibration"]
 ```
 
-An omitted or commented key preserves its compiled value. An active empty string
-clears a string setting; an empty numeric or boolean value is an error. Empty
-lists are accepted only where that setting allows them. Use quotes around paths
-containing `#` or `;`; those characters otherwise start an inline comment.
-Booleans accept `true/false`, `1/0`, `yes/no` and `on/off`.
+- **Full 9-Stage Product:** `2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 = 223092870` (default).
+- **Partial Runs:** Multiply only the primes of the stages you wish to execute (prerequisite stage products must already exist on disk; **Stage 9 (`23`) strictly requires Stage 8 (`19`)**).
 
-For native runs, put paths directly in your INI and keep it wherever convenient.
-The native program does not require JSON, env files or the container launcher.
+---
 
-### Settings that require rebuilding
+## Common Run Recipes
 
-The parameter reference marks all settings with an INI override. Change those
-in the INI for the next run. For all other settings, edit the relevant header and
-rebuild. Change source values rather than derived sizes, array lengths or catalog
-indices. In Lite, edit `Initialize.hpp` when the corresponding header value is an
-alias of `Initialize::*`.
+Merge the relevant snippet below into your `pipeline.ini` and launch with `mpirun -np 4 ./Fourier_Quad_Pipe --config /path/to/pipeline.ini`.
 
-## Run
-
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe --config /absolute/path/pipeline.ini
-```
-
-Use at least two MPI processes for the normal parallel workflow. On an HPC
-system, request resources in your own job script and use the site's supported
-MPI launcher. Native execution does not require Apptainer.
-
-| Invocation | Result |
-| --- | --- |
-| `Fourier_Quad_Pipe` | Uses compiled defaults only; no automatic INI lookup |
-| `Fourier_Quad_Pipe --config file.ini` | Applies this INI over compiled defaults |
-| `Fourier_Quad_Pipe --config=file.ini` | Equivalent explicit INI selection |
-
-All other application options, including the former `--help` and positional
-exposure-list argument, have been removed. MPI launch options such as
-`mpirun -np` belong to the MPI launcher and are unchanged. Supply a single
-`--config`; repeated or incomplete selections are errors.
-
-## Phase order
-
-`process_astrocat` and `process_extcat` run once. Each enabled dataset phase then
-runs for each dataset in sequence; a collective failure stops subsequent work.
-
-| Order | `[process]` key | Work |
-| --- | --- | --- |
-| 1 | `run_process_astrocat` | Publish one-degree Gaia tiles |
-| 2 | `run_process_extcat` | Publish canonical external source tiles |
-| 3 | `run_process_init` | Extract archives and publish exposure lists |
-| 4 | `run_process_main` | Run the numerical shear pipeline |
-| 5 | `run_process_rearr` | Spatially partition exposure catalogs |
-| 6 | `run_process_fd` | Measure shear in field-distortion bins |
-
-At least one phase must be enabled. An initializer run hands its generated
-absolute `expo_<target>.list` to the later dataset phases automatically.
-
-### Main numerical stages
-
-Set `[lensing].process_stage` to the product of the primes for the stages to run.
-The full product, `223092870`, enables all nine stages. A partial run requires
-valid products from its prerequisite stages; **Stage 9 requires Stage 8**.
-
-| Stage | Prime | Work |
-| --- | --- | --- |
-| 1 | 2 | Background/noise preprocessing and Gaia matching |
-| 2 | 3 | Astrometric solution |
-| 3 | 5 | Source detection, deblending and star candidates |
-| 4 | 7 | Star-candidate power spectra |
-| 5 | 11 | PSF selection and modeling |
-| 6 | 13 | Galaxy power spectra |
-| 7 | 17 | Fourier_Quad estimators and morphology |
-| 8 | 19 | Exposure diagnostics |
-| 9 | 23 | Catalog combination and calibration |
-
-## Run recipes
-
-Each block below is an INI fragment to merge into your selected variant's
-configuration, not an additional command-line option list. Keep the required
-paths and scientific settings for your own data.
-
-### Initialize archives only
-
-```ini
-[process]
-run_process_astrocat = false
-run_process_extcat = false
-run_process_init = true
-run_process_main = false
-run_process_rearr = false
-run_process_fd = false
-
-[init]
-science_root = /data/archive/science
-dq_root = /data/archive/dq
-output_root = /data/work
-datasets = g2019:c4d_19
-contains = v1
-existing = fail
-```
-
-Choose `existing = resume` to validate and reuse compatible outputs, or
-`overwrite` to replace outputs intentionally. Neither policy makes an old output
-schema compatible with a different program version.
-
-### Main processing only
-
-```ini
-[process]
-run_process_astrocat = false
-run_process_extcat = false
-run_process_init = false
-run_process_main = true
-run_process_rearr = false
-run_process_fd = false
-expo_list = /data/work/expo_g2019.list
-
-[init]
-datasets = g2019:c4d_19
-```
-
-Configure Gaia/source catalogs and detector geometry as described in
-[data preparation](DATA_PREPARATION.md). Existing list contents must point to
-readable image paths with the established dataset layout.
-
-### Prepare Gaia tiles only
+<details>
+<summary><b>Recipe 1: Prepare Gaia & External Source Tiles Only</b></summary>
 
 ```ini
 [process]
 run_process_astrocat = true
-run_process_extcat = false
-run_process_init = false
-run_process_main = false
-run_process_rearr = false
-run_process_fd = false
+run_process_extcat   = true
+run_process_init     = false
+run_process_main     = false
+run_process_rearr    = false
+run_process_fd       = false
 
 [astrocat]
-input_directory = /data/gaia/raw
+input_directory  = /data/gaia/raw
 output_directory = /data/gaia/tiles
-add_header = true
-existing_policy = fail
+add_header       = true
+existing_policy  = fail
+
+[extcat]
+input_directory  = /data/sources/raw
+output_directory = /data/sources/tiles
 ```
 
-Publication does not change the main consumer's Gaia directory or filename
-layout. Match both when subsequently running the main phase.
+> Match `[lensing].astrometry_cat` (and `[lensing].astrometry_cat_type = 2` in Standard) and `[lensing].source_cat` to these output directories in subsequent measurement runs.
+</details>
 
-### Prepare external source tiles only
+<details>
+<summary><b>Recipe 2: Initialize Science/DQ Archives Only</b></summary>
 
 ```ini
 [process]
 run_process_astrocat = false
-run_process_extcat = true
-run_process_init = false
-run_process_main = false
-run_process_rearr = false
-run_process_fd = false
+run_process_extcat   = false
+run_process_init     = true
+run_process_main     = false
+run_process_rearr    = false
+run_process_fd       = false
 
-[extcat]
-input_directory = /data/sources/raw
-output_directory = /data/sources/tiles
+[init]
+science_root = /data/archive/science
+dq_root      = /data/archive/dq
+output_root  = /data/work
+datasets     = g2019:c4d_19
+contains     = v1
+existing     = fail             # fail | resume | overwrite
 ```
+</details>
 
-Set the raw schema, header/delimiter handling, optional projection and magnitude
-columns in `[extcat]`. Lite's later main run also needs
-`[lensing].source_cat` to point to the generated tiles.
+<details>
+<summary><b>Recipe 3: Run Main Shear Measurement on an Existing Exposure List</b></summary>
 
-Launch any of these configurations with the same command:
+```ini
+[process]
+run_process_astrocat = false
+run_process_extcat   = false
+run_process_init     = false
+run_process_main     = true
+run_process_rearr    = false
+run_process_fd       = false
+expo_list            = /data/work/expo_g2019.list
 
-```bash
-mpirun -np 4 ./Fourier_Quad_Pipe --config /absolute/path/pipeline.ini
+[init]
+datasets = g2019:c4d_19
+
+[lensing]
+astrometry_cat = /data/gaia/tiles
+source_cat     = /data/sources/tiles
+process_stage  = 223092870
 ```
+</details>
 
-## Outputs
+---
 
-Initialization reads compressed archives in place and publishes:
+## Output Directory Structure & Products
 
 ```text
-output_root/
-├── expo_<target>.list
-├── fits_<target>.list
-└── <target>/
-    ├── science/
-    ├── dqmask/
-    ├── expolists/
-    ├── stamps/
-    ├── astrometry/
-    └── result/
+<output_root>/
+├── expo_<target>.list                  # Top-level exposure list (per-exposure chip lists)
+├── fits_<target>.list                  # Extracted Science FITS manifest
+└── <target>/                           # Dataset root (e.g., g2019/)
+    ├── science/                        # Extracted per-CCD Science FITS
+    ├── dqmask/                         # Extracted per-CCD DQ mask FITS
+    ├── expolists/                      # Per-exposure chip lists
+    ├── astrometry/                     # WCS headers and astrometric residuals
+    ├── stamps/                         # Intermediate stamps, power spectra, PSF models
+    ├── result/
+    │   └── <exposure>_all.cat          # Per-exposure combined shear catalog (49 cols default)
+    ├── baked/
+    │   └── subcat_*.cat                # Spatially partitioned subcatalogs (process_rearr)
+    └── fdout/
+        └── FD_test_comb.dat            # Field-distortion calibration table (process_fd)
 ```
 
-An initializer manifest accompanies the published products. Per-exposure chip
-lists are under `<target>/expolists/`; numerical products are under `stamps/`.
+- **Catalog Width:** By default (`ext_cat = 1` with 18 external columns), `<exposure>_all.cat` has **49 columns**: `18` external source fields + `EXPO_NUM` + `ccD_NUM` + `28` Stage-7 shear/morphology fields + exposure `Chi2`. Standard's `ext_cat = 0` branch outputs **31 columns**.
 
-| Product | Purpose |
-| --- | --- |
-| `<dataset>/result/<exposure>_all.cat` | Per-exposure shear catalog |
-| `<dataset>/baked/subcat_*.cat` | Default rearranged catalogs, spatially grouped |
-| `<dataset>/fdout/FD_test_comb.dat` | Default field-distortion measurement table |
-
-The default full catalog has **49 columns**: 18 external source fields,
-`EXPO_NUM`, `ccD_NUM`, 28 Stage-7 fields and exposure `Chi2`. Its width changes
-with the configured external prefix. Standard's no-external-catalog branch has
-31 columns. Regenerate downstream products when their schema is incompatible;
-do not mix earlier 48/30-column products with the current layout.
-
-Absolute rearrangement/FD output directories override their base. Relative
-output names are resolved under the configured base or the dataset root. The
-parameter reference documents the exposure-list and output fallback rules.
+---
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| MPI compiler or library not found | `CXX`, `STACK_PREFIX`, `EIGEN_INCLUDE` and the loaded site environment |
-| Unknown option | Use only `--config`; move scientific values into the INI |
-| Unknown INI key | Key spelling and whether the selected variant supports it |
-| A commented setting appears to have no effect | Comments preserve compiled defaults; uncomment and supply a valid value |
-| Gaia/source tiles cannot be found | Directory, filename layout, prefix and sky coverage |
-| Wrong catalog fields | One-based raw columns, projection flags, retained magnitude bands and complete row width |
-| Rerun refuses existing products | Select `fail`, `resume` or `overwrite` intentionally; keep schemas compatible |
-| Stage 9 rejected | Include Stage 8, with factor 19, in `process_stage` |
-| Outputs appear in an unexpected dataset | Inspect paths inside the exposure/chip lists, not just `output_root` |
-
-Keep the exact source version, header changes, INI, software versions and job
-resource settings with each analysis.
+| Symptom / Error | Cause & Resolution |
+| :--- | :--- |
+| **MPI compiler or library not found** | Check `CXX`, `STACK_PREFIX`, `EIGEN_INCLUDE`, and loaded `module` environment. |
+| **Unknown CLI option** | Only `--config PATH` is accepted; move all phase/path options into `pipeline.ini`. |
+| **Unknown INI key** | Verify key spelling and confirm the key is not a Standard-only branch used with `cpp_Lite`. |
+| **Commented INI entry has no effect** | `# key =` retains compiled defaults; remove `#` and provide an explicit value. |
+| **Missing Gaia or source tiles** | Check directory path, Type-1 vs. Type-2 naming (`astrometry_cat_type`), prefix, and sky footprint. |
+| **Stage 9 (`23`) rejected** | Include Stage 8 (`19`) in `[lensing].process_stage`. |
+| **Rerun refuses existing outputs** | Set `[init].existing` (or catalog `existing_policy`) to `resume` or `overwrite`. |
+| **Outputs written to unexpected path** | Downstream phases derive dataset roots from the FITS paths inside `expo_<target>.list`, not solely from `[init].output_root`. |

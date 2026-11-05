@@ -1,13 +1,41 @@
-# Container path reference
+# 🔗 Container Path Reference
 
-[Home](README.md) · [Docker](DOCKER.md) · [HPC containers](HPC.md)
+[🏠 Home](README.md) · [🐳 Docker Guide](DOCKER.md) · [🏔️ HPC Apptainer](HPC.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md)
 
-C++ does not know host-side bind sources. JSON connects two independent pieces:
-`mounts` makes host files visible at container destinations; `paths` writes
-those destinations into the generated C++ INI. The generator creates the HPC
-env from the same mount list. There is no fixed limit on the number of entries.
+The C++ executable (`Fourier_Quad_Pipe`) sees only the filesystem inside its runtime environment. When using [Docker](DOCKER.md) or [HPC Apptainer](HPC.md), `cpp_docker/project.json` bridges host storage and C++ INI configuration through two sections:
+- **`mounts`:** Binds host directories/files into container destinations (for both Docker and Apptainer).
+- **`paths`:** Writes those container destinations into the managed block of the generated `pipeline.ini`.
 
-## Mount once, reuse below it
+*(Native runs do not use `project.json`; place ordinary host paths directly into your `pipeline.ini`.)*
+
+---
+
+## 🗺️ How `mounts` and `paths` Connect
+
+```mermaid
+flowchart LR
+    subgraph Host["Host Filesystem"]
+        H1["/shared/observations"]
+        H2["/shared/results"]
+    end
+    subgraph Container["Container Mounts (project.json: mounts)"]
+        C1["/observations (ro)"]
+        C2["/results (rw, create: true)"]
+    end
+    subgraph INI["Generated pipeline.ini (project.json: paths)"]
+        I1["[init].science_root = /observations/science"]
+        I2["[init].dq_root = /observations/dq"]
+        I3["[init].output_root = /results"]
+    end
+    H1 -->|"Bind Mount"| C1
+    H2 -->|"Bind Mount"| C2
+    C1 --> I1 & I2
+    C2 --> I3
+```
+
+### Shared Parent Mount Example
+
+Mount a common parent directory once and reference multiple subdirectories under it in `paths`:
 
 ```json
 {
@@ -23,93 +51,69 @@ env from the same mount list. There is no fixed limit on the number of entries.
 }
 ```
 
-This is a fragment to merge into a complete project JSON. Science and DQ share
-one parent mount; generated dataset subdirectories share the output mount.
-Mount only what your selected workflow needs.
+### `mounts` Entry Specification
 
-| Mount field | Rule |
-| --- | --- |
-| `host` | Host directory or ordinary file; relative to the JSON directory when not absolute. |
-| `container` | Absolute destination. Paths containing spaces are supported; colons, commas and newlines are not. |
-| `mode` | `ro` by default; use `rw` for outputs or mutable data. |
-| `create` | Optional Boolean, default false. Only `rw` directories may be created automatically. |
+| Field | Rule & Constraints |
+| :--- | :--- |
+| **`host`** | Host directory or regular file. Relative paths are resolved against the directory containing `project.json`. Must exist unless `mode: "rw"` and `create: true`. |
+| **`container`** | Absolute path inside the container. Spaces are supported; colons (`:`), commas (`,`), and newlines are forbidden. System, `/workspace/src_pipe`, and `/fq-config` paths are reserved. |
+| **`mode`** | `"ro"` (default, read-only) or `"rw"` (read-write for outputs). |
+| **`create`** | Optional boolean (`false` by default). Only `"rw"` directories may be auto-created on the host. |
 
-Input paths must exist. Extra mounts need not correspond to a dedicated INI
-key; they may serve files named by an exposure list or another mounted file.
-Mount an output file's **parent directory** when the program needs to create,
-rename or replace it. Read-only input files can be mounted individually.
+> [!TIP]
+> - When the pipeline needs to create, rename, or overwrite an output file, always mount its **parent directory** as `"rw"`.
+> - Explicit parent/child mounts are supported (the deepest matching container path governs visibility and permissions), though duplicate `container` destinations are rejected.
 
-## Every program path interface
+---
 
-The table covers all runtime file/directory interfaces in both variants. `null`
-or an omitted JSON key leaves the INI entry commented, except for the linked
-producer/consumer behavior described below. An explicit `""` writes an active
-empty string, preserving that field's existing C++ empty-value semantics.
+## 📋 Complete `paths` Key Reference
 
-| JSON `paths` key | Use | Notes |
-| --- | --- | --- |
-| `init.science_root` | Science archive input | Readable directory. |
-| `init.dq_root` | DQ archive input | Required when the selected workflow reads DQ. |
-| `init.output_root` | Dataset and initialization output | Writable root; includes Science/DQ extractions, stamps, results, lists and astrometry. |
-| `astrocat.input_directory` | Raw Gaia input | Flat directory, not recursive. |
-| `astrocat.output_directory` | Gaia tile publication | Writable when catalog preparation is enabled. |
-| `lensing.astrometry_cat` | Main-phase Gaia tiles | Usually the same mount as Gaia publication. |
-| `extcat.input_directory` | Raw source-catalog input | Recursive behavior is a scientific INI setting. |
-| `extcat.output_directory` | Source tile publication | Also the main input in Standard; independent in Lite. |
-| `lensing.source_cat` | Main source tiles | Alias in Standard; independent input in Lite. |
-| `lensing.flat_path` | Super-flat input | Standard only. |
-| `lensing.psf_path` | External PSF input | Standard only. |
-| `process.expo_list` | Existing top-level exposure list | Input file, not directory; empty derives a per-dataset list. |
-| `process.rearr_output_directory` | Rearranged catalog output | Absolute directory or relative name such as `baked`. |
-| `process.rearr_output_base_directory` | Base for relative rearrangement output | Empty uses the dataset root derived from input images. |
-| `process.rearranged_expo_list_filename` | Published rearranged list name | Filename; an absolute value is a file path, not a directory. |
-| `process.rearranged_expo_list_directory` | Published rearranged list directory | Empty uses the input-list parent. |
-| `process.fd_expo_list` | FD input list | Input file; empty derives the published rearranged list. |
-| `process.fd_output_directory` | FD output | Absolute directory or relative name such as `fdout`. |
-| `process.fd_output_base_directory` | Base for relative FD output | Empty uses the dataset root. |
+Omitting a key or setting it to `null` leaves the corresponding INI entry commented (`# key =`), except where linked producer/consumer aliases apply below. Setting an explicit empty string `""` writes an active empty assignment (`key =`).
 
-Relative output names do not need their own mount. Do not assign a single fixed
-rearrangement/FD destination to multiple datasets unless that sharing is
-intentional: per-dataset defaults avoid output collisions.
+| JSON `paths` Key | INI Target | Direction & Mode | Description & Variant Notes |
+| :--- | :--- | :---: | :--- |
+| `init.science_root` | `[init].science_root` | Input (`ro`) | Science FITS/FZ archive directory. |
+| `init.dq_root` | `[init].dq_root` | Input (`ro`) | DQ mask archive directory (required when workflow reads DQ). |
+| `init.output_root` | `[init].output_root` | Output (`rw`) | Writable parent root for extracted datasets, lists, stamps, and results. |
+| `astrocat.input_directory` | `[astrocat].input_directory` | Input (`ro`) | Flat directory of raw 2-column Gaia files. |
+| `astrocat.output_directory` | `[astrocat].output_directory` | Output (`rw`) | Destination for generated $1^\circ \times 1^\circ$ Gaia tiles. |
+| `lensing.astrometry_cat` | `[lensing].astrometry_cat` | Input (`ro`) | Main-phase Gaia tile directory (often shared with `astrocat.output_directory`). |
+| `extcat.input_directory` | `[extcat].input_directory` | Input (`ro`) | Raw external source catalog directory. |
+| `extcat.output_directory` | `[extcat].output_directory` | Output (`rw`) | Destination for generated $1^\circ \times 1^\circ$ source tiles (also main input in Standard). |
+| `lensing.source_cat` | `[lensing].source_cat` | Input (`ro`) | Main-phase source tile directory (alias in Standard; independent in Lite). |
+| `lensing.flat_path` | `[lensing].flat_path` | Input (`ro`) | Super-flat calibration directory (**Standard only**). |
+| `lensing.psf_path` | `[lensing].psf_path` | Input (`ro`) | External PSF root directory (**Standard only**). |
+| `process.expo_list` | `[process].expo_list` | Input file (`ro`) | Existing top-level exposure list file (empty derives per-dataset list). |
+| `process.rearr_output_directory` | `[process].rearr_output_directory` | Output (`rw`) | Rearranged catalog directory (absolute path or relative name like `"baked"`). |
+| `process.rearr_output_base_directory` | `[process].rearr_output_base_directory` | Output (`rw`) | Base directory for relative rearrangement output (empty uses dataset root). |
+| `process.rearranged_expo_list_filename` | `[process].rearranged_expo_list_filename` | Output file | Filename for published rearranged list (an absolute path is treated as a file path). |
+| `process.rearranged_expo_list_directory` | `[process].rearranged_expo_list_directory` | Output (`rw`) | Directory for published rearranged list (empty uses input exposure-list parent). |
+| `process.fd_expo_list` | `[process].fd_expo_list` | Input file (`ro`) | Explicit FD input list file (empty derives the rearranged list). |
+| `process.fd_output_directory` | `[process].fd_output_directory` | Output (`rw`) | FD output directory (absolute path or relative name like `"fdout"`). |
+| `process.fd_output_base_directory` | `[process].fd_output_base_directory` | Output (`rw`) | Base directory for relative FD output (empty uses dataset root). |
 
-## Linked paths and aliases
+---
 
-| Relationship | Generator behavior |
-| --- | --- |
-| Gaia publication ↔ main Gaia input | If only one path is specified, write both INI paths with that value. Two explicit values remain independent. |
-| Standard source publication ↔ main source input | One effective C++ field. Conflicting explicit values are rejected; only the authoritative `[extcat].output_directory` key is emitted. |
-| Lite source publication ↔ main source input | Independent C++ fields. If only one path is specified, initialize both to it; two explicit values remain independent. |
-| Dataset product subdirectories | Derived by C++ under the dataset root; no individual mount required. |
+## 🔄 Linked Producer & Consumer Path Behavior
 
-These conveniences belong to the generator; they do not change native C++
-configuration semantics. Shared catalog mounts can be read-only for
-measurement-only runs and must be writable when their preparation phase runs.
+When `fqctl.py configure` generates `pipeline.ini`, it applies convenient synchronization rules for catalog paths:
 
-## Additional directories and files
+| Path Pair | `fqctl.py configure` Behavior |
+| :--- | :--- |
+| **Gaia Tiles**<br/>(`astrocat.output_directory` ↔ `lensing.astrometry_cat`) | If only one is specified in `project.json`, both INI keys receive that path. If both are specified, they remain independent. |
+| **Standard Source Tiles**<br/>(`extcat.output_directory` ↔ `lensing.source_cat`) | Address a single underlying C++ field in `cpp_Standard`. Conflicting explicit values are rejected; emits `[extcat].output_directory`. |
+| **Lite Source Tiles**<br/>(`extcat.output_directory` ↔ `lensing.source_cat`) | Independent C++ fields in `cpp_Lite`. If only one is specified in `project.json`, both INI keys are initialized to that value; two explicit values remain independent. |
+| **Dataset Subdirectories**<br/>(`science/`, `dqmask/`, `stamps/`, `result/`, `baked/`, `fdout/`) | Automatically derived by C++ under the dataset root—no separate mount entries needed when `init.output_root` is mounted. |
 
-Append a mount to the JSON list:
+---
 
-```json
-{"host": "/shared/extra catalog", "container": "/extra/catalog", "mode": "ro"}
-```
+## ➕ Mounting Additional Files & Exposure Lists
 
-Or add a read-only list file and refer to it through `process.expo_list`:
+You can add arbitrary extra mounts in `mounts` even if they are not directly assigned to a key in `paths` (for example, directories referenced inside an existing `expo_<target>.list` or symlink targets):
 
 ```json
 {"host": "/shared/lists/expo_gband.list", "container": "/extra/expo.list", "mode": "ro"}
 ```
 
-Rerun `configure` after changing JSON. Absolute paths inside list files are not
-rewritten: mount their referenced dataset paths too. Symbolic-link targets must
-also be visible inside the container.
-
-Repeated destinations are rejected. Explicit parent/child mounts are supported;
-the deepest destination governs the visible contents and permissions. Be
-careful that a child mount hides that part of its parent. System/toolchain,
-source and generated-configuration destinations are reserved by the launcher.
-
-## Native runs
-
-None of this JSON is required for a native C++ run. Use host filesystem paths
-in your own INI, or configure the headers and rebuild. See the
-[C++ guide](CPP_GUIDE.md#configure).
+> [!WARNING]
+> Absolute paths recorded inside `expo_<target>.list` and per-exposure chip lists are **not rewritten** by `fqctl.py`. Every FITS path referenced inside an exposure list (and any symlink target) must be mounted at that exact container path.
