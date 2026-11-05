@@ -20,7 +20,7 @@ inline constexpr const char* EXPO_LIST = "";  // Top-level exposure-list path.
 inline constexpr const char* REARR_OUTPUT_DIRECTORY = "baked";  // Rearranged catalogs.
 inline constexpr const char* REARR_OUTPUT_BASE_DIRECTORY = "";  // Empty uses dataset root.
 inline constexpr const char* REARRANGED_EXPO_LIST_FILENAME =
-    "cat_gband_ori.list";  // Published rearranged list name.
+    "cat_gband.list";  // Published rearranged list name.
 inline constexpr const char* REARRANGED_EXPO_LIST_DIRECTORY = "";  // Input-list parent.
 inline constexpr const char* FD_EXPO_LIST = "";  // Optional FD-specific list.
 inline constexpr const char* FD_OUTPUT_DIRECTORY = "fdout";  // FD results.
@@ -32,23 +32,23 @@ namespace LensingConfig {
 
 // Catalog and calibration inputs originally supplied by para.inc.
 inline const std::string ASTROMETRY_CAT =
-    "/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted";  // Gaia tiles.
+    "/path/to/gaia_cat";  // Gaia tiles.
 inline const std::string SOURCE_CAT =
-    "/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat";  // External source tiles.
+    "/path/to/source_cat";  // External source tiles.
 inline const std::string FLAT_PATH =
-    "/lustre/home/acct-phyzj/share/DES/testy/DES_super_flat/i2014";  // Super-flat FITS.
-inline const std::string PSF_PATH = "hahahaha";  // External PSF FITS root.
+    "/path/to/super_flat";  // Super-flat FITS.
+inline const std::string PSF_PATH = "/path/to/psf";  // External PSF FITS root.
 
 }  // namespace LensingConfig
 
 namespace InitConfig {
 
 inline constexpr const char* SCIENCE_ROOT =
-    "/lustre/home/acct-phyzj/share/DES/g";  // Science archive root.
+    "/path/to/archive/science";  // Science archive root.
 inline constexpr const char* DQ_ROOT =
-    "/lustre/home/acct-phyzj/share/DES/mask_v1/g_mask";  // DQ archive root.
+    "/path/to/archive/dqmask";  // DQ archive root.
 inline constexpr const char* OUTPUT_ROOT =
-    "/lustre/home/acct-phyzj/share/DES/g_band_v1";  // Pipeline output root.
+    "/path/to/processed/dir";  // Pipeline output root.
 
 }  // namespace InitConfig
 
@@ -72,7 +72,7 @@ inline const std::string& EXTCAT_OUTPUT_DIRECTORY =
 
 namespace ProcessRearrConfig {
 
-inline constexpr std::string_view SKIP_DIRECTORY_NAME = "Large_Field";  // Excluded scan root.
+inline constexpr std::string_view SKIP_DIRECTORY_NAME = "";  // Excluded scan root.
 inline constexpr std::string_view SUBCAT_PREFIX = "subcat_";  // Partition prefix.
 inline constexpr std::string_view SUBCAT_EXTENSION = ".cat";  // Partition extension.
 inline constexpr std::string_view SUMMARY_FILENAME = "catalog_summary.txt";  // Summary output.

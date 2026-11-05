@@ -38,14 +38,14 @@ Edit `config/ProcessConfig.hpp` for phase defaults and `config/pathconfig.hpp` f
 | --- | --- | --- | --- |
 | `RUN_PROCESS_ASTROCAT` (`bool`) | `false` | `[process].run_process_astrocat` | Prepare Gaia tiles once, before other phases. |
 | `RUN_PROCESS_EXTCAT` (`bool`) | `false` | `[process].run_process_extcat` | Prepare external source tiles once, before dataset phases. |
-| `RUN_PROCESS_INIT` (`bool`) | `true` | `[process].run_process_init` | Extract Science/DQ archives and publish dataset lists. |
-| `RUN_PROCESS_MAIN` (`bool`) | `true` | `[process].run_process_main` | Run the numerical measurement stages. |
-| `RUN_PROCESS_REARR` (`bool`) | `true` | `[process].run_process_rearr` | Spatially partition per-exposure catalogs. |
-| `RUN_PROCESS_FD` (`bool`) | `true` | `[process].run_process_fd` | Run scientific field-distortion analysis; this is not a container diagnostic. |
+| `RUN_PROCESS_INIT` (`bool`) | `false` | `[process].run_process_init` | Extract Science/DQ archives and publish dataset lists. |
+| `RUN_PROCESS_MAIN` (`bool`) | `false` | `[process].run_process_main` | Run the numerical measurement stages. |
+| `RUN_PROCESS_REARR` (`bool`) | `false` | `[process].run_process_rearr` | Spatially partition per-exposure catalogs. |
+| `RUN_PROCESS_FD` (`bool`) | `false` | `[process].run_process_fd` | Run scientific field-distortion analysis; this is not a container diagnostic. |
 | `EXPO_LIST` (`const char*`) | `""` | `[process].expo_list` | Top-level exposure-list file for downstream-only processing. Empty derives `output_root/expo_<target>.list`. One explicit list cannot serve multiple main/rearrangement datasets. |
 | `REARR_OUTPUT_DIRECTORY` (`const char*`) | `"baked"` | `[process].rearr_output_directory` | Rearranged catalog directory: absolute, or relative to the configured base/dataset root. Empty selects the base itself. |
 | `REARR_OUTPUT_BASE_DIRECTORY` (`const char*`) | `""` | `[process].rearr_output_base_directory` | Base for relative rearrangement output. Empty derives the dataset root from input image paths. |
-| `REARRANGED_EXPO_LIST_FILENAME` (`const char*`) | `"cat_gband_ori.list"` | `[process].rearranged_expo_list_filename` | Published rearranged-list filename. It is a file name, not a directory. |
+| `REARRANGED_EXPO_LIST_FILENAME` (`const char*`) | `"cat_gband.list"` | `[process].rearranged_expo_list_filename` | Published rearranged-list filename. It is a file name, not a directory. |
 | `REARRANGED_EXPO_LIST_DIRECTORY` (`const char*`) | `""` | `[process].rearranged_expo_list_directory` | Directory for the published list. Empty uses the input exposure-list parent. |
 | `FD_EXPO_LIST` (`const char*`) | `""` | `[process].fd_expo_list` | Explicit FD input-list file. Empty selects the rearranged-list directory and filename. |
 | `FD_OUTPUT_DIRECTORY` (`const char*`) | `"fdout"` | `[process].fd_output_directory` | FD output directory: absolute, or relative to the FD base/dataset root. |
@@ -59,9 +59,9 @@ Configured in `config/InitConfig.hpp` and `config/pathconfig.hpp`. Compiled abso
 | --- | --- | --- | --- |
 | `DatasetSpec::target` (`std::string`) | `"gband"` | `[init].datasets` | One nonempty output-directory component, not `.`, `..` or a path; unique within the dataset list. |
 | `DatasetSpec::prefix` (`std::string`) | `"c4d_"` | `[init].datasets` | Nonempty archive basename prefix paired with target. |
-| `SCIENCE_ROOT` (`const char*`) | `"/lustre/home/acct-phyzj/share/DES/g"` | `[init].science_root` | Readable Science archive root. |
-| `DQ_ROOT` (`const char*`) | `"/lustre/home/acct-phyzj/share/DES/mask_v1/g_mask"` | `[init].dq_root` | Readable DQ archive root. Check both initialization and selected mask consumers before omitting DQ. |
-| `OUTPUT_ROOT` (`const char*`) | `"/lustre/home/acct-phyzj/share/DES/g_band_v1"` | `[init].output_root` | Writable parent for dataset trees and published exposure lists. |
+| `SCIENCE_ROOT` (`const char*`) | `"/path/to/archive/science"` | `[init].science_root` | Readable Science archive root. |
+| `DQ_ROOT` (`const char*`) | `"/path/to/archive/dqmask"` | `[init].dq_root` | Readable DQ archive root. Check both initialization and selected mask consumers before omitting DQ. |
+| `OUTPUT_ROOT` (`const char*`) | `"/path/to/processed/dir"` | `[init].output_root` | Writable parent for dataset trees and published exposure lists. |
 | `DATASETS` (`std::vector<DatasetSpec>`) | `{{"gband", "c4d_"}}` | `[init].datasets` | Comma-separated `TARGET:PREFIX` pairs; enabled dataset phases run sequentially for each pair. |
 | `CONTAINS` (`std::vector<std::string>`) | `{"v1"}` | `[init].contains` | Case-sensitive archive basename tokens, OR matched. An active empty list removes this filter. |
 | `ARCHIVE_SUFFIX` (`const char*`) | `".fits.fz"` | No | Case-sensitive archive suffix, removed when forming exposure stems. |
@@ -125,10 +125,10 @@ Compiled definitions are in `config/pathconfig.hpp`. Runtime overrides do not mo
 
 | Parameter (type) | Compiled default | INI override | Meaning and constraints |
 | --- | --- | --- | --- |
-| `ASTROMETRY_CAT` (`std::string`) | `"/lustre/home/acct-phyzj/phyzj/jzhang/gaia/gaia_cat_sorted"` | `[lensing].astrometry_cat` | Main-phase Gaia tile directory (supports Type 1 and Type 2 layouts). |
-| `SOURCE_CAT` (`std::string`) | `"/lustre/home/acct-phyzj/share/DES/testy/des_y6_cat"` | `[lensing].source_cat` / `[extcat].output_directory` | Source-tile input and extcat publication default; the INI aliases update one runtime field. |
-| `FLAT_PATH` (`std::string`) | `"/lustre/home/acct-phyzj/share/DES/testy/DES_super_flat/i2014"` | `[lensing].flat_path` | Readable super-flat FITS directory when `include_flat = 1`. |
-| `PSF_PATH` (`std::string`) | `"hahahaha"` | `[lensing].psf_path` | Placeholder: replace with a readable external PSF root before enabling `ext_psf = 1`. |
+| `ASTROMETRY_CAT` (`std::string`) | `"/path/to/gaia_cat"` | `[lensing].astrometry_cat` | Main-phase Gaia tile directory (supports Type 1 and Type 2 layouts). |
+| `SOURCE_CAT` (`std::string`) | `"/path/to/source_cat"` | `[lensing].source_cat` / `[extcat].output_directory` | Source-tile input and extcat publication default; the INI aliases update one runtime field. |
+| `FLAT_PATH` (`std::string`) | `"/path/to/super_flat"` | `[lensing].flat_path` | Readable super-flat FITS directory when `include_flat = 1`. |
+| `PSF_PATH` (`std::string`) | `"/path/to/psf"` | `[lensing].psf_path` | Placeholder: replace with a readable external PSF root before enabling `ext_psf = 1`. |
 
 ## Branches and geometry (`LensingConfig`)
 
@@ -141,7 +141,7 @@ Edit `config/LensingConfig.hpp`.
 | `chipnx` (`int`) | `2046` | `[lensing].chipnx` | Positive physical CCD width used by geometry-dependent consumers. Stage 1 reads actual FITS axes. |
 | `chipny` (`int`) | `4094` | `[lensing].chipny` | Positive physical CCD height; keep consistent with camera geometry. |
 | `ASTROMETRY_trivial` (`int`) | `0` | `[lensing].astrometry_trivial` | `0`: Gaia astrometry; `1`: deliberately use identity mapping. |
-| `AstroCatType` (`int`) | `1` | `[lensing].astrometry_cat_type` | `1`: legacy large Gaia tiles; `2`: one-degree tiles. |
+| `AstroCatType` (`int`) | `2` | `[lensing].astrometry_cat_type` | `1`: legacy large Gaia tiles; `2`: one-degree tiles. |
 | `PROCESS_stage` (`int`) | `223092870` | `[lensing].process_stage` | Product of enabled primes `2,3,5,7,11,13,17,19,23`. Stage 9 (`23`) requires Stage 8 (`19`). |
 | `include_FLAT` (`int`) | `0` | `[lensing].include_flat` | `0` off; `1` applies super-flat correction. |
 | `include_Mask` (`int`) | `2` | `[lensing].include_mask` | Mask-input selector `0–3`. Review all active consumers before omitting DQ. |

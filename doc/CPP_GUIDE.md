@@ -1,6 +1,6 @@
 # 🛠️ C++ Pipeline User Guide
 
-[🏠 Home](../README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🐳 Docker](DOCKER.md) · [🏔️ HPC](HPC.md)
+[🏠 Home](../README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 Full Parameter Reference](CPP_PIPELINE_PARAMETERS.md) · [🐳 Docker](DOCKER.md) · [🏔️ HPC](HPC.md)
 
 This guide covers **native Linux and HPC deployment** of `Fourier_Quad_Pipe` (`cpp_Standard/`), including environment prerequisites, INI configuration, compilation, MPI execution, and output inspection.
 
@@ -118,7 +118,7 @@ make CXX=/path/to/mpicxx STACK_PREFIX=/opt/science-stack \
 Use at least **2 MPI ranks** for normal distributed processing:
 
 ```bash
-mpirun -np 4 ./Fourier_Quad_Pipe --config /absolute/path/to/pipeline.ini
+mpirun -np 400 ./Fourier_Quad_Pipe --config /absolute/path/to/pipeline.ini
 ```
 
 | Command-Line Invocation | Execution Behavior |
@@ -257,14 +257,14 @@ process_stage  = 223092870
     ├── astrometry/                     # WCS headers and astrometric residuals
     ├── stamps/                         # Intermediate stamps, power spectra, PSF models
     ├── result/
-    │   └── <exposure>_all.cat          # Per-exposure combined shear catalog (49 cols default)
+    │   └── <exposure>_all.cat          # Per-exposure combined shear catalog
     ├── baked/
     │   └── subcat_*.cat                # Spatially partitioned subcatalogs (process_rearr)
     └── fdout/
         └── FD_test_comb.dat            # Field-distortion calibration table (process_fd)
 ```
 
-- **Catalog Width:** By default (`ext_cat = 1` with 18 external columns), `<exposure>_all.cat` has **49 columns**: `18` external source fields + `EXPO_NUM` + `ccD_NUM` + `28` Stage-7 shear/morphology fields + exposure `Chi2`. When `ext_cat = 0` (no external catalog), the output catalog has **31 columns**.
+- **Catalog Width:** By default (`ext_cat = 1` with external columns), `<exposure>_all.cat` has: `EXTCAT_TOTAL_COLUMNS` external source fields + `EXPO_NUM` + `ccD_NUM` + `28` Stage-7 shear/morphology fields + exposure `Chi2`.
 
 ---
 
