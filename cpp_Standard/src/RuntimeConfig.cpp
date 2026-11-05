@@ -147,7 +147,7 @@ bool applyIniValue(const std::string& section,const std::string& key,const std::
         if (key=="run_process_main") return parseBoolean(raw,config.process.run_process_main) || (reason="expected boolean",false);
         if (key=="run_process_rearr") return parseBoolean(raw,config.process.run_process_rearr) || (reason="expected boolean",false);
         if (key=="run_process_fd") return parseBoolean(raw,config.process.run_process_fd) || (reason="expected boolean",false);
-        if (key=="expo_list") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.expo_list=v; config.external_expo_list_supplied=!v.empty(); return true; }
+        if (key=="expo_list") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.expo_list=v; return true; }
         if (key=="rearr_output_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearr_output_directory=v; return true; }
         if (key=="rearr_output_base_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearr_output_base_directory=v; return true; }
         if (key=="rearranged_expo_list_filename") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearranged_expo_list_filename=v; return true; }
@@ -296,9 +296,8 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     return config;
 }
 // No implicit file discovery: argc==1 means compiled configuration only.
-// The compatibility help output parameter is always false; --help is rejected.
-bool findRuntimeConfigPath(int argc,char* argv[],std::string& path,bool& help,std::string& error) {
-    path.clear(); help=false; error.clear(); bool seen=false;
+bool findRuntimeConfigPath(int argc,char* argv[],std::string& path,std::string& error) {
+    path.clear(); error.clear(); bool seen=false;
     if (argc<1 || !argv) { error="invalid argument vector"; return false; }
     for (int i=1;i<argc;++i) {
         const std::string arg=argv[i];
@@ -318,13 +317,6 @@ bool findRuntimeConfigPath(int argc,char* argv[],std::string& path,bool& help,st
     }
     return true;
 }
-// Kept as an internal API for existing callers; it never changes scientific values.
-bool parseRuntimeCommandLine(int argc,char* argv[],RuntimeConfig& config,std::string& error) {
-    std::string path; bool help=false;
-    config.help_requested=false;
-    return findRuntimeConfigPath(argc,argv,path,help,error);
-}
-
 bool applyRuntimeConfigText(const std::string& text,const std::string& source,
                             RuntimeConfig& config,std::string& error) {
     RuntimeConfig candidate=config;

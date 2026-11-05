@@ -78,8 +78,8 @@ int main(int argc,char* argv[]) {
     MPIScheduler::init(argc,argv);
     const int rank=MPIScheduler::state.rank;
     if (rank==0) std::cout<<"MPI Init Done..."<<std::endl;
-    std::string path,text,error; bool unused_help=false;
-    int ok=allSucceeded(findRuntimeConfigPath(argc,argv,path,unused_help,error)?1:0);
+    std::string path,text,error;
+    int ok=allSucceeded(findRuntimeConfigPath(argc,argv,path,error)?1:0);
     RuntimeConfig config=makeDefaultRuntimeConfig();
     if (ok && !path.empty()) {
         ok=allSucceeded(loadAndBroadcastConfigText(path,rank,text,error)?1:0);

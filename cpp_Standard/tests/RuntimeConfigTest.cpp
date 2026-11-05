@@ -1,4 +1,8 @@
 #include "RuntimeConfig.hpp"
+#include "ProcessConfig.hpp"
+#include "AstroCatConfig.hpp"
+#include "ExtCatConfig.hpp"
+#include "LensingConfig.hpp"
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -24,10 +28,8 @@ void checkAlias(const RuntimeConfig& c,const Lens&,long) {
 bool scan(std::vector<std::string> words,std::string& path) {
     std::vector<char*> argv;
     for (auto& word:words) argv.push_back(&word[0]);
-    bool help=true; std::string error;
-    bool ok=findRuntimeConfigPath(static_cast<int>(argv.size()),argv.data(),path,help,error);
-    expect(!help,"no help CLI flag");
-    return ok;
+    std::string error;
+    return findRuntimeConfigPath(static_cast<int>(argv.size()),argv.data(),path,error);
 }
 }
 int main(int argc,char* argv[]) {
@@ -52,6 +54,35 @@ int main(int argc,char* argv[]) {
         "--fd-expo-list","--fd-output-dir","--fd-output-base"})
         expect(!scan({"pipeline",option,"value"},path),"removed CLI rejected: "+option);
     auto defaults=makeDefaultRuntimeConfig();
+    RuntimeConfig placeholder{};
+    expect(!validateRuntimeConfig(placeholder,error),
+           "a raw value-initialized RuntimeConfig is not a runnable configuration");
+    // Headers are the sole source of compiled defaults, including values that
+    // differ between the runtime value type's zero initialization and the
+    // initialized, usable configuration.
+    expect(defaults.process.run_process_init == ProcessConfig::RUN_PROCESS_INIT
+           && defaults.process.run_process_main == ProcessConfig::RUN_PROCESS_MAIN
+           && defaults.process.run_process_rearr == ProcessConfig::RUN_PROCESS_REARR,
+           "workflow defaults originate in ProcessConfig");
+    expect(defaults.astrocat.add_header == AstroCatConfig::ASTROCAT_ADD_HEADER
+           && defaults.extcat.total_columns == ExtCatConfig::EXTCAT_TOTAL_COLUMNS
+           && defaults.extcat.ra_column_one_based == ExtCatConfig::EXTCAT_RA_COLUMN_ONE_BASED,
+           "catalog defaults originate in compiled config headers");
+    expect(defaults.lensing.process_stage == LensingConfig::PROCESS_stage
+           && defaults.lensing.pixel_size == LensingConfig::pixel_size
+           && defaults.lensing.nmax_chip == LensingConfig::DEFAULT_CHIP_COUNT
+           && defaults.lensing.chipnx == LensingConfig::chipnx,
+           "lensing defaults originate in compiled config headers");
+    // An INI must only replace specified keys; omitted fields retain their
+    // compiled defaults, not a placeholder value from RuntimeConfig.hpp.
+    {
+        RuntimeConfig partial=makeDefaultRuntimeConfig();
+        expect(applyRuntimeConfigText("[lensing]\npixel_size=0.31\n", "partial.ini", partial,error),error);
+        expect(partial.lensing.pixel_size==0.31
+               && partial.lensing.process_stage==LensingConfig::PROCESS_stage
+               && partial.lensing.nmax_chip==LensingConfig::DEFAULT_CHIP_COUNT,
+               "partial INI overrides one field without resetting others");
+    }
     auto c=defaults;
     expect(applyRuntimeConfigText("[process]\n# run_process_init =\n[lensing]\n# chipnx =\n", "comments", c,error),error);
     expect(c.process.run_process_init==defaults.process.run_process_init && c.lensing.chipnx==defaults.lensing.chipnx,
@@ -68,7 +99,7 @@ int main(int argc,char* argv[]) {
     expect(applyRuntimeConfigText("[init]\ncontains=\n","empty list",c,error) && c.init.contains.empty(),"empty tokens clear list");
     expect(!applyRuntimeConfigText("[extcat]\ninput_columns=\n","empty projection",c,error),"projection requires values");
     expect(applyRuntimeConfigText("[process]\nexpo_list=\"/data/a # b.list\" ; comment\n", "quoted",c,error),error);
-    expect(c.process.expo_list=="/data/a # b.list" && c.external_expo_list_supplied,"INI exposure list replaces old explicit CLI semantics");
+    expect(c.process.expo_list=="/data/a # b.list","INI exposure list is applied");
     expect(applyRuntimeConfigText("[extcat]\nuse_explicit_columns=true\ninput_columns=17,5,6\nuse_explicit_coordinate_columns=true\nra_column=5\ndec_column=6\n", "columns",c,error),error);
     expect(c.extcat.use_explicit_columns && c.extcat.use_explicit_coordinate_columns
         && c.extcat.input_columns_one_based==std::vector<std::size_t>({17,5,6}),"projection flags preserved in INI");
