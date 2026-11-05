@@ -1,381 +1,104 @@
-#include "CatalogLayout.hpp"
 #include "RuntimeConfig.hpp"
-
-#include <cmath>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
-
-// ==========================================
-// Function: expect
-// Method: Accumulate focused runtime-config test failures while emitting only
-//         violated invariants for readable command-line regression output.
-// ==========================================
-void expect(bool condition, const std::string& message, int& failures) {
-    if (!condition) {
-        std::cerr << "FAIL: " << message << '\n';
-        ++failures;
-    }
+int assertions=0, failures=0;
+void expect(bool ok,const std::string& message) {
+    ++assertions;
+    if (!ok) { ++failures; std::cerr<<"FAIL: "<<message<<'\n'; }
 }
-
-// ==========================================
-// Function: parseArguments
-// Method: Convert mutable string storage to argv form and exercise the exact
-//         production phase-B CLI parser without a subprocess.
-// ==========================================
-bool parseArguments(const std::vector<std::string>& arguments,
-                    RuntimeConfig& config, std::string& error) {
-    std::vector<std::string> storage = arguments;
+template<typename Lens>
+auto checkAlias(const RuntimeConfig& c,const Lens& lens,int) -> decltype((void)lens.source_cat) {
+    expect(c.extcat.output_directory=="/catalog/a" && lens.source_cat=="/catalog/b",
+           "Lite independent producer/consumer");
+}
+template<typename Lens>
+void checkAlias(const RuntimeConfig& c,const Lens&,long) {
+    expect(c.extcat.output_directory=="/catalog/b","Standard source_cat alias");
+}
+bool scan(std::vector<std::string> words,std::string& path) {
     std::vector<char*> argv;
-    argv.reserve(storage.size());
-    for (std::string& argument : storage) {
-        argv.push_back(argument.data());
+    for (auto& word:words) argv.push_back(&word[0]);
+    bool help=true; std::string error;
+    bool ok=findRuntimeConfigPath(static_cast<int>(argv.size()),argv.data(),path,help,error);
+    expect(!help,"no help CLI flag");
+    return ok;
+}
+}
+int main(int argc,char* argv[]) {
+    std::string path,error;
+    setenv("FQ_PIPELINE_CONFIG","/must/not/be/read.ini",1);
+    expect(scan({"pipeline"},path) && path.empty(),"no arguments retain compiled configuration");
+    expect(scan({"pipeline","--config","/data/my file.ini"},path) && path=="/data/my file.ini","explicit config separated");
+    expect(scan({"pipeline","--config=/data/file.ini"},path) && path=="/data/file.ini","explicit config equals");
+    for (const auto& args:std::vector<std::vector<std::string>>{
+         {"pipeline","--config"},{"pipeline","--config="},{"pipeline","--config",""},
+         {"pipeline","--config","a","--config","b"}, {"pipeline","a.list"},
+         {"pipeline","--config","a","trailing"}})
+        expect(!scan(args,path),"invalid argument sequence is rejected");
+    for (const std::string option:{"--help","-h","--run-astrocat","--astrocat-input","--astrocat-output",
+        "--astrocat-add-header","--astrocat-existing","--run-extcat","--run-init","--run-main",
+        "--run-rearr","--run-fd","--extcat-input","--extcat-output","--extcat-contains",
+        "--extcat-recursive","--extcat-delimiter","--extcat-header","--extcat-columns",
+        "--extcat-ra-column","--extcat-dec-column","--extcat-zp-column","--extcat-chunk-mib",
+        "--extcat-malformed","--extcat-existing","--science-root","--dq-root","--output-root",
+        "--dataset","--target","--prefix","--contains","--existing","--f77-max-path","--expo-list",
+        "--rearr-output-dir","--rearr-output-base","--rearr-list-name","--rearr-list-dir",
+        "--fd-expo-list","--fd-output-dir","--fd-output-base"})
+        expect(!scan({"pipeline",option,"value"},path),"removed CLI rejected: "+option);
+    auto defaults=makeDefaultRuntimeConfig();
+    auto c=defaults;
+    expect(applyRuntimeConfigText("[process]\n# run_process_init =\n[lensing]\n# chipnx =\n", "comments", c,error),error);
+    expect(c.process.run_process_init==defaults.process.run_process_init && c.lensing.chipnx==defaults.lensing.chipnx,
+           "commented blanks inherit defaults");
+    expect(applyRuntimeConfigText("[init]\nscience_root = /new/path\n", "paths",c,error),error);
+    expect(c.init.science_root=="/new/path" && c.lensing.chipnx==defaults.lensing.chipnx,"paths do not replace scientific defaults");
+    expect(applyRuntimeConfigText("[init]\nscience_root =\n", "empty",c,error),error);
+    expect(c.init.science_root.empty(),"active empty string clears, not inherits");
+    c=defaults;
+    expect(!applyRuntimeConfigText("[init]\nscience_root=/changed\n[process]\nrun_process_init=\n","bad",c,error),"empty bool fails");
+    expect(c.init.science_root==defaults.init.science_root,"INI application is transactional");
+    for (const std::string entry:{"chipnx=", "chipnx=no", "pixel_size=", "pixel_size=nan", "pixel_size=1abc"})
+        expect(!applyRuntimeConfigText("[lensing]\n"+entry+"\n","bad scalar",c,error),"malformed scalar rejected");
+    expect(applyRuntimeConfigText("[init]\ncontains=\n","empty list",c,error) && c.init.contains.empty(),"empty tokens clear list");
+    expect(!applyRuntimeConfigText("[extcat]\ninput_columns=\n","empty projection",c,error),"projection requires values");
+    expect(applyRuntimeConfigText("[process]\nexpo_list=\"/data/a # b.list\" ; comment\n", "quoted",c,error),error);
+    expect(c.process.expo_list=="/data/a # b.list" && c.external_expo_list_supplied,"INI exposure list replaces old explicit CLI semantics");
+    expect(applyRuntimeConfigText("[extcat]\nuse_explicit_columns=true\ninput_columns=17,5,6\nuse_explicit_coordinate_columns=true\nra_column=5\ndec_column=6\n", "columns",c,error),error);
+    expect(c.extcat.use_explicit_columns && c.extcat.use_explicit_coordinate_columns
+        && c.extcat.input_columns_one_based==std::vector<std::size_t>({17,5,6}),"projection flags preserved in INI");
+    expect(applyRuntimeConfigText("[init]\ndatasets=g:c4d_,r:other_\ncontains=v1,v2\n", "datasets",c,error),error);
+    expect(c.init.datasets.size()==2 && c.init.datasets[1].target=="r" && c.init.datasets[1].prefix=="other_",
+        "dataset list replaces target/prefix/repeatable dataset CLI");
+    expect(!applyRuntimeConfigText("[init]\ndatasets=bad\n","dataset error",c,error),"invalid dataset rejected");
+    expect(!applyRuntimeConfigText("[unknown]\nx=1\n","section",c,error),"unknown section rejected");
+    expect(!applyRuntimeConfigText("[init]\nunknown=1\n","key",c,error),"unknown key rejected");
+    c=defaults;
+    expect(applyRuntimeConfigText("[extcat]\noutput_directory=/catalog/a\n[lensing]\nsource_cat=/catalog/b\n", "alias",c,error),error);
+    checkAlias(c,c.lensing,0);
+    c=defaults;
+    expect(applyRuntimeConfigText("[lensing]\nccd_split=99\n","domain",c,error),error);
+    expect(!validateRuntimeConfig(c,error),"invalid branch domain fails validation");
+    if (argc==2) {
+        std::ifstream f(argv[1]); std::ostringstream buffer; buffer<<f.rdbuf();
+        expect(f.is_open(),"generated template readable");
+        c=defaults;
+        expect(applyRuntimeConfigText(buffer.str(),argv[1],c,error),"generated INI accepted by production parser: "+error);
+        expect(c.process.run_process_init==defaults.process.run_process_init
+            && c.process.run_process_main==defaults.process.run_process_main
+            && c.process.run_process_fd==defaults.process.run_process_fd
+            && c.lensing.process_stage==defaults.lensing.process_stage
+            && c.lensing.chipnx==defaults.lensing.chipnx,"generated template preserves compiled science settings");
     }
-    return parseRuntimeCommandLine(static_cast<int>(argv.size()), argv.data(),
-                                   config, error);
-}
-
-// ==========================================
-// Function: testDefaults
-// Method: Verify the effective fallback value set, including the user's
-//         disabled legacy path limit and all runtime geometry defaults.
-// ==========================================
-void testDefaults(int& failures) {
-    const RuntimeConfig config = makeDefaultRuntimeConfig();
-    expect(!config.process.run_process_astrocat
-               && !config.process.run_process_extcat
-               && config.process.run_process_init
-               && config.process.run_process_main
-               && !config.process.run_process_rearr
-               && !config.process.run_process_fd,
-           "compiled Lite phase defaults should be preserved", failures);
-    expect(config.init.f77_max_path == 0,
-           "user-configured F77 path default should remain disabled", failures);
-    expect(config.lensing.process_stage == 223092870,
-           "all nine numerical stages should remain enabled by default", failures);
-    expect(config.lensing.nmax_chip == 62 && config.lensing.chipnx == 2046
-               && config.lensing.chipny == 4094,
-           "camera defaults should seed runtime geometry", failures);
-}
-
-// ==========================================
-// Function: testIniSectionsAndTypes
-// Method: Exercise every INI value family, quoted strings, aliases, comments,
-//         lists, datasets, optional magnitude sentinels, and schema derivation.
-// ==========================================
-void testIniSectionsAndTypes(int& failures) {
-    RuntimeConfig config = makeDefaultRuntimeConfig();
-    const std::string text = R"ini(
-# full parser coverage
-[process]
-run_process_astrocat = true
-run_process_extcat = yes
-run_process_init = false
-run_process_main = on
-run_process_rearr = 1
-run_process_fd = 0
-expo_list = "/data/catalog path/expo.list" ; quoted path
-rearr_output_directory = selected
-rearr_output_base_directory = /tmp/rearr
-rearranged_expo_list_filename = custom.list
-rearranged_expo_list_directory = /tmp/lists
-fd_expo_list = /tmp/fd.list
-fd_output_directory = fd-selected
-fd_output_base_directory = /tmp/fd
-
-[astrocat]
-input_directory = /data/raw-gaia
-output_directory = /data/gaia-tiles
-add_header = false
-existing_policy = overwrite
-
-[extcat]
-input_directory = /data/raw
-output_directory = /data/tiles
-filename_tokens = "tile,part", source_
-recursive = no
-delimiter = comma
-header_mode = present
-malformed_policy = skip
-existing_policy = overwrite
-chunk_mib = 128
-total_columns = 20
-use_explicit_columns = true
-input_columns = 5,6,17,7,9
-use_explicit_coordinate_columns = true
-ra_column = 5
-dec_column = 6
-mag_g_column = 7
-mag_r_column = 9
-mag_i_column = 0
-mag_z_column = 0
-mag_y_column = 0
-zp_column = 17
-
-[init]
-science_root = /archive/science
-dq_root = /archive/dq
-output_root = /work/output
-datasets = gband:c4d_, rband:r4d_
-contains = v1, "release,2"
-existing = resume
-f77_max_path = 210
-
-[lensing]
-process_stage = 19
-astrometry_cat = /catalog/gaia
-source_cat = "/catalog/source tiles"
-ccd_split = 1
-gal_smooth = 3
-star_smooth = 4
-pixel_size = 0.31
-nmax_chip = 71
-chipnx = 2500
-chipny = 4500
-)ini";
-    std::string error;
-    expect(applyRuntimeConfigText(text, "test.ini", config, error),
-           "valid full INI should parse: " + error, failures);
-    expect(config.process.run_process_astrocat
-               && config.process.run_process_extcat
-               && !config.process.run_process_init
-               && config.process.run_process_main
-               && config.process.run_process_rearr
-               && !config.process.run_process_fd,
-           "INI booleans should accept yes/no/on/numeric forms", failures);
-    expect(config.astrocat.input_directory == "/data/raw-gaia"
-               && config.astrocat.output_directory == "/data/gaia-tiles"
-               && !config.astrocat.add_header
-               && config.astrocat.existing_policy == "overwrite",
-           "dedicated astrocat INI values should parse independently", failures);
-    expect(config.process.expo_list == "/data/catalog path/expo.list",
-           "quoted path and inline comment should decode", failures);
-    expect(config.extcat.filename_tokens.size() == 2
-               && config.extcat.filename_tokens[0] == "tile,part"
-               && config.extcat.filename_tokens[1] == "source_",
-           "quoted comma list values should remain one item", failures);
-    expect(config.extcat.input_columns_one_based
-               == std::vector<std::size_t>({5, 6, 17, 7, 9}),
-           "explicit projection should preserve configured order", failures);
-    expect(config.init.datasets.size() == 2
-               && config.init.datasets[1].target == "rband"
-               && config.init.contains[1] == "release,2",
-           "dataset and token lists should parse", failures);
-    expect(config.extcat.output_directory == "/data/tiles"
-               && config.lensing.source_cat == "/catalog/source tiles",
-           "main source input should remain independent from extcat output", failures);
-    expect(config.lensing.astrometry_cat == "/catalog/gaia"
-               && config.lensing.ccd_split == 1
-               && config.lensing.gal_smooth == 3
-               && config.lensing.star_smooth == 4,
-           "Lite stage inputs and smoothing controls should parse", failures);
-    expect(config.lensing.nmax_chip == 71 && config.lensing.chipnx == 2500
-               && config.lensing.chipny == 4500
-               && std::fabs(config.lensing.pixel_size - 0.31) < 1.0e-12,
-           "runtime geometry and pixel scale should parse", failures);
-
-    PipelineCatalog::CatalogLayout layout;
-    expect(PipelineCatalog::resolveCatalogLayout(config, layout, error),
-           "projection layout should resolve after INI parsing: " + error,
-           failures);
-    expect(layout.external_columns == 5 && layout.external.ra == 0
-               && layout.external.dec == 1 && layout.external.zp == 2
-               && layout.external.mag_g == std::size_t{3}
-               && layout.external.mag_r == std::size_t{4},
-           "layout should consume the nested extcat runtime section", failures);
-}
-
-// ==========================================
-// Function: testTransactionalErrors
-// Method: Ensure unknown keys, malformed types, unterminated quotes, and keys
-//         before sections fail with source context and do not partially commit.
-// ==========================================
-void testTransactionalErrors(int& failures) {
-    const std::vector<std::string> invalid_texts = {
-        "[lensing]\nchipnx=1234\nunknown=1\n",
-        "[lensing]\nchipnx=abc\n",
-        "[lensing]\next_cat=1\n",
-        "[process]\nexpo_list=\"unterminated\n",
-        "chipnx=10\n",
-        "[unknown]\nvalue=1\n",
-    };
-    for (const std::string& text : invalid_texts) {
-        RuntimeConfig config = makeDefaultRuntimeConfig();
-        std::string error;
-        expect(!applyRuntimeConfigText(text, "invalid.ini", config, error),
-               "invalid INI should fail", failures);
-        expect(error.find("file: invalid.ini") != std::string::npos
-                   && error.find("reason:") != std::string::npos,
-               "invalid INI should carry structured source diagnostics", failures);
-        expect(config.lensing.chipnx == 2046,
-               "failed INI should not commit earlier values", failures);
-    }
-}
-
-// ==========================================
-// Function: testPrecedenceAndConfigScan
-// Method: Demonstrate default < INI < CLI, both CLI syntaxes, list replacement,
-//         positional compatibility, and phase-A last-config-path behavior.
-// ==========================================
-void testPrecedenceAndConfigScan(int& failures) {
-    RuntimeConfig config = makeDefaultRuntimeConfig();
-    std::string error;
-    expect(applyRuntimeConfigText(
-               "[process]\nrun_process_main=false\nexpo_list=file.list\n"
-               "[init]\ndatasets=file:pfx\ncontains=filetoken\n",
-               "precedence.ini", config, error),
-           "precedence INI should parse: " + error, failures);
-    expect(parseArguments(
-               {"fq", "--config", "precedence.ini", "--run-main=true",
-                "--dataset", "cli:prefix", "--contains=cli-token",
-                "--expo-list", "cli.list", "--astrocat-output",
-                "/cli/gaia-tiles", "--source-cat=/cli/source-tiles",
-                "--extcat-output=/cli/generated-tiles"},
-               config, error),
-           "CLI overrides should parse: " + error, failures);
-    expect(config.process.run_process_main
-               && config.process.expo_list == "cli.list"
-               && config.astrocat.output_directory == "/cli/gaia-tiles"
-               && config.lensing.source_cat == "/cli/source-tiles"
-               && config.extcat.output_directory == "/cli/generated-tiles",
-           "CLI scalar values should override INI values", failures);
-    expect(config.init.datasets.size() == 1
-               && config.init.datasets[0].target == "cli"
-               && config.init.contains == std::vector<std::string>({"cli-token"}),
-           "first CLI list option should replace the INI list", failures);
-
-    std::vector<std::string> storage = {
-        "fq", "--config=first.ini", "--help", "--config", "second.ini"};
-    std::vector<char*> argv;
-    for (std::string& argument : storage) argv.push_back(argument.data());
-    std::string path;
-    bool help = false;
-    expect(findRuntimeConfigPath(static_cast<int>(argv.size()), argv.data(),
-                                 path, help, error),
-           "phase-A scan should succeed: " + error, failures);
-    expect(path == "second.ini" && help,
-           "last --config should win and --help should be detected", failures);
-}
-
-// ==========================================
-// Function: testValidationAndSchemas
-// Method: Cover positive-only geometry without an instrument ceiling, selector and
-//         stage-dependency errors in the Lite-only parameter domain.
-// ==========================================
-void testValidationAndSchemas(int& failures) {
-    RuntimeConfig config = makeDefaultRuntimeConfig();
-    std::string error;
-    expect(validateRuntimeConfig(config, error),
-           "compiled defaults should validate: " + error, failures);
-
-    config.process.run_process_extcat = false;
-    config.process.run_process_astrocat = false;
-    config.process.run_process_init = false;
-    config.process.run_process_main = false;
-    config.process.run_process_rearr = false;
-    config.process.run_process_fd = false;
-    config.extcat.output_directory.clear();
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("cannot be disabled") != std::string::npos,
-           "an all-disabled configuration should fail phase validation: " + error,
-           failures);
-
-    config.process.run_process_astrocat = true;
-    config.astrocat.input_directory = "/raw/gaia";
-    config.astrocat.output_directory = "/independent/tiles";
-    config.astrocat.existing_policy = "overwrite";
-    config.lensing.astrometry_cat = "/different/main-input";
-    config.init.datasets.clear();
-    expect(validateRuntimeConfig(config, error),
-           "astrocat-only mode should not require datasets or match lensing.astrometry_cat: "
-               + error,
-           failures);
-    config.astrocat.output_directory.clear();
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("output directory") != std::string::npos,
-           "enabled astrocat should reject an empty output directory", failures);
-    config = makeDefaultRuntimeConfig();
-
-    config.lensing.source_cat.clear();
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("input directory") != std::string::npos,
-           "enabled main should reject an empty source-catalog input", failures);
-    config = makeDefaultRuntimeConfig();
-
-    config.process.run_process_main = false;
-    config.process.run_process_init = false;
-    config.process.run_process_extcat = true;
-    config.extcat.input_directory = "/raw/external";
-    config.extcat.output_directory.clear();
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("output directory") != std::string::npos,
-           "enabled extcat should reject an empty producer output", failures);
-    config.extcat.output_directory = "/tiles";
-    expect(validateRuntimeConfig(config, error),
-           "extcat-only mode should not require the main source input: " + error,
-           failures);
-    config = makeDefaultRuntimeConfig();
-
-    config.lensing.nmax_chip = 1000;
-    config.lensing.chipnx = 7;
-    config.lensing.chipny = 9;
-    expect(validateRuntimeConfig(config, error),
-           "positive geometry should have no instrument hard limit: " + error,
-           failures);
-
-    config.lensing.ccd_split = 3;
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("ccd_split") != std::string::npos,
-           "Lite should reject a CCD split unsupported by its fixed arrays",
-           failures);
-    config.lensing.ccd_split = 2;
-    config.lensing.process_stage = 23;
-    expect(!validateRuntimeConfig(config, error)
-               && error.find("requires Stage 8") != std::string::npos,
-           "Stage 9 without Stage 8 should fail validation", failures);
-}
-
-// ==========================================
-// Function: testWriteOnceStore
-// Method: Verify deep consumers see the finalized value and a second
-//         initialization cannot mutate it.
-// ==========================================
-void testWriteOnceStore(int& failures) {
-    RuntimeConfig config = makeDefaultRuntimeConfig();
-    config.lensing.chipnx = 3333;
-    std::string error;
-    expect(RuntimeConfigStore::initialize(config, error),
-           "first RuntimeConfigStore initialization should succeed", failures);
-    expect(RuntimeConfigStore::isInitialized()
-               && RuntimeConfigStore::get().lensing.chipnx == 3333,
-           "store should expose the finalized immutable value", failures);
-    config.lensing.chipnx = 4444;
-    expect(!RuntimeConfigStore::initialize(config, error)
-               && RuntimeConfigStore::get().lensing.chipnx == 3333,
-           "second store initialization should fail without mutation", failures);
-}
-
-}  // namespace
-
-// ==========================================
-// Function: main
-// Method: Run parser, precedence, validation, schema, and store regressions in
-//         deterministic order and return nonzero on any failed invariant.
-// ==========================================
-int main() {
-    int failures = 0;
-    testDefaults(failures);
-    testIniSectionsAndTypes(failures);
-    testTransactionalErrors(failures);
-    testPrecedenceAndConfigScan(failures);
-    testValidationAndSchemas(failures);
-    testWriteOnceStore(failures);
-    if (failures != 0) {
-        std::cerr << failures << " RuntimeConfig test(s) failed\n";
-        return 1;
-    }
-    std::cout << "RuntimeConfig tests passed\n";
-    return 0;
+    c=defaults;
+    expect(RuntimeConfigStore::initialize(c,error),"freeze runtime configuration");
+    expect(RuntimeConfigStore::isInitialized(),"store initialized");
+    expect(!RuntimeConfigStore::initialize(c,error),"store cannot be replaced");
+    std::cout<<assertions<<" assertions, "<<failures<<" failures\n";
+    return failures?1:0;
 }

@@ -1,9 +1,7 @@
-.env
-runner/cpppipeline.env
-runner/site-env.sh
-*.docker.tar
+project.json
+fq-run/
+results/
 *.sif
-*.log
-logs/
-output/
-tmp/
+*.sif.*
+*.env
+__pycache__/

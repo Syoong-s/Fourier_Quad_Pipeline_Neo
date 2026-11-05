@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "variant": "standard",
+  "source": "../cpp_Standard",
+  "image": "ghcr.io/syoong-s/fourier_quad_pipeline_neo:gxx12.3-openmpi4.1.8-pmi2",
+  "ranks": 4,
+  "build_jobs": 4,
+  "run_directory": "./fq-run",
+  "mounts": [
+    {"host": "/absolute/path/to/archives", "container": "/data/archive", "mode": "ro"},
+    {"host": "/absolute/path/to/catalogs", "container": "/data/catalogs", "mode": "rw"},
+    {"host": "/absolute/path/to/calibration", "container": "/data/calibration", "mode": "ro"},
+    {"host": "./results", "container": "/data/output", "mode": "rw", "create": true}
+  ],
+  "paths": {
+    "init.science_root": "/data/archive/science",
+    "init.dq_root": "/data/archive/dq",
+    "init.output_root": "/data/output",
+    "astrocat.input_directory": "/data/catalogs/gaia-raw",
+    "astrocat.output_directory": "/data/catalogs/gaia-tiles",
+    "extcat.input_directory": "/data/catalogs/source-raw",
+    "extcat.output_directory": "/data/catalogs/source-tiles",
+    "lensing.astrometry_cat": null,
+    "lensing.source_cat": null,
+    "lensing.flat_path": "/data/calibration/flat",
+    "lensing.psf_path": "/data/calibration/psf",
+    "process.expo_list": null,
+    "process.rearr_output_directory": null,
+    "process.rearr_output_base_directory": null,
+    "process.rearranged_expo_list_filename": null,
+    "process.rearranged_expo_list_directory": null,
+    "process.fd_expo_list": null,
+    "process.fd_output_directory": null,
+    "process.fd_output_base_directory": null
+  },
+  "environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+  "hpc": {"sif": "./cpppipeline.sif", "runtime": "apptainer", "srun_args": [], "environment": {}}
+}

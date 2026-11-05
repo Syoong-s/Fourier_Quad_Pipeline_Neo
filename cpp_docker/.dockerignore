@@ -1,11 +1,5 @@
-.git
-.github
-.env
-runner/cpppipeline.env
-runner/site-env.sh
-*.docker.tar
-*.sif
-*.log
-logs/
-output/
-tmp/
+# The image contains only the toolchain; never send user data or run configs.
+**
+!Dockerfile
+!pixi.toml
+!pixi.lock

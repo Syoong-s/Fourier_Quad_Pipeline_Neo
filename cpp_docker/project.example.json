@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "variant": "standard",
+  "source": "../cpp_Standard",
+  "image": "ghcr.io/syoong-s/fourier_quad_pipeline_neo:gxx12.3-openmpi4.1.8-pmi2",
+  "ranks": 4,
+  "build_jobs": 4,
+  "run_directory": "./fq-run",
+  "mounts": [
+    {"host": "/absolute/path/to/science", "container": "/data/archive/science", "mode": "ro"},
+    {"host": "/absolute/path/to/dq", "container": "/data/archive/dq", "mode": "ro"},
+    {"host": "./results", "container": "/data/output", "mode": "rw", "create": true}
+  ],
+  "paths": {
+    "init.science_root": "/data/archive/science",
+    "init.dq_root": "/data/archive/dq",
+    "init.output_root": "/data/output"
+  },
+  "environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+  "hpc": {"sif": "./cpppipeline.sif", "runtime": "apptainer", "srun_args": [], "environment": {}}
+}

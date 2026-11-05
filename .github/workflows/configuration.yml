@@ -1,0 +1,31 @@
+name: Configuration regression
+on:
+  push:
+    paths:
+      - 'cpp_docker/**'
+      - 'cpp_Standard/**'
+      - 'cpp_Lite/**'
+      - '.github/workflows/configuration.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  configuration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Launcher configuration tests
+        run: python3 -m unittest discover -s cpp_docker/tests -v
+      - name: C++ configuration tests against actual configuration headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in Standard Lite; do
+            g++ -std=c++17 -Wall -Wextra -Werror \
+              -I"cpp_${variant}" -I"cpp_${variant}/include" -I"cpp_${variant}/config" \
+              "cpp_${variant}/src/RuntimeConfig.cpp" \
+              "cpp_${variant}/tests/RuntimeConfigTest.cpp" \
+              -o "/tmp/fq-config-${variant}"
+            "/tmp/fq-config-${variant}" "cpp_${variant}/pipeline.example.ini"
+          done

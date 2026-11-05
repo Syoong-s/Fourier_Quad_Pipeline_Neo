@@ -1,5 +1,4 @@
 #include "RuntimeConfig.hpp"
-
 #include "AstroCatConfig.hpp"
 #include "ExtCatConfig.hpp"
 #include "LensingConfig.hpp"
@@ -17,620 +16,204 @@
 #include <utility>
 
 namespace {
-
-struct CommandLineState {
-    bool extcat_contains_seen = false;
-    bool dataset_seen = false;
-    bool legacy_dataset_seen = false;
-    bool contains_seen = false;
-};
-
-struct StoreState {
-    std::unique_ptr<const RuntimeConfig> config;
-};
-
+struct StoreState { std::unique_ptr<const RuntimeConfig> config; };
 StoreState store_state;
-
-// ==========================================
-// Function: trim
-// Method: Remove leading and trailing ASCII whitespace without locale-specific
-//         transformations or changing embedded path characters.
-// ==========================================
 std::string trim(const std::string& value) {
-    std::size_t first = 0;
-    while (first < value.size()
-           && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
-        ++first;
-    }
-    std::size_t last = value.size();
-    while (last > first
-           && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
-        --last;
-    }
-    return value.substr(first, last - first);
+    std::size_t first=0, last=value.size();
+    while (first<last && std::isspace(static_cast<unsigned char>(value[first]))) ++first;
+    while (last>first && std::isspace(static_cast<unsigned char>(value[last-1]))) --last;
+    return value.substr(first,last-first);
 }
-
-// ==========================================
-// Function: lowercase
-// Method: Normalize INI section/key names while leaving user values untouched.
-// ==========================================
 std::string lowercase(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char character) {
-                       return static_cast<char>(std::tolower(character));
-                   });
+    std::transform(value.begin(),value.end(),value.begin(),
+        [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
     return value;
 }
-
-// ==========================================
-// Function: stripInlineComment
-// Method: Remove unquoted # or ; comments and preserve either quoted string form.
-// ==========================================
 std::string stripInlineComment(const std::string& value) {
-    char quote = '\0';
-    bool escaped = false;
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        const char character = value[index];
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (character == '\\' && quote != '\0') {
-            escaped = true;
-            continue;
-        }
-        if (character == '\'' || character == '"') {
-            if (quote == '\0') {
-                quote = character;
-            } else if (quote == character) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (quote == '\0' && (character == '#' || character == ';')) {
-            return value.substr(0, index);
-        }
+    char quote='\0'; bool escaped=false;
+    for (std::size_t i=0;i<value.size();++i) {
+        const char c=value[i];
+        if (escaped) { escaped=false; continue; }
+        if (c=='\\' && quote!='\0') { escaped=true; continue; }
+        if (c=='\'' || c=='"') { if (!quote) quote=c; else if (quote==c) quote='\0'; continue; }
+        if (!quote && (c=='#' || c==';')) return value.substr(0,i);
     }
     return value;
 }
-
-// ==========================================
-// Function: decodeString
-// Method: Trim one INI value, remove a matching quote pair, and decode only the
-//         quote/backslash escapes needed for paths with delimiters or comments.
-// ==========================================
-bool decodeString(const std::string& input, std::string& output,
-                  std::string& reason) {
-    const std::string value = trim(stripInlineComment(input));
-    if (value.empty()) {
-        output.clear();
-        return true;
+bool decodeString(const std::string& input,std::string& output,std::string& reason) {
+    const std::string value=trim(stripInlineComment(input));
+    if (value.empty()) { output.clear(); return true; }
+    if (value.front()!='\'' && value.front()!='"') { output=value; return true; }
+    if (value.size()<2 || value.back()!=value.front()) {
+        reason="unterminated quoted string"; return false;
     }
-    const bool starts_quoted = value.front() == '\'' || value.front() == '"';
-    if (!starts_quoted) {
-        output = value;
-        return true;
+    output.clear(); bool escaped=false; const char quote=value.front();
+    for (std::size_t i=1;i+1<value.size();++i) {
+        const char c=value[i];
+        if (escaped) { if (c!=quote && c!='\\') output+='\\'; output+=c; escaped=false; }
+        else if (c=='\\') escaped=true;
+        else output+=c;
     }
-    if (value.size() < 2 || value.back() != value.front()) {
-        reason = "unterminated quoted string";
-        return false;
-    }
-    output.clear();
-    const char quote = value.front();
-    bool escaped = false;
-    for (std::size_t index = 1; index + 1 < value.size(); ++index) {
-        const char character = value[index];
-        if (escaped) {
-            if (character != quote && character != '\\') {
-                output.push_back('\\');
-            }
-            output.push_back(character);
-            escaped = false;
-        } else if (character == '\\') {
-            escaped = true;
-        } else {
-            output.push_back(character);
-        }
-    }
-    if (escaped) {
-        reason = "quoted string ends with an incomplete escape";
-        return false;
-    }
+    if (escaped) { reason="quoted string ends with an incomplete escape"; return false; }
     return true;
 }
-
-// ==========================================
-// Function: splitList
-// Method: Split comma-separated INI lists outside quotes and decode every item.
-// ==========================================
-bool splitList(const std::string& input, std::vector<std::string>& items,
-               std::string& reason) {
-    const std::string value = trim(stripInlineComment(input));
-    items.clear();
-    if (value.empty()) {
-        return true;
-    }
-    char quote = '\0';
-    bool escaped = false;
-    std::size_t start = 0;
-    for (std::size_t index = 0; index <= value.size(); ++index) {
-        const bool at_end = index == value.size();
-        const char character = at_end ? ',' : value[index];
-        if (!at_end && escaped) {
-            escaped = false;
-            continue;
-        }
-        if (!at_end && character == '\\' && quote != '\0') {
-            escaped = true;
-            continue;
-        }
-        if (!at_end && (character == '\'' || character == '"')) {
-            if (quote == '\0') {
-                quote = character;
-            } else if (quote == character) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (character == ',' && quote == '\0') {
+bool splitList(const std::string& input,std::vector<std::string>& items,std::string& reason) {
+    const std::string value=trim(stripInlineComment(input));
+    items.clear(); if (value.empty()) return true;
+    char quote='\0'; bool escaped=false; std::size_t start=0;
+    for (std::size_t i=0;i<=value.size();++i) {
+        const bool end=i==value.size(); const char c=end?',':value[i];
+        if (!end && escaped) { escaped=false; continue; }
+        if (!end && c=='\\' && quote) { escaped=true; continue; }
+        if (!end && (c=='\'' || c=='"')) { if (!quote) quote=c; else if (quote==c) quote='\0'; continue; }
+        if (c==',' && !quote) {
             std::string decoded;
-            if (!decodeString(value.substr(start, index - start), decoded,
-                              reason)) {
-                return false;
-            }
-            if (decoded.empty()) {
-                reason = "list entries must not be empty";
-                return false;
-            }
-            items.push_back(std::move(decoded));
-            start = index + 1;
+            if (!decodeString(value.substr(start,i-start),decoded,reason)) return false;
+            if (decoded.empty()) { reason="list entries must not be empty"; return false; }
+            items.push_back(std::move(decoded)); start=i+1;
         }
     }
-    if (quote != '\0') {
-        reason = "unterminated quote in list";
-        return false;
-    }
+    if (quote) { reason="unterminated quote in list"; return false; }
     return true;
 }
-
-// ==========================================
-// Function: parseBoolean
-// Method: Accept the documented numeric and common textual boolean spellings.
-// ==========================================
-bool parseBoolean(const std::string& input, bool& parsed) {
-    std::string value;
-    std::string reason;
-    if (!decodeString(input, value, reason)) {
-        return false;
-    }
-    value = lowercase(value);
-    if (value == "true" || value == "1" || value == "yes" || value == "on") {
-        parsed = true;
-        return true;
-    }
-    if (value == "false" || value == "0" || value == "no" || value == "off") {
-        parsed = false;
-        return true;
-    }
+bool parseBoolean(const std::string& input,bool& result) {
+    std::string v,r; if (!decodeString(input,v,r)) return false; v=lowercase(v);
+    if (v=="true" || v=="1" || v=="yes" || v=="on") { result=true; return true; }
+    if (v=="false" || v=="0" || v=="no" || v=="off") { result=false; return true; }
     return false;
 }
-
-template <typename Integer>
-bool parseSignedInteger(const std::string& input, Integer& parsed,
-                        bool positive_only, bool non_negative) {
-    std::string value;
-    std::string reason;
-    if (!decodeString(input, value, reason) || value.empty()) {
-        return false;
-    }
-    std::size_t consumed = 0;
-    long long number = 0;
-    try {
-        number = std::stoll(value, &consumed);
-    } catch (const std::exception&) {
-        return false;
-    }
-    if (consumed != value.size() || (positive_only && number <= 0)
-        || (non_negative && number < 0)
-        || number < static_cast<long long>(std::numeric_limits<Integer>::min())
-        || number > static_cast<long long>(std::numeric_limits<Integer>::max())) {
-        return false;
-    }
-    parsed = static_cast<Integer>(number);
-    return true;
+template<typename T> bool parseSignedInteger(const std::string& input,T& result,bool positive,bool nonnegative) {
+    std::string v,r; if (!decodeString(input,v,r) || v.empty()) return false;
+    std::size_t consumed=0; long long n;
+    try { n=std::stoll(v,&consumed); } catch (const std::exception&) { return false; }
+    if (consumed!=v.size() || (positive && n<=0) || (nonnegative && n<0)
+        || n<static_cast<long long>(std::numeric_limits<T>::min())
+        || n>static_cast<long long>(std::numeric_limits<T>::max())) return false;
+    result=static_cast<T>(n); return true;
 }
-
-template <typename Integer>
-bool parseUnsignedInteger(const std::string& input, Integer& parsed,
-                          bool positive_only) {
-    std::string value;
-    std::string reason;
-    if (!decodeString(input, value, reason) || value.empty()
-        || value.front() == '-') {
-        return false;
-    }
-    std::size_t consumed = 0;
-    unsigned long long number = 0;
-    try {
-        number = std::stoull(value, &consumed);
-    } catch (const std::exception&) {
-        return false;
-    }
-    if (consumed != value.size() || (positive_only && number == 0)
-        || number > static_cast<unsigned long long>(
-                        std::numeric_limits<Integer>::max())) {
-        return false;
-    }
-    parsed = static_cast<Integer>(number);
-    return true;
+template<typename T> bool parseUnsignedInteger(const std::string& input,T& result,bool positive) {
+    std::string v,r; if (!decodeString(input,v,r) || v.empty() || v.front()=='-') return false;
+    std::size_t consumed=0; unsigned long long n;
+    try { n=std::stoull(v,&consumed); } catch (const std::exception&) { return false; }
+    if (consumed!=v.size() || (positive && !n)
+        || n>static_cast<unsigned long long>(std::numeric_limits<T>::max())) return false;
+    result=static_cast<T>(n); return true;
 }
-
-// ==========================================
-// Function: parseDouble
-// Method: Require full conversion and reject non-finite floating-point values.
-// ==========================================
-bool parseDouble(const std::string& input, double& parsed) {
-    std::string value;
-    std::string reason;
-    if (!decodeString(input, value, reason) || value.empty()) {
-        return false;
-    }
-    std::size_t consumed = 0;
-    try {
-        parsed = std::stod(value, &consumed);
-    } catch (const std::exception&) {
-        return false;
-    }
-    return consumed == value.size() && std::isfinite(parsed);
+bool parseDouble(const std::string& input,double& result) {
+    std::string v,r; if (!decodeString(input,v,r) || v.empty()) return false;
+    std::size_t consumed=0;
+    try { result=std::stod(v,&consumed); } catch (const std::exception&) { return false; }
+    return consumed==v.size() && std::isfinite(result);
 }
-
-// ==========================================
-// Function: parseDatasetValue
-// Method: Split exactly one TARGET:PREFIX pair with two non-empty components.
-// ==========================================
-bool parseDatasetValue(const std::string& value,
-                       InitConfig::DatasetSpec& dataset,
-                       std::string& reason) {
-    const std::size_t separator = value.find(':');
-    if (separator == std::string::npos || separator == 0
-        || separator + 1 == value.size()
-        || value.find(':', separator + 1) != std::string::npos) {
-        reason = "dataset must use TARGET:PREFIX with both components non-empty";
-        return false;
-    }
-    dataset.target = value.substr(0, separator);
-    dataset.prefix = value.substr(separator + 1);
-    return true;
-}
-
-// ==========================================
-// Function: parseDatasets
-// Method: Parse a comma-separated dataset list into initializer-compatible pairs.
-// ==========================================
-bool parseDatasets(const std::string& input,
-                   std::vector<InitConfig::DatasetSpec>& datasets,
-                   std::string& reason) {
+bool parseDatasets(const std::string& input,std::vector<InitConfig::DatasetSpec>& datasets,std::string& reason) {
     std::vector<std::string> values;
-    if (!splitList(input, values, reason)) {
-        return false;
-    }
+    if (!splitList(input,values,reason)) return false;
     std::vector<InitConfig::DatasetSpec> parsed;
-    for (const std::string& value : values) {
-        InitConfig::DatasetSpec dataset;
-        if (!parseDatasetValue(value, dataset, reason)) {
-            return false;
+    for (const auto& v: values) {
+        const auto i=v.find(':');
+        if (i==std::string::npos || i==0 || i+1==v.size() || v.find(':',i+1)!=std::string::npos) {
+            reason="dataset must use TARGET:PREFIX with both components non-empty"; return false;
         }
-        parsed.push_back(std::move(dataset));
+        parsed.push_back({v.substr(0,i),v.substr(i+1)});
     }
-    datasets = std::move(parsed);
-    return true;
+    datasets=std::move(parsed); return true;
 }
-
-// ==========================================
-// Function: parseColumnList
-// Method: Convert a non-empty comma-separated list to positive one-based indices.
-// ==========================================
-bool parseColumnList(const std::string& input,
-                     std::vector<std::size_t>& columns,
-                     std::string& reason) {
+bool parseColumnList(const std::string& input,std::vector<std::size_t>& columns,std::string& reason) {
     std::vector<std::string> values;
-    if (!splitList(input, values, reason) || values.empty()) {
-        reason = "expected one or more positive one-based indices";
-        return false;
+    if (!splitList(input,values,reason) || values.empty()) {
+        reason="expected one or more positive one-based indices"; return false;
     }
     std::vector<std::size_t> parsed;
-    for (const std::string& value : values) {
-        std::size_t column = 0;
-        if (!parseUnsignedInteger(value, column, true)) {
-            reason = "expected one or more positive one-based indices";
-            return false;
-        }
-        parsed.push_back(column);
+    for (const auto& v: values) {
+        std::size_t n=0;
+        if (!parseUnsignedInteger(v,n,true)) { reason="expected positive one-based indices"; return false; }
+        parsed.push_back(n);
     }
-    columns = std::move(parsed);
-    return true;
+    columns=std::move(parsed); return true;
 }
-
-// ==========================================
-// Function: formatConfigError
-// Method: Produce a stable source/section/key/value diagnostic for one INI error.
-// ==========================================
-std::string formatConfigError(const std::string& source_name,
-                              const std::string& section,
-                              const std::string& key,
-                              const std::string& value,
-                              const std::string& reason) {
-    std::ostringstream output;
-    output << "file: " << source_name << "\n"
-           << "  section: " << (section.empty() ? "<none>" : section) << "\n"
-           << "  key: " << (key.empty() ? "<none>" : key) << "\n"
-           << "  value: " << value << "\n"
-           << "  reason: " << reason;
-    return output.str();
+std::string formatConfigError(const std::string& source,const std::string& section,
+    const std::string& key,const std::string& value,const std::string& reason) {
+    return "file: "+source+"\n  section: "+(section.empty()?"<none>":section)
+        +"\n  key: "+(key.empty()?"<none>":key)+"\n  value: "+value+"\n  reason: "+reason;
 }
-
-// ==========================================
-// Function: applyIniValue
-// Method: Route one normalized section/key to its typed runtime field and
-//         report the expected domain for unknown or malformed values.
-// ==========================================
-bool applyIniValue(const std::string& section, const std::string& key,
-                   const std::string& raw_value, RuntimeConfig& config,
-                   std::string& reason) {
-    std::string string_value;
-    const auto parse_string = [&]() {
-        return decodeString(raw_value, string_value, reason);
-    };
-
-    if (section == "process") {
-        if (key == "run_process_astrocat") return parseBoolean(raw_value, config.process.run_process_astrocat) || (reason = "expected boolean", false);
-        if (key == "run_process_extcat") return parseBoolean(raw_value, config.process.run_process_extcat) || (reason = "expected boolean", false);
-        if (key == "run_process_init") return parseBoolean(raw_value, config.process.run_process_init) || (reason = "expected boolean", false);
-        if (key == "run_process_main") return parseBoolean(raw_value, config.process.run_process_main) || (reason = "expected boolean", false);
-        if (key == "run_process_rearr") return parseBoolean(raw_value, config.process.run_process_rearr) || (reason = "expected boolean", false);
-        if (key == "run_process_fd") return parseBoolean(raw_value, config.process.run_process_fd) || (reason = "expected boolean", false);
-        if (!parse_string()) return false;
-        if (key == "expo_list") config.process.expo_list = string_value;
-        else if (key == "rearr_output_directory") config.process.rearr_output_directory = string_value;
-        else if (key == "rearr_output_base_directory") config.process.rearr_output_base_directory = string_value;
-        else if (key == "rearranged_expo_list_filename") config.process.rearranged_expo_list_filename = string_value;
-        else if (key == "rearranged_expo_list_directory") config.process.rearranged_expo_list_directory = string_value;
-        else if (key == "fd_expo_list") config.process.fd_expo_list = string_value;
-        else if (key == "fd_output_directory") config.process.fd_output_directory = string_value;
-        else if (key == "fd_output_base_directory") config.process.fd_output_base_directory = string_value;
-        else { reason = "unknown key"; return false; }
-        return true;
-    }
-
-    if (section == "astrocat") {
-        if (key == "add_header") return parseBoolean(raw_value, config.astrocat.add_header) || (reason = "expected boolean", false);
-        if (!parse_string()) return false;
-        if (key == "input_directory") config.astrocat.input_directory = string_value;
-        else if (key == "output_directory") config.astrocat.output_directory = string_value;
-        else if (key == "existing_policy") config.astrocat.existing_policy = lowercase(string_value);
-        else { reason = "unknown key"; return false; }
-        return true;
-    }
-
-    if (section == "extcat") {
-        if (key == "recursive") return parseBoolean(raw_value, config.extcat.recursive) || (reason = "expected boolean", false);
-        if (key == "use_explicit_columns") return parseBoolean(raw_value, config.extcat.use_explicit_columns) || (reason = "expected boolean", false);
-        if (key == "use_explicit_coordinate_columns") return parseBoolean(raw_value, config.extcat.use_explicit_coordinate_columns) || (reason = "expected boolean", false);
-        if (key == "chunk_mib") return parseUnsignedInteger(raw_value, config.extcat.chunk_mib, true) || (reason = "expected positive integer", false);
-        if (key == "total_columns") return parseUnsignedInteger(raw_value, config.extcat.total_columns, true) || (reason = "expected positive integer", false);
-        if (key == "ra_column") return parseUnsignedInteger(raw_value, config.extcat.ra_column_one_based, true) || (reason = "expected positive one-based index", false);
-        if (key == "dec_column") return parseUnsignedInteger(raw_value, config.extcat.dec_column_one_based, true) || (reason = "expected positive one-based index", false);
-        if (key == "zp_column") return parseUnsignedInteger(raw_value, config.extcat.zp_column_one_based, true) || (reason = "expected positive one-based index", false);
-        if (key == "mag_g_column") return parseUnsignedInteger(raw_value, config.extcat.mag_g_column_one_based, false) || (reason = "expected non-negative one-based index or zero", false);
-        if (key == "mag_r_column") return parseUnsignedInteger(raw_value, config.extcat.mag_r_column_one_based, false) || (reason = "expected non-negative one-based index or zero", false);
-        if (key == "mag_i_column") return parseUnsignedInteger(raw_value, config.extcat.mag_i_column_one_based, false) || (reason = "expected non-negative one-based index or zero", false);
-        if (key == "mag_z_column") return parseUnsignedInteger(raw_value, config.extcat.mag_z_column_one_based, false) || (reason = "expected non-negative one-based index or zero", false);
-        if (key == "mag_y_column") return parseUnsignedInteger(raw_value, config.extcat.mag_y_column_one_based, false) || (reason = "expected non-negative one-based index or zero", false);
-        if (key == "input_columns") return parseColumnList(raw_value, config.extcat.input_columns_one_based, reason);
-        if (key == "filename_tokens") return splitList(raw_value, config.extcat.filename_tokens, reason);
-        if (!parse_string()) return false;
-        if (key == "input_directory") config.extcat.input_directory = string_value;
-        else if (key == "output_directory") config.extcat.output_directory = string_value;
-        else if (key == "delimiter") config.extcat.delimiter = lowercase(string_value);
-        else if (key == "header_mode") config.extcat.header_mode = lowercase(string_value);
-        else if (key == "malformed_policy") config.extcat.malformed_policy = lowercase(string_value);
-        else if (key == "existing_policy") config.extcat.existing_policy = lowercase(string_value);
-        else { reason = "unknown key"; return false; }
-        return true;
-    }
-
-    if (section == "init") {
-        if (key == "datasets") return parseDatasets(raw_value, config.init.datasets, reason);
-        if (key == "contains") return splitList(raw_value, config.init.contains, reason);
-        if (key == "f77_max_path") return parseSignedInteger(raw_value, config.init.f77_max_path, false, true) || (reason = "expected non-negative integer", false);
-        if (!parse_string()) return false;
-        if (key == "science_root") config.init.science_root = string_value;
-        else if (key == "dq_root") config.init.dq_root = string_value;
-        else if (key == "output_root") config.init.output_root = string_value;
-        else if (key == "existing") config.init.existing = lowercase(string_value);
-        else { reason = "unknown key"; return false; }
-        return true;
-    }
-
-    if (section == "lensing") {
-        if (key == "process_stage") return parseSignedInteger(raw_value, config.lensing.process_stage, true, false) || (reason = "expected positive integer", false);
-        if (key == "ccd_split") return parseSignedInteger(raw_value, config.lensing.ccd_split, false, false) || (reason = "expected integer", false);
-        if (key == "gal_smooth") return parseSignedInteger(raw_value, config.lensing.gal_smooth, false, true) || (reason = "expected non-negative integer", false);
-        if (key == "star_smooth") return parseSignedInteger(raw_value, config.lensing.star_smooth, false, true) || (reason = "expected non-negative integer", false);
-        if (key == "nmax_chip") return parseSignedInteger(raw_value, config.lensing.nmax_chip, true, false) || (reason = "expected positive integer", false);
-        if (key == "chipnx") return parseSignedInteger(raw_value, config.lensing.chipnx, true, false) || (reason = "expected positive integer", false);
-        if (key == "chipny") return parseSignedInteger(raw_value, config.lensing.chipny, true, false) || (reason = "expected positive integer", false);
-        if (key == "pixel_size") return parseDouble(raw_value, config.lensing.pixel_size) || (reason = "expected finite positive number", false);
-        if (!parse_string()) return false;
-        if (key == "astrometry_cat") config.lensing.astrometry_cat = string_value;
-        else if (key == "source_cat") config.lensing.source_cat = string_value;
-        else { reason = "unknown key"; return false; }
-        return true;
-    }
-
-    reason = "unknown section";
-    return false;
+bool valueInSet(int value,std::initializer_list<int> values) {
+    return std::find(values.begin(),values.end(),value)!=values.end();
 }
-
-// ==========================================
-// Function: prepareLegacyDataset
-// Method: Collapse configured datasets to one pair for --target/--prefix while
-//         forbidding mixed legacy and repeatable dataset syntaxes.
-// ==========================================
-bool prepareLegacyDataset(RuntimeConfig& config, CommandLineState& state,
-                          std::string& error) {
-    if (state.dataset_seen) {
-        error = "--dataset cannot be combined with --target or --prefix";
-        return false;
+bool applyIniValue(const std::string& section,const std::string& key,const std::string& raw,RuntimeConfig& config,std::string& reason) {
+    if (section=="process") {
+        if (key=="run_process_astrocat") return parseBoolean(raw,config.process.run_process_astrocat) || (reason="expected boolean",false);
+        if (key=="run_process_extcat") return parseBoolean(raw,config.process.run_process_extcat) || (reason="expected boolean",false);
+        if (key=="run_process_init") return parseBoolean(raw,config.process.run_process_init) || (reason="expected boolean",false);
+        if (key=="run_process_main") return parseBoolean(raw,config.process.run_process_main) || (reason="expected boolean",false);
+        if (key=="run_process_rearr") return parseBoolean(raw,config.process.run_process_rearr) || (reason="expected boolean",false);
+        if (key=="run_process_fd") return parseBoolean(raw,config.process.run_process_fd) || (reason="expected boolean",false);
+        if (key=="expo_list") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.expo_list=v; config.external_expo_list_supplied=!v.empty(); return true; }
+        if (key=="rearr_output_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearr_output_directory=v; return true; }
+        if (key=="rearr_output_base_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearr_output_base_directory=v; return true; }
+        if (key=="rearranged_expo_list_filename") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearranged_expo_list_filename=v; return true; }
+        if (key=="rearranged_expo_list_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.rearranged_expo_list_directory=v; return true; }
+        if (key=="fd_expo_list") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.fd_expo_list=v; return true; }
+        if (key=="fd_output_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.fd_output_directory=v; return true; }
+        if (key=="fd_output_base_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.process.fd_output_base_directory=v; return true; }
+        reason="unknown key"; return false;
     }
-    if (!state.legacy_dataset_seen) {
-        InitConfig::DatasetSpec dataset;
-        if (!config.init.datasets.empty()) {
-            dataset = config.init.datasets.front();
-        }
-        config.init.datasets.assign(1, dataset);
-        state.legacy_dataset_seen = true;
+    if (section=="astrocat") {
+        if (key=="input_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.astrocat.input_directory=v; return true; }
+        if (key=="output_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.astrocat.output_directory=v; return true; }
+        if (key=="add_header") return parseBoolean(raw,config.astrocat.add_header) || (reason="expected boolean",false);
+        if (key=="existing_policy") { std::string v; if (!decodeString(raw,v,reason)) return false; config.astrocat.existing_policy=lowercase(v); return true; }
+        reason="unknown key"; return false;
     }
-    return true;
-}
-
-// ==========================================
-// Function: applyNamedOption
-// Method: Apply one normalized CLI option to the nested runtime config and
-//         preserve existing list replacement/append semantics.
-// ==========================================
-bool applyNamedOption(const std::string& name, const std::string& value,
-                      RuntimeConfig& config, CommandLineState& state,
-                      std::string& error) {
-    if (name == "--run-astrocat") {
-        if (!parseBoolean(value, config.process.run_process_astrocat)) error = "--run-astrocat must be a boolean";
-    } else if (name == "--astrocat-input") {
-        config.astrocat.input_directory = value;
-    } else if (name == "--astrocat-output") {
-        config.astrocat.output_directory = value;
-    } else if (name == "--astrocat-add-header") {
-        if (!parseBoolean(value, config.astrocat.add_header)) error = "--astrocat-add-header must be a boolean";
-    } else if (name == "--astrocat-existing") {
-        config.astrocat.existing_policy = lowercase(value);
-    } else if (name == "--run-extcat") {
-        if (!parseBoolean(value, config.process.run_process_extcat)) error = "--run-extcat must be true, false, 1, 0, yes, no, on, or off";
-    } else if (name == "--run-init") {
-        if (!parseBoolean(value, config.process.run_process_init)) error = "--run-init must be a boolean";
-    } else if (name == "--run-main") {
-        if (!parseBoolean(value, config.process.run_process_main)) error = "--run-main must be a boolean";
-    } else if (name == "--run-rearr") {
-        if (!parseBoolean(value, config.process.run_process_rearr)) error = "--run-rearr must be a boolean";
-    } else if (name == "--run-fd") {
-        if (!parseBoolean(value, config.process.run_process_fd)) error = "--run-fd must be a boolean";
-    } else if (name == "--extcat-input") {
-        config.extcat.input_directory = value;
-    } else if (name == "--extcat-output") {
-        config.extcat.output_directory = value;
-    } else if (name == "--source-cat") {
-        config.lensing.source_cat = value;
-    } else if (name == "--extcat-contains") {
-        if (value.empty()) error = "--extcat-contains must not be empty";
-        else {
-            if (!state.extcat_contains_seen) {
-                config.extcat.filename_tokens.clear();
-                state.extcat_contains_seen = true;
-            }
-            config.extcat.filename_tokens.push_back(value);
-        }
-    } else if (name == "--extcat-recursive") {
-        if (!parseBoolean(value, config.extcat.recursive)) error = "--extcat-recursive must be a boolean";
-    } else if (name == "--extcat-delimiter") {
-        config.extcat.delimiter = lowercase(value);
-    } else if (name == "--extcat-header") {
-        config.extcat.header_mode = lowercase(value);
-    } else if (name == "--extcat-columns") {
-        std::string reason;
-        if (!parseColumnList(value, config.extcat.input_columns_one_based, reason)) error = "--extcat-columns " + reason;
-        else config.extcat.use_explicit_columns = true;
-    } else if (name == "--extcat-ra-column") {
-        if (!parseUnsignedInteger(value, config.extcat.ra_column_one_based, true)) error = "--extcat-ra-column must be a positive one-based index";
-        else config.extcat.use_explicit_coordinate_columns = true;
-    } else if (name == "--extcat-dec-column") {
-        if (!parseUnsignedInteger(value, config.extcat.dec_column_one_based, true)) error = "--extcat-dec-column must be a positive one-based index";
-        else config.extcat.use_explicit_coordinate_columns = true;
-    } else if (name == "--extcat-zp-column") {
-        if (!parseUnsignedInteger(value, config.extcat.zp_column_one_based, true)) error = "--extcat-zp-column must be a positive one-based index";
-    } else if (name == "--extcat-chunk-mib") {
-        if (!parseUnsignedInteger(value, config.extcat.chunk_mib, true)) error = "--extcat-chunk-mib must be a positive integer";
-    } else if (name == "--extcat-malformed") {
-        config.extcat.malformed_policy = lowercase(value);
-    } else if (name == "--extcat-existing") {
-        config.extcat.existing_policy = lowercase(value);
-    } else if (name == "--science-root") {
-        config.init.science_root = value;
-    } else if (name == "--dq-root") {
-        config.init.dq_root = value;
-    } else if (name == "--output-root") {
-        config.init.output_root = value;
-    } else if (name == "--dataset") {
-        if (state.legacy_dataset_seen) error = "--dataset cannot be combined with --target or --prefix";
-        else {
-            InitConfig::DatasetSpec dataset;
-            std::string reason;
-            if (!parseDatasetValue(value, dataset, reason)) error = "--" + reason;
-            else {
-                if (!state.dataset_seen) {
-                    config.init.datasets.clear();
-                    state.dataset_seen = true;
-                }
-                config.init.datasets.push_back(std::move(dataset));
-            }
-        }
-    } else if (name == "--target") {
-        if (prepareLegacyDataset(config, state, error)) config.init.datasets.front().target = value;
-    } else if (name == "--prefix") {
-        if (prepareLegacyDataset(config, state, error)) config.init.datasets.front().prefix = value;
-    } else if (name == "--contains") {
-        if (value.empty()) error = "--contains must not be empty";
-        else {
-            if (!state.contains_seen) {
-                config.init.contains.clear();
-                state.contains_seen = true;
-            }
-            config.init.contains.push_back(value);
-        }
-    } else if (name == "--existing") {
-        config.init.existing = lowercase(value);
-    } else if (name == "--f77-max-path") {
-        if (!parseSignedInteger(value, config.init.f77_max_path, false, true)) error = "--f77-max-path must be a non-negative integer";
-    } else if (name == "--expo-list") {
-        config.process.expo_list = value;
-        config.external_expo_list_supplied = true;
-    } else if (name == "--rearr-output-dir") {
-        config.process.rearr_output_directory = value;
-    } else if (name == "--rearr-output-base") {
-        config.process.rearr_output_base_directory = value;
-    } else if (name == "--rearr-list-name") {
-        config.process.rearranged_expo_list_filename = value;
-    } else if (name == "--rearr-list-dir") {
-        config.process.rearranged_expo_list_directory = value;
-    } else if (name == "--fd-expo-list") {
-        config.process.fd_expo_list = value;
-    } else if (name == "--fd-output-dir") {
-        config.process.fd_output_directory = value;
-    } else if (name == "--fd-output-base") {
-        config.process.fd_output_base_directory = value;
-    } else {
-        error = "unknown option: " + name;
+    if (section=="extcat") {
+        if (key=="input_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.input_directory=v; return true; }
+        if (key=="output_directory") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.output_directory=v; return true; }
+        if (key=="filename_tokens") return splitList(raw,config.extcat.filename_tokens,reason);
+        if (key=="recursive") return parseBoolean(raw,config.extcat.recursive) || (reason="expected boolean",false);
+        if (key=="delimiter") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.delimiter=lowercase(v); return true; }
+        if (key=="header_mode") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.header_mode=lowercase(v); return true; }
+        if (key=="malformed_policy") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.malformed_policy=lowercase(v); return true; }
+        if (key=="existing_policy") { std::string v; if (!decodeString(raw,v,reason)) return false; config.extcat.existing_policy=lowercase(v); return true; }
+        if (key=="chunk_mib") return parseUnsignedInteger(raw,config.extcat.chunk_mib,true) || (reason="expected positive integer",false);
+        if (key=="total_columns") return parseUnsignedInteger(raw,config.extcat.total_columns,true) || (reason="expected positive integer",false);
+        if (key=="use_explicit_columns") return parseBoolean(raw,config.extcat.use_explicit_columns) || (reason="expected boolean",false);
+        if (key=="input_columns") return parseColumnList(raw,config.extcat.input_columns_one_based,reason);
+        if (key=="use_explicit_coordinate_columns") return parseBoolean(raw,config.extcat.use_explicit_coordinate_columns) || (reason="expected boolean",false);
+        if (key=="ra_column") return parseUnsignedInteger(raw,config.extcat.ra_column_one_based,true) || (reason="expected positive integer",false);
+        if (key=="dec_column") return parseUnsignedInteger(raw,config.extcat.dec_column_one_based,true) || (reason="expected positive integer",false);
+        if (key=="mag_g_column") return parseUnsignedInteger(raw,config.extcat.mag_g_column_one_based,false) || (reason="expected nonnegative integer",false);
+        if (key=="mag_r_column") return parseUnsignedInteger(raw,config.extcat.mag_r_column_one_based,false) || (reason="expected nonnegative integer",false);
+        if (key=="mag_i_column") return parseUnsignedInteger(raw,config.extcat.mag_i_column_one_based,false) || (reason="expected nonnegative integer",false);
+        if (key=="mag_z_column") return parseUnsignedInteger(raw,config.extcat.mag_z_column_one_based,false) || (reason="expected nonnegative integer",false);
+        if (key=="mag_y_column") return parseUnsignedInteger(raw,config.extcat.mag_y_column_one_based,false) || (reason="expected nonnegative integer",false);
+        if (key=="zp_column") return parseUnsignedInteger(raw,config.extcat.zp_column_one_based,true) || (reason="expected positive integer",false);
+        reason="unknown key"; return false;
     }
-    return error.empty();
+    if (section=="init") {
+        if (key=="science_root") { std::string v; if (!decodeString(raw,v,reason)) return false; config.init.science_root=v; return true; }
+        if (key=="dq_root") { std::string v; if (!decodeString(raw,v,reason)) return false; config.init.dq_root=v; return true; }
+        if (key=="output_root") { std::string v; if (!decodeString(raw,v,reason)) return false; config.init.output_root=v; return true; }
+        if (key=="datasets") return parseDatasets(raw,config.init.datasets,reason);
+        if (key=="contains") return splitList(raw,config.init.contains,reason);
+        if (key=="existing") { std::string v; if (!decodeString(raw,v,reason)) return false; config.init.existing=lowercase(v); return true; }
+        if (key=="f77_max_path") return parseSignedInteger(raw,config.init.f77_max_path,false, true) || (reason="expected nonnegative integer",false);
+        reason="unknown key"; return false;
+    }
+    if (section=="lensing") {
+        if (key=="process_stage") return parseSignedInteger(raw,config.lensing.process_stage,true, false) || (reason="expected positive integer",false);
+        if (key=="astrometry_cat") { std::string v; if (!decodeString(raw,v,reason)) return false; config.lensing.astrometry_cat=v; return true; }
+        if (key=="source_cat") { std::string v; if (!decodeString(raw,v,reason)) return false; config.lensing.source_cat=v; return true; }
+        if (key=="ccd_split") return parseSignedInteger(raw,config.lensing.ccd_split,false, false) || (reason="expected int integer",false);
+        if (key=="gal_smooth") return parseSignedInteger(raw,config.lensing.gal_smooth,false, true) || (reason="expected nonnegative integer",false);
+        if (key=="star_smooth") return parseSignedInteger(raw,config.lensing.star_smooth,false, true) || (reason="expected nonnegative integer",false);
+        if (key=="pixel_size") return parseDouble(raw,config.lensing.pixel_size) || (reason="expected finite number",false);
+        if (key=="nmax_chip") return parseSignedInteger(raw,config.lensing.nmax_chip,true, false) || (reason="expected positive integer",false);
+        if (key=="chipnx") return parseSignedInteger(raw,config.lensing.chipnx,true, false) || (reason="expected positive integer",false);
+        if (key=="chipny") return parseSignedInteger(raw,config.lensing.chipny,true, false) || (reason="expected positive integer",false);
+        reason="unknown key"; return false;
+    }
+    reason="unknown section"; return false;
 }
-
-// ==========================================
-// Function: valueInSet
-// Method: Test one small integer branch selector against its implemented domain.
-// ==========================================
-bool valueInSet(int value, std::initializer_list<int> allowed) {
-    return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
-}
-
-}  // namespace
-
+} // namespace
 RuntimeConfig makeDefaultRuntimeConfig() {
     RuntimeConfig config;
     config.process.run_process_astrocat = ProcessConfig::RUN_PROCESS_ASTROCAT;
@@ -647,12 +230,10 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.process.fd_expo_list = ProcessConfig::FD_EXPO_LIST;
     config.process.fd_output_directory = ProcessConfig::FD_OUTPUT_DIRECTORY;
     config.process.fd_output_base_directory = ProcessConfig::FD_OUTPUT_BASE_DIRECTORY;
-
     config.astrocat.input_directory = AstroCatConfig::ASTROCAT_INPUT_DIRECTORY;
     config.astrocat.output_directory = AstroCatConfig::ASTROCAT_OUTPUT_DIRECTORY;
     config.astrocat.add_header = AstroCatConfig::ASTROCAT_ADD_HEADER;
     config.astrocat.existing_policy = AstroCatConfig::ASTROCAT_EXISTING_POLICY;
-
     config.extcat.input_directory = ExtCatConfig::EXTCAT_INPUT_DIRECTORY;
     config.extcat.output_directory = ExtCatConfig::EXTCAT_OUTPUT_DIRECTORY;
     config.extcat.filename_tokens = ExtCatConfig::EXTCAT_FILENAME_TOKENS;
@@ -674,7 +255,6 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.extcat.mag_z_column_one_based = ExtCatConfig::EXTCAT_MAG_Z_COLUMN_ONE_BASED;
     config.extcat.mag_y_column_one_based = ExtCatConfig::EXTCAT_MAG_Y_COLUMN_ONE_BASED;
     config.extcat.zp_column_one_based = ExtCatConfig::EXTCAT_ZP_COLUMN_ONE_BASED;
-
     config.init.science_root = InitConfig::SCIENCE_ROOT;
     config.init.dq_root = InitConfig::DQ_ROOT;
     config.init.output_root = InitConfig::OUTPUT_ROOT;
@@ -682,7 +262,6 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.init.contains = InitConfig::CONTAINS;
     config.init.existing = InitConfig::EXISTING;
     config.init.f77_max_path = InitConfig::F77_MAX_PATH;
-
     config.lensing.process_stage = LensingConfig::PROCESS_stage;
     config.lensing.astrometry_cat = LensingConfig::ASTROMETRY_CAT;
     config.lensing.source_cat = LensingConfig::SOURCE_CAT_DEFAULT;
@@ -695,284 +274,133 @@ RuntimeConfig makeDefaultRuntimeConfig() {
     config.lensing.chipny = LensingConfig::chipny;
     return config;
 }
-
-bool findRuntimeConfigPath(int argc, char* argv[], std::string& config_path,
-                           bool& help_requested, std::string& error) {
-    config_path.clear();
-    help_requested = false;
-    error.clear();
-    for (int index = 1; index < argc; ++index) {
-        const std::string argument = argv[index];
-        if (argument == "--help") {
-            help_requested = true;
-        } else if (argument == "--config") {
-            if (index + 1 >= argc || std::string(argv[index + 1]).rfind("--", 0) == 0) {
-                error = "missing value after --config";
-                return false;
-            }
-            config_path = argv[++index];
-        } else if (argument.rfind("--config=", 0) == 0) {
-            config_path = argument.substr(std::string("--config=").size());
-            if (config_path.empty()) {
-                error = "--config path must not be empty";
-                return false;
-            }
+// No implicit file discovery: argc==1 means compiled configuration only.
+// The compatibility help output parameter is always false; --help is rejected.
+bool findRuntimeConfigPath(int argc,char* argv[],std::string& path,bool& help,std::string& error) {
+    path.clear(); help=false; error.clear(); bool seen=false;
+    if (argc<1 || !argv) { error="invalid argument vector"; return false; }
+    for (int i=1;i<argc;++i) {
+        const std::string arg=argv[i];
+        if (arg!="--config" && arg.rfind("--config=",0)!=0) {
+            error="unsupported argument: "+arg+"; only --config PATH is supported; set other parameters in INI";
+            return false;
         }
+        if (seen) { error="--config may be specified only once"; return false; }
+        seen=true;
+        if (arg=="--config") {
+            if (i+1>=argc || std::string(argv[i+1]).rfind("--",0)==0) {
+                error="missing value after --config"; return false;
+            }
+            path=argv[++i];
+        } else path=arg.substr(9);
+        if (path.empty()) { error="--config path must not be empty"; return false; }
     }
     return true;
 }
+// Kept as an internal API for existing callers; it never changes scientific values.
+bool parseRuntimeCommandLine(int argc,char* argv[],RuntimeConfig& config,std::string& error) {
+    std::string path; bool help=false;
+    config.help_requested=false;
+    return findRuntimeConfigPath(argc,argv,path,help,error);
+}
 
-bool applyRuntimeConfigText(const std::string& text,
-                            const std::string& source_name,
-                            RuntimeConfig& config,
-                            std::string& error) {
-    RuntimeConfig candidate = config;
-    std::istringstream input(text);
-    std::string section;
-    std::string line;
-    std::size_t line_number = 0;
-    while (std::getline(input, line)) {
-        ++line_number;
-        const std::string cleaned = trim(stripInlineComment(line));
-        if (cleaned.empty()) {
-            continue;
-        }
-        if (cleaned.front() == '[') {
-            if (cleaned.size() < 3 || cleaned.back() != ']') {
-                error = formatConfigError(source_name, section, "<section>", cleaned,
-                                          "malformed section header at line " + std::to_string(line_number));
+bool applyRuntimeConfigText(const std::string& text,const std::string& source,
+                            RuntimeConfig& config,std::string& error) {
+    RuntimeConfig candidate=config;
+    std::istringstream input(text); std::string section,line; std::size_t number=0;
+    while (std::getline(input,line)) {
+        ++number; const auto clean=trim(stripInlineComment(line));
+        if (clean.empty()) continue;
+        if (clean.front()=='[') {
+            if (clean.size()<3 || clean.back()!=']') {
+                error=formatConfigError(source,section,"<section>",clean,"malformed section at line "+std::to_string(number));
                 return false;
             }
-            section = lowercase(trim(cleaned.substr(1, cleaned.size() - 2)));
-            if (section != "process" && section != "astrocat"
-                && section != "extcat"
-                && section != "init" && section != "lensing") {
-                error = formatConfigError(source_name, section, "<section>", cleaned,
-                                          "unknown section at line " + std::to_string(line_number));
+            section=lowercase(trim(clean.substr(1,clean.size()-2)));
+            if (section!="process" && section!="astrocat" && section!="extcat" && section!="init" && section!="lensing") {
+                error=formatConfigError(source,section,"<section>",clean,"unknown section at line "+std::to_string(number));
                 return false;
             }
             continue;
         }
-        const std::size_t equals = cleaned.find('=');
-        if (equals == std::string::npos) {
-            error = formatConfigError(source_name, section, "<none>", cleaned,
-                                      "expected key=value at line " + std::to_string(line_number));
+        const auto eq=clean.find('=');
+        if (eq==std::string::npos || section.empty()) {
+            error=formatConfigError(source,section,"<none>",clean,"expected [section] and key=value at line "+std::to_string(number));
             return false;
         }
-        if (section.empty()) {
-            error = formatConfigError(source_name, section,
-                                      trim(cleaned.substr(0, equals)),
-                                      trim(cleaned.substr(equals + 1)),
-                                      "key appears before any section at line " + std::to_string(line_number));
-            return false;
-        }
-        const std::string key = lowercase(trim(cleaned.substr(0, equals)));
-        const std::string raw_value = cleaned.substr(equals + 1);
+        const auto key=lowercase(trim(clean.substr(0,eq))); const auto raw=clean.substr(eq+1);
         std::string reason;
-        if (key.empty() || !applyIniValue(section, key, raw_value, candidate, reason)) {
-            if (reason.empty()) reason = "empty key";
-            error = formatConfigError(source_name, section, key,
-                                      trim(raw_value), reason + " at line " + std::to_string(line_number));
+        if (key.empty() || !applyIniValue(section,key,raw,candidate,reason)) {
+            error=formatConfigError(source,section,key,trim(raw),(reason.empty()?"empty key":reason)+" at line "+std::to_string(number));
             return false;
         }
     }
-    config = std::move(candidate);
-    error.clear();
-    return true;
+    config=std::move(candidate); error.clear(); return true;
 }
 
-bool parseRuntimeCommandLine(int argc, char* argv[], RuntimeConfig& config,
-                             std::string& error) {
-    std::string legacy_exposure_list;
-    bool legacy_exposure_list_supplied = false;
-    CommandLineState state;
+bool validateRuntimeConfig(const RuntimeConfig& config,std::string& error) {
     error.clear();
-    for (int index = 1; index < argc; ++index) {
-        const std::string argument = argv[index];
-        if (argument == "--help") {
-            config.help_requested = true;
-            continue;
-        }
-        if (argument == "--config") {
-            if (index + 1 >= argc) {
-                error = "missing value after --config";
-                return false;
-            }
-            ++index;
-            continue;
-        }
-        if (argument.rfind("--config=", 0) == 0) {
-            continue;
-        }
-        if (argument.rfind("--", 0) != 0) {
-            if (legacy_exposure_list_supplied) {
-                error = "only one positional exposure-list compatibility argument is allowed";
-                return false;
-            }
-            legacy_exposure_list = argument;
-            legacy_exposure_list_supplied = true;
-            continue;
-        }
-        const std::size_t equals = argument.find('=');
-        const std::string name = argument.substr(0, equals);
-        std::string value;
-        if (equals != std::string::npos) {
-            value = argument.substr(equals + 1);
-        } else {
-            if (index + 1 >= argc || std::string(argv[index + 1]).rfind("--", 0) == 0) {
-                error = "missing value after " + name;
-                return false;
-            }
-            value = argv[++index];
-        }
-        if (!applyNamedOption(name, value, config, state, error)) {
-            return false;
-        }
-    }
-    if (!config.external_expo_list_supplied && legacy_exposure_list_supplied) {
-        config.process.expo_list = legacy_exposure_list;
-        config.external_expo_list_supplied = true;
-    }
-    return true;
-}
-
-bool validateRuntimeConfig(const RuntimeConfig& config, std::string& error) {
-    error.clear();
-    const ProcessRuntimeConfig& process = config.process;
-    const AstroCatRuntimeConfig& astrocat = config.astrocat;
-    const ExtCatRuntimeConfig& extcat = config.extcat;
-    const InitRuntimeConfig& init = config.init;
-    const LensingRuntimeConfig& lensing = config.lensing;
-
-    if (!process.run_process_astrocat && !process.run_process_extcat
-        && !process.run_process_init && !process.run_process_main
-        && !process.run_process_rearr && !process.run_process_fd) {
-        error = "all process phases cannot be disabled";
-    } else if (process.run_process_astrocat
-               && astrocat.input_directory.empty()) {
-        error = "astrometry-catalog input directory must not be empty";
-    } else if (process.run_process_astrocat
-               && astrocat.output_directory.empty()) {
-        error = "astrometry-catalog output directory must not be empty";
-    } else if (process.run_process_astrocat
-               && astrocat.existing_policy != "fail"
-               && astrocat.existing_policy != "overwrite") {
-        error = "astrocat.existing_policy must be fail or overwrite";
-    } else if (process.run_process_extcat && extcat.output_directory.empty()) {
-        error = "external source-catalog output directory must not be empty";
-    } else if (process.run_process_extcat && extcat.input_directory.empty()) {
-        error = "external source-catalog input directory must not be empty";
-    } else if (process.run_process_main && lensing.source_cat.empty()) {
-        error = "external source-catalog input directory must not be empty";
-    } else if ((process.run_process_init || process.run_process_main
-                || process.run_process_rearr || process.run_process_fd)
-               && init.datasets.empty()) {
-        error = "at least one dataset must be configured";
-    } else if (!valueInSet(lensing.ccd_split, {1, 2})) {
-        error = "lensing.ccd_split must be 1 or 2";
-    } else if (lensing.process_stage <= 0) {
-        error = "lensing.process_stage must be positive";
-    } else if (lensing.process_stage % 23 == 0
-               && lensing.process_stage % 19 != 0) {
-        error = "Stage 9 requires Stage 8: process_stage has factor 23 without 19";
-    } else if (lensing.gal_smooth < 0 || lensing.star_smooth < 0) {
-        error = "lensing smoothing parameters must be non-negative";
-    } else if (!(lensing.pixel_size > 0.0) || !std::isfinite(lensing.pixel_size)) {
-        error = "lensing.pixel_size must be finite and positive";
-    } else if (lensing.nmax_chip <= 0 || lensing.chipnx <= 0
-               || lensing.chipny <= 0) {
-        error = "lensing.nmax_chip, chipnx, and chipny must be positive";
-    } else if (extcat.chunk_mib == 0 || extcat.total_columns == 0) {
-        error = "extcat.chunk_mib and total_columns must be positive";
-    } else if (extcat.ra_column_one_based == 0
-               || extcat.dec_column_one_based == 0
-               || extcat.zp_column_one_based == 0) {
-        error = "extcat RA, Dec, and ZP columns must be positive";
-    } else if (extcat.delimiter != "auto" && extcat.delimiter != "whitespace"
-               && extcat.delimiter != "comma" && extcat.delimiter != "tab") {
-        error = "extcat.delimiter must be auto, whitespace, comma, or tab";
-    } else if (extcat.header_mode != "auto" && extcat.header_mode != "present"
-               && extcat.header_mode != "absent") {
-        error = "extcat.header_mode must be auto, present, or absent";
-    } else if (extcat.malformed_policy != "fail"
-               && extcat.malformed_policy != "skip") {
-        error = "extcat.malformed_policy must be fail or skip";
-    } else if (extcat.existing_policy != "fail"
-               && extcat.existing_policy != "overwrite") {
-        error = "extcat.existing_policy must be fail or overwrite";
-    } else if (extcat.use_explicit_columns
-               && extcat.input_columns_one_based.empty()) {
-        error = "extcat explicit input column list must not be empty";
-    } else if (init.existing != "fail" && init.existing != "resume"
-               && init.existing != "overwrite") {
-        error = "init.existing must be fail, resume, or overwrite";
-    } else if (init.f77_max_path < 0) {
-        error = "init.f77_max_path must be non-negative";
-    }
-    if (!error.empty()) {
-        return false;
-    }
-
+    const auto& process=config.process; const auto& astrocat=config.astrocat;
+    const auto& extcat=config.extcat; const auto& init=config.init; const auto& lensing=config.lensing;
+    if (!process.run_process_astrocat && !process.run_process_extcat && !process.run_process_init
+        && !process.run_process_main && !process.run_process_rearr && !process.run_process_fd)
+        error="all process phases cannot be disabled";
+    else if (process.run_process_astrocat && astrocat.input_directory.empty())
+        error="astrometry-catalog input directory must not be empty";
+    else if (process.run_process_astrocat && astrocat.output_directory.empty())
+        error="astrometry-catalog output directory must not be empty";
+    else if (process.run_process_astrocat && astrocat.existing_policy!="fail" && astrocat.existing_policy!="overwrite")
+        error="astrocat.existing_policy must be fail or overwrite";
+    else if (process.run_process_extcat && extcat.input_directory.empty()) error="external source-catalog input directory must not be empty";
+    else if (process.run_process_extcat && extcat.output_directory.empty()) error="external source-catalog output directory must not be empty";
+    else if (process.run_process_main && lensing.source_cat.empty()) error="external source-catalog input directory must not be empty";
+    else if ((process.run_process_init || process.run_process_main || process.run_process_rearr || process.run_process_fd) && init.datasets.empty())
+        error="at least one dataset must be configured";
+    
+    else if (!valueInSet(lensing.ccd_split,{1,2})) error="lensing.ccd_split must be 1 or 2";
+    else if (lensing.process_stage<=0) error="lensing.process_stage must be positive";
+    else if (lensing.process_stage%23==0 && lensing.process_stage%19!=0)
+        error="Stage 9 requires Stage 8: process_stage has factor 23 without 19";
+    else if (lensing.gal_smooth<0 || lensing.star_smooth<0) error="lensing smoothing parameters must be non-negative";
+    else if (!(lensing.pixel_size>0) || !std::isfinite(lensing.pixel_size)) error="lensing.pixel_size must be finite and positive";
+    else if (lensing.nmax_chip<=0 || lensing.chipnx<=0 || lensing.chipny<=0) error="lensing chip geometry must be positive";
+    else if (!extcat.chunk_mib || !extcat.total_columns) error="extcat.chunk_mib and total_columns must be positive";
+    else if (!extcat.ra_column_one_based || !extcat.dec_column_one_based || !extcat.zp_column_one_based)
+        error="extcat RA, Dec, and ZP columns must be positive";
+    else if (extcat.delimiter!="auto" && extcat.delimiter!="whitespace" && extcat.delimiter!="comma" && extcat.delimiter!="tab")
+        error="extcat.delimiter must be auto, whitespace, comma, or tab";
+    else if (extcat.header_mode!="auto" && extcat.header_mode!="present" && extcat.header_mode!="absent")
+        error="extcat.header_mode must be auto, present, or absent";
+    else if (extcat.malformed_policy!="fail" && extcat.malformed_policy!="skip") error="extcat.malformed_policy must be fail or skip";
+    else if (extcat.existing_policy!="fail" && extcat.existing_policy!="overwrite") error="extcat.existing_policy must be fail or overwrite";
+    else if (extcat.use_explicit_columns && extcat.input_columns_one_based.empty()) error="extcat explicit input column list must not be empty";
+    else if (init.existing!="fail" && init.existing!="resume" && init.existing!="overwrite") error="init.existing must be fail, resume, or overwrite";
+    else if (init.f77_max_path<0) error="init.f77_max_path must be non-negative";
+    if (!error.empty()) return false;
     std::set<std::string> targets;
-    for (const InitConfig::DatasetSpec& dataset : init.datasets) {
-        if (dataset.target.empty() || dataset.target == "." || dataset.target == ".."
-            || dataset.target.find('/') != std::string::npos
-            || dataset.target.find('\\') != std::string::npos) {
-            error = "each dataset target must be one non-empty directory name";
-            return false;
+    for (const auto& ds:init.datasets) {
+        if (ds.target.empty() || ds.target=="." || ds.target==".." || ds.target.find('/')!=std::string::npos || ds.target.find('\\')!=std::string::npos) {
+            error="each dataset target must be one non-empty directory name"; return false;
         }
-        if (dataset.prefix.empty()) {
-            error = "each dataset prefix must be non-empty";
-            return false;
-        }
-        if (!targets.insert(dataset.target).second) {
-            error = "dataset target is duplicated: " + dataset.target;
-            return false;
-        }
+        if (ds.prefix.empty()) { error="each dataset prefix must be non-empty"; return false; }
+        if (!targets.insert(ds.target).second) { error="dataset target is duplicated: "+ds.target; return false; }
     }
-    for (const std::string& token : init.contains) {
-        if (token.empty()) {
-            error = "init contains tokens must be non-empty";
-            return false;
-        }
-    }
-    for (const std::string& token : extcat.filename_tokens) {
-        if (token.empty()) {
-            error = "extcat filename tokens must be non-empty";
-            return false;
-        }
-    }
-    if ((process.run_process_main || process.run_process_rearr)
-        && !process.run_process_init && init.datasets.size() > 1
-        && !process.expo_list.empty()) {
-        error = "one expo_list cannot serve multiple downstream-only datasets";
-        return false;
+    for (const auto& v:init.contains) if (v.empty()) { error="init contains tokens must be non-empty"; return false; }
+    for (const auto& v:extcat.filename_tokens) if (v.empty()) { error="extcat filename tokens must be non-empty"; return false; }
+    if ((process.run_process_main || process.run_process_rearr) && !process.run_process_init
+        && init.datasets.size()>1 && !process.expo_list.empty()) {
+        error="one expo_list cannot serve multiple downstream-only datasets"; return false;
     }
     return true;
 }
-
 namespace RuntimeConfigStore {
-
-bool initialize(RuntimeConfig config, std::string& error) {
-    if (store_state.config) {
-        error = "RuntimeConfigStore is already initialized";
-        return false;
-    }
-    store_state.config =
-        std::make_unique<const RuntimeConfig>(std::move(config));
-    error.clear();
-    return true;
+bool initialize(RuntimeConfig config,std::string& error) {
+    if (store_state.config) { error="RuntimeConfigStore is already initialized"; return false; }
+    store_state.config=std::make_unique<const RuntimeConfig>(std::move(config)); error.clear(); return true;
 }
-
-bool isInitialized() {
-    return static_cast<bool>(store_state.config);
-}
-
+bool isInitialized() { return static_cast<bool>(store_state.config); }
 const RuntimeConfig& get() {
-    if (!store_state.config) {
-        throw std::logic_error("RuntimeConfigStore is not initialized");
-    }
+    if (!store_state.config) throw std::logic_error("RuntimeConfigStore is not initialized");
     return *store_state.config;
 }
-
-}  // namespace RuntimeConfigStore
+}
