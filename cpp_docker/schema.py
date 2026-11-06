@@ -62,7 +62,7 @@ COMMON = OrderedDict([
 LENSING_COMMON = OrderedDict([
     ('process_stage', ('positive', 'Product of enabled stage primes. Factor 23 requires factor 19.')),
     ('astrometry_cat', ('path', 'Gaia tile directory read by the main phase.')),
-    ('source_cat', ('path', 'Source tiles: aliases extcat.output_directory in Standard; independent in Lite.')),
+    ('source_cat', ('path', 'Source tiles: aliases extcat.output_directory.')),
     ('ccd_split', ('int', 'CCD partition: 1 for the whole CCD, 2 for amplifier halves.')),
     ('gal_smooth', ('nonnegative', 'Galaxy-stamp smoothing selector; non-negative.')),
     ('star_smooth', ('nonnegative', 'Star-stamp smoothing selector; non-negative.')),
@@ -71,27 +71,26 @@ LENSING_COMMON = OrderedDict([
     ('chipnx', ('positive', 'Physical CCD width in pixels; positive.')),
     ('chipny', ('positive', 'Physical CCD height in pixels; positive.')),
 ])
-STANDARD_ONLY = OrderedDict([
-    ('astrometry_trivial', ('int', 'Astrometry: 0 for Gaia, 1 for identity mapping (Standard only).')),
-    ('astrometry_cat_type', ('int', 'Gaia layout: 1 for legacy large tiles, 2 for one-degree tiles (Standard runtime key).')),
-    ('include_flat', ('int', 'Super-flat correction: 0 off, 1 on (Standard only).')),
-    ('include_mask', ('int', 'Mask mode: 0, 1, 2 or 3 (Standard only).')),
-    ('flat_path', ('path', 'Directory containing super-flat FITS images (Standard only).')),
-    ('psf_path', ('path', 'External PSF FITS root (Standard only).')),
-    ('ext_cat', ('int', 'External sources: 0 off, 1 on; FD requires 1 (Standard only).')),
-    ('ext_psf', ('int', 'PSF input: 0 for exposure stars, 1 for external PSF (Standard only).')),
-    ('deblending', ('int', 'Deblending: 0 off, 1 on (Standard only).')),
-    ('psf_type', ('int', 'PSF model: 1 local polynomial, 2 hybrid (Standard only).')),
-    ('psf_ms', ('int', 'PCA/multi-scale PSF reconstruction: 0 off, 1 on (Standard only).')),
+LENSING_ADDITIONAL = OrderedDict([
+    ('astrometry_trivial', ('int', 'Astrometry: 0 for Gaia, 1 for identity mapping.')),
+    ('astrometry_cat_type', ('int', 'Gaia layout: 1 for legacy large tiles, 2 for one-degree tiles.')),
+    ('include_flat', ('int', 'Super-flat correction: 0 off, 1 on.')),
+    ('include_mask', ('int', 'Mask mode: 0, 1, 2 or 3.')),
+    ('flat_path', ('path', 'Directory containing super-flat FITS images.')),
+    ('psf_path', ('path', 'External PSF FITS root.')),
+    ('ext_cat', ('int', 'External sources: 0 off, 1 on; FD requires 1.')),
+    ('ext_psf', ('int', 'PSF input: 0 for exposure stars, 1 for external PSF.')),
+    ('deblending', ('int', 'Deblending: 0 off, 1 on.')),
+    ('psf_type', ('int', 'PSF model: 1 local polynomial, 2 hybrid.')),
+    ('psf_ms', ('int', 'PCA/multi-scale PSF reconstruction: 0 off, 1 on.')),
 ])
 
 def sections(variant):
-    if variant not in ('standard', 'lite'):
-        raise ValueError('variant must be standard or lite')
+    if variant != 'standard':
+        raise ValueError('Only the standard variant is supported')
     result = OrderedDict((s, OrderedDict(values)) for s, values in COMMON.items())
     result['lensing'] = OrderedDict(LENSING_COMMON)
-    if variant == 'standard':
-        result['lensing'].update(STANDARD_ONLY)
+    result['lensing'].update(LENSING_ADDITIONAL)
     return result
 
 

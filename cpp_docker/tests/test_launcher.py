@@ -44,9 +44,8 @@ class LauncherTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def save(self):
-        kind = self.obj.get('variant', 'standard')
-        (self.source / 'include/RuntimeConfig.hpp').write_text('struct LensingRuntimeConfig { '+
-            ('std::string source_cat;' if kind == 'lite' else 'std::string flat_path;')+' };\n')
+        (self.source / 'include/RuntimeConfig.hpp').write_text(
+            'struct LensingRuntimeConfig { std::string flat_path; };\n')
         self.cfg.write_text(json.dumps(self.obj), encoding='utf-8')
 
     def load(self, create=False):
@@ -75,18 +74,15 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse((self.root / 'missing').exists())
 
     def test_all_nonpath_values_are_commented_blank(self):
-        for variant in ('standard', 'lite'):
-            with self.subTest(variant=variant):
-                self.obj['variant'] = variant
-                p = self.load()
-                ini = fq.render_ini(p)
-                active = fq.validate_ini(p, ini)
-                self.assertEqual(set(active), set(p['paths']))
-                for s, keys in p['catalogue'].items():
-                    for k, (kind, _) in keys.items():
-                        if kind not in ('path','relative_path'):
-                            self.assertIn('# ' + k + ' =\n', ini)
-                self.assertNotIn('run_process_init = true', ini)
+        p = self.load()
+        ini = fq.render_ini(p)
+        active = fq.validate_ini(p, ini)
+        self.assertEqual(set(active), set(p['paths']))
+        for section, keys in p['catalogue'].items():
+            for key, (kind, _) in keys.items():
+                if kind not in ('path', 'relative_path'):
+                    self.assertIn('# ' + key + ' =\n', ini)
+        self.assertNotIn('run_process_init = true', ini)
 
     def test_reconfigure_preserves_science(self):
         p = self.configured()
@@ -123,24 +119,15 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(p['mounts']), 2)
         self.assertEqual(p['paths']['lensing.astrometry_cat'], '/data/output/gaia')
         self.assertNotIn('lensing.source_cat', p['paths'])
-        self.obj['variant'] = 'lite'
-        p = self.load()
-        self.assertEqual(p['paths']['lensing.source_cat'], '/data/output/source')
 
     def test_standard_alias_conflict_rejected(self):
         self.obj['paths'].update({'extcat.output_directory':'/data/output/a', 'lensing.source_cat':'/data/output/b'})
         with self.assertRaises(fq.ConfigError): self.load()
 
-    def test_lite_independent_source_directory_retained(self):
+    def test_removed_variant_is_rejected(self):
         self.obj['variant'] = 'lite'
-        self.obj['paths'].update({'extcat.output_directory':'/data/output/a', 'lensing.source_cat':'/data/input/b'})
-        p = self.load()
-        self.assertEqual(p['paths']['lensing.source_cat'], '/data/input/b')
-
-    def test_lite_rejects_standard_only_paths(self):
-        self.obj['variant'] = 'lite'
-        self.obj['paths']['lensing.psf_path'] = '/data/input/psf'
-        with self.assertRaises(fq.ConfigError): self.load()
+        with self.assertRaises(fq.ConfigError):
+            self.load()
 
     def test_null_path_inherits_and_empty_path_clears(self):
         self.obj['paths'].update({'process.fd_expo_list':None, 'process.fd_output_base_directory':''})
@@ -177,13 +164,12 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(self.load()['mounts']), 2)
 
     def test_all_path_interfaces_supported(self):
-        for variant in ('standard', 'lite'):
-            self.obj['variant'] = variant
-            self.obj['paths'] = {k:'/data/output/'+k.replace('.','/') for k in fq.path_keys(variant)}
-            self.obj['paths']['lensing.source_cat'] = self.obj['paths']['extcat.output_directory']
-            p = self.load()
-            active = fq.validate_ini(p, fq.render_ini(p))
-            self.assertEqual(set(active), set(p['paths']))
+        self.obj['paths'] = {k: '/data/output/' + k.replace('.', '/')
+                             for k in fq.path_keys('standard')}
+        self.obj['paths']['lensing.source_cat'] = self.obj['paths']['extcat.output_directory']
+        p = self.load()
+        active = fq.validate_ini(p, fq.render_ini(p))
+        self.assertEqual(set(active), set(p['paths']))
 
     def test_duplicate_and_protected_targets_fail(self):
         for target in ('/','/opt','/opt/x','/workspace','/fq-config/x','/data/input'):
@@ -394,7 +380,7 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(str(p['source'])+':/workspace/src_pipe:rw',result['argv'])
         self.assertNotIn('APPTAINERENV_OMPI_MCA_ess',result['env'])
 
-    def test_variant_mismatch_is_rejected(self):
+    def test_unsupported_source_signature_is_rejected(self):
         self.save()
         (self.source / 'include/RuntimeConfig.hpp').write_text('struct LensingRuntimeConfig { std::string source_cat; };')
         with self.assertRaises(fq.ConfigError): fq.load_project(self.cfg)

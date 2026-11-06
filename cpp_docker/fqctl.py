@@ -96,21 +96,21 @@ def environment(value, label):
     return result
 
 
-def linked_paths(paths, variant):
-    """Share one mount for producer/consumer paths without changing C++ semantics."""
+def linked_paths(paths):
+    """Keep C++ producer/consumer aliases consistent and reuse one mount."""
     p = {k: v for k, v in paths.items() if v is not None}
-    pairs = [('astrocat.output_directory', 'lensing.astrometry_cat'),
-             ('extcat.output_directory', 'lensing.source_cat')]
-    for producer, consumer in pairs:
-        if variant == 'standard' and consumer == 'lensing.source_cat':
-            require(producer not in p or consumer not in p or p[producer] == p[consumer],
-                    'In Standard, lensing.source_cat aliases extcat.output_directory; their values must agree')
+    producer = 'extcat.output_directory'
+    consumer = 'lensing.source_cat'
+    require(producer not in p or consumer not in p or p[producer] == p[consumer],
+            'lensing.source_cat aliases extcat.output_directory; their values must agree')
+    for producer, consumer in (
+            ('astrocat.output_directory', 'lensing.astrometry_cat'),
+            ('extcat.output_directory', 'lensing.source_cat')):
         if producer not in p and consumer in p:
             p[producer] = p[consumer]
         elif consumer not in p and producer in p:
             p[consumer] = p[producer]
-    if variant == 'standard':
-        p.pop('lensing.source_cat', None)  # Write the authoritative key only.
+    p.pop('lensing.source_cat', None)  # Write the authoritative path only.
     return p
 
 
@@ -128,6 +128,7 @@ def load_project(filename, create=False):
     require(not set(obj) - allowed, 'Unknown JSON fields: ' + ', '.join(sorted(set(obj) - allowed)))
     require(type(obj.get('version')) is int and obj['version'] == 1, 'version must be 1')
     variant = obj.get('variant', 'standard')
+    require(variant == 'standard', 'Only the standard variant is supported')
     catalogue = sections(variant)
     source = host_path(obj.get('source', '../cpp_Standard'), filename.parent, 'source')
     require(source.is_dir() and (source / 'Makefile').is_file(), 'source must be a C++ directory containing Makefile: ' + str(source))
@@ -136,8 +137,8 @@ def load_project(filename, create=False):
     require(header.is_file(), 'source is missing include/RuntimeConfig.hpp')
     lens = re.search(r'struct\s+LensingRuntimeConfig\s*\{(.*?)\};', header.read_text(encoding='utf-8'), re.S)
     require(lens is not None, 'Cannot identify LensingRuntimeConfig in source; use a supported source tree')
-    detected = 'lite' if re.search(r'std::string\s+source_cat\s*;', lens.group(1)) else 'standard'
-    require(detected == variant, 'variant does not match source; detected ' + detected)
+    require(re.search(r'std::string\s+flat_path\s*;', lens.group(1)) is not None,
+            'source is not a supported cpp_Standard tree')
     run_dir = host_path(obj.get('run_directory', './fq-run'), filename.parent, 'run_directory')
     require(not inside(str(run_dir), str(source)) and not inside(str(source), str(run_dir)),
             'run_directory must be separate from source; neither may contain the other')
@@ -179,7 +180,7 @@ def load_project(filename, create=False):
     for key, value in paths.items():
         if value is not None:
             text(value, 'paths.' + key)
-    paths = linked_paths(paths, variant)
+    paths = linked_paths(paths)
     for key, value in list(paths.items()):
         if not value:
             continue  # An intentional empty string retains its existing INI meaning.
@@ -484,7 +485,7 @@ def validate_ini(p, content):
     if 'init.datasets' in active and not active['init.datasets']:
         require(not any(true('process.run_process_' + n) for n in ('init', 'main', 'rearr', 'fd')),
                 'datasets must not be empty when a dataset phase is enabled')
-    if p['variant'] == 'standard' and true('process.run_process_fd'):
+    if true('process.run_process_fd'):
         require(active.get('lensing.ext_cat') != '0', 'process_fd requires ext_cat = 1')
     return active
 
