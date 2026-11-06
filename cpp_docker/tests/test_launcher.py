@@ -168,7 +168,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_all_path_interfaces_supported(self):
         self.obj['paths'] = {k: '/data/output/' + k.replace('.', '/')
-                             for k in fq.path_keys('standard')}
+                             for k in fq.path_keys()}
         self.obj['paths']['lensing.source_cat'] = self.obj['paths']['extcat.output_directory']
         p = self.load()
         active = fq.validate_ini(p, fq.render_ini(p))

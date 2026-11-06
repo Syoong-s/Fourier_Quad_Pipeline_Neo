@@ -41,19 +41,19 @@ class DocumentationTests(unittest.TestCase):
 
     def test_all_runtime_keys_in_full_reference(self):
         ref = (DOC / 'CPP_PIPELINE_PARAMETERS.md').read_text(encoding='utf-8')
-        for section, keys in sections('standard').items():
+        for section, keys in sections().items():
             for key in keys:
                 self.assertIn('`[%s].%s`' % (section, key), ref)
 
     def test_all_container_path_keys_documented(self):
         paths = (DOC / 'PATHS.md').read_text(encoding='utf-8')
-        for key in path_keys('standard'):
+        for key in path_keys():
             self.assertIn('`' + key + '`', paths)
 
     def test_native_templates_have_no_active_defaults(self):
         text = (ROOT / 'cpp_Standard' / 'pipeline.example.ini').read_text(encoding='utf-8')
         self.assertFalse(re.search(r'^\s*[^#;\[\s][^\n]*=', text, re.M))
-        for section, keys in sections('standard').items():
+        for section, keys in sections().items():
             for key in keys:
                 self.assertIn('# ' + key + ' =\n', text)
 
