@@ -28,15 +28,18 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
-      - name: Package complete source with root documentation
+      - name: Package Standard and Docker separately
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
           git archive --format=zip \
-            --prefix="Fourier_Quad_Pipeline_Neo-${RELEASE_TAG}/" \
-            --output="artifacts/Fourier_Quad_Pipeline_Neo-${RELEASE_TAG}.zip" \
-            "${RELEASE_TAG}"
+            --output="artifacts/cpp_Standard-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" cpp_Standard/
+          git archive --format=zip \
+            --output="artifacts/cpp_docker-${RELEASE_TAG}.zip" \
+            "${RELEASE_TAG}" cpp_docker/
+          test "$(find artifacts -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 2
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,8 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" artifacts/* --clobber
+            gh release upload "${RELEASE_TAG}" artifacts/*.zip --clobber
           else
             gh release create "${RELEASE_TAG}" --verify-tag \
-              --title "${RELEASE_TAG}" --generate-notes artifacts/*
+              --title "${RELEASE_TAG}" --generate-notes artifacts/*.zip
           fi

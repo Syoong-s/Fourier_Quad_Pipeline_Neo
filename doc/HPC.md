@@ -35,7 +35,7 @@ On a node with network access, pull the toolchain image into your shared storage
 
 ```bash
 apptainer pull /shared/images/cpppipeline.sif \
-  docker://ghcr.io/syoong-s/fourier_quad_pipeline_neo:gxx12.3-openmpi4.1.8-pmi2
+  docker://ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest
 ```
 
 ---

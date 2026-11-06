@@ -26,9 +26,10 @@ An end-to-end, MPI-parallel **C++17** implementation of the **Fourier_Quad (FQ)*
 
 | Section | Guide & Target Link | Description |
 | :--- | :--- | :--- |
+| **User Guide** | [Quick Start](doc/CONFIGURATION.md) | Quickstart, primary settings, build & run instructions |
 | **Environment** | [Environment & Dependencies](doc/CPP_GUIDE.md#environment-and-dependencies) | Native Linux/HPC compiler prerequisites and scientific library stack (`CFITSIO`, `FFTW3`, `Eigen3`, `BLAS/LAPACK`). |
 |  **Data Preparation** | [Data Preparation Guide](doc/DATA_PREPARATION.md) | Input specifications for Science/DQ FITS archives, Gaia astrometric tiles, and external source catalogs. |
-| **Configuration** | [Quick Start](doc/CONFIGURATION.md) · [INI Configuration](doc/CPP_GUIDE.md#configuration) · [Full Parameter Reference](doc/CPP_PIPELINE_PARAMETERS.md) | Runtime `--config` INI syntax, phase/stage switches, and the complete reference for all header constants and INI mappings. |
+| **Advanced Configuration** | [INI Configuration](doc/CPP_GUIDE.md#configuration) · [Full Parameter Reference](doc/CPP_PIPELINE_PARAMETERS.md) | Runtime `--config` INI syntax, phase/stage switches, and the complete reference for all header constants and INI mappings. |
 | **Build & Run** | [Build & Execution Guide](doc/CPP_GUIDE.md#build-and-run) | Native `make -j4` compilation, `mpirun` execution, 6-phase workflow scheduling, 9-stage prime bitmask, and common run recipes. |
 | **Docker Usage** | [Docker Workstation Guide](doc/DOCKER.md) · [Container Paths](doc/PATHS.md) | One-command containerized workflow (`python3 cpp_docker/fqctl.py`) and JSON mount/path mapping rules. |
 | **HPC Runner** | [HPC Apptainer Guide](doc/HPC.md) | Multi-node Slurm + PMI2 execution via Apptainer/Singularity (`cpp_docker/runner/run.sh`) on supercomputing clusters. |

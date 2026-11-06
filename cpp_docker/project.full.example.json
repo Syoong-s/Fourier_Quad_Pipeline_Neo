@@ -2,7 +2,7 @@
   "version": 1,
   "variant": "standard",
   "source": "../cpp_Standard",
-  "image": "ghcr.io/syoong-s/fourier_quad_pipeline_neo:gxx12.3-openmpi4.1.8-pmi2",
+  "image": "ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest",
   "ranks": 4,
   "build_jobs": 4,
   "run_directory": "./fq-run",

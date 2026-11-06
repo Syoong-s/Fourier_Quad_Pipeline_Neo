@@ -1,9 +1,12 @@
-# Configuration Quick Start
+# Quick Start
 
 [🏠 Home](../README.md) · [🗂️ Data Preparation](DATA_PREPARATION.md) · [📋 C++ User Guide](CPP_GUIDE.md) · [📋 Full Parameter Reference](CPP_PIPELINE_PARAMETERS.md)
 
 This guide covers **site-, camera-, and dataset-specific settings** that a new user should review before running pipeline. It does not teach numerical tuning, alternative PSF algorithms, estimator choices, or internal science branches.
 
+## 0. Install files
+Click [here](https://github.com/LSSTDESC/DC2-production/releases/latest) to download the latest main program.
+For users who utilize the docker image, click [here](https://github.com/LSSTDESC/DC2-production/releases/latest) to download the latest launcher.
 ## 1. Create a run configuration
 
 The pipeline combines compiled defaults in `cpp_Standard/config/*.hpp` with optional INI overrides.
