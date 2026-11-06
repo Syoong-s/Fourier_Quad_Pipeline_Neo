@@ -91,7 +91,7 @@ Input-format conventions that are **compile-time only** also need review when ch
 > `ASTROMETRY_TILE_PREFIX` / `SOURCE_CAT_TILE_PREFIX`
 
 
-**Gaia tiles:** For `[lensing].astrometry_cat_type = 1` users, make sure each tile contains a margin of half-width in each direction of the camera. In practice, for a camera coverage of $1.0\times1.5$ arcsec, a margin must be no less than $0.5\times0.75$ arcsec on both sides.
+**Gaia tiles:** For `[lensing].astrometry_cat_type = 1` users, make sure each tile contains a margin of width in each direction of the camera. In practice, for a camera coverage of $1.0\times1.5$ arcsec, a margin must be no less than $1.0\times1.5$ arcsec on both sides.
 
 **External source catalog:** canonical tiles must include RA, Dec, photometric redshift (`zp`), and at least one observed-band magnitude. If the source survey has a different column schema, check the following one-based positions:
 

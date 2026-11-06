@@ -85,17 +85,15 @@ LENSING_ADDITIONAL = OrderedDict([
     ('psf_ms', ('int', 'PCA/multi-scale PSF reconstruction: 0 off, 1 on.')),
 ])
 
-def sections(variant):
-    if variant != 'standard':
-        raise ValueError('Only the standard variant is supported')
+def sections():
     result = OrderedDict((s, OrderedDict(values)) for s, values in COMMON.items())
     result['lensing'] = OrderedDict(LENSING_COMMON)
     result['lensing'].update(LENSING_ADDITIONAL)
     return result
 
 
-def path_keys(variant):
-    return {s + '.' + k: kind for s, values in sections(variant).items()
+def path_keys():
+    return {s + '.' + k: kind for s, values in sections().items()
             for k, (kind, _) in values.items() if kind in ('path', 'relative_path')}
 
 

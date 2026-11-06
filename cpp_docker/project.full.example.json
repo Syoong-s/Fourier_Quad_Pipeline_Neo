@@ -1,16 +1,32 @@
 {
   "version": 1,
-  "variant": "standard",
   "source": "../cpp_Standard",
   "image": "ghcr.io/syoong-s/fourier_quad_pipeline_neo:latest",
   "ranks": 4,
   "build_jobs": 4,
   "run_directory": "./fq-run",
   "mounts": [
-    {"host": "/absolute/path/to/archives", "container": "/data/archive", "mode": "ro"},
-    {"host": "/absolute/path/to/catalogs", "container": "/data/catalogs", "mode": "rw"},
-    {"host": "/absolute/path/to/calibration", "container": "/data/calibration", "mode": "ro"},
-    {"host": "./results", "container": "/data/output", "mode": "rw", "create": true}
+    {
+      "host": "/absolute/path/to/archives",
+      "container": "/data/archive",
+      "mode": "ro"
+    },
+    {
+      "host": "/absolute/path/to/catalogs",
+      "container": "/data/catalogs",
+      "mode": "rw"
+    },
+    {
+      "host": "/absolute/path/to/calibration",
+      "container": "/data/calibration",
+      "mode": "ro"
+    },
+    {
+      "host": "./results",
+      "container": "/data/output",
+      "mode": "rw",
+      "create": true
+    }
   ],
   "paths": {
     "init.science_root": "/data/archive/science",
@@ -33,6 +49,14 @@
     "process.fd_output_directory": null,
     "process.fd_output_base_directory": null
   },
-  "environment": {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
-  "hpc": {"sif": "./cpppipeline.sif", "runtime": "apptainer", "srun_args": [], "environment": {}}
+  "environment": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "hpc": {
+    "sif": "./cpppipeline.sif",
+    "runtime": "apptainer",
+    "srun_args": [],
+    "environment": {}
+  }
 }

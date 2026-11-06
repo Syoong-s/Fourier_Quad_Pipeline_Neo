@@ -20,7 +20,6 @@ Edit `cpp_docker/project.json` to map your host directories into container paths
 
 | JSON Field | Purpose & Rules |
 | :--- | :--- |
-| `variant` | Pipeline source variant (`"standard"`). |
 | `source` | Path to the C++ Makefile directory (`"../cpp_Standard"`). |
 | `image` | OCI toolchain image reference (pin a tag or `@sha256:...` digest for production). |
 | `ranks` | MPI process count for `fqctl.py run` (minimum `2`). |

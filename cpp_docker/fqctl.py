@@ -123,13 +123,11 @@ def load_project(filename, create=False):
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ConfigError('Cannot parse JSON: ' + str(exc))
     require(isinstance(obj, dict), 'The JSON root must be an object')
-    allowed = {'version', 'variant', 'source', 'image', 'ranks', 'build_jobs',
+    allowed = {'version', 'source', 'image', 'ranks', 'build_jobs',
                'run_directory', 'mounts', 'paths', 'environment', 'hpc'}
     require(not set(obj) - allowed, 'Unknown JSON fields: ' + ', '.join(sorted(set(obj) - allowed)))
     require(type(obj.get('version')) is int and obj['version'] == 1, 'version must be 1')
-    variant = obj.get('variant', 'standard')
-    require(variant == 'standard', 'Only the standard variant is supported')
-    catalogue = sections(variant)
+    catalogue = sections()
     source = host_path(obj.get('source', '../cpp_Standard'), filename.parent, 'source')
     require(source.is_dir() and (source / 'Makefile').is_file(), 'source must be a C++ directory containing Makefile: ' + str(source))
     require((source / 'src/RuntimeConfig.cpp').is_file(), 'source is missing src/RuntimeConfig.cpp')
@@ -175,7 +173,7 @@ def load_project(filename, create=False):
                          'is_file': src.is_file(), 'pending': pending})
     paths = obj.get('paths', {})
     require(isinstance(paths, dict), 'paths must be an object')
-    known_paths = path_keys(variant)
+    known_paths = path_keys()
     require(not set(paths) - set(known_paths), 'Unknown path keys: ' + ', '.join(sorted(set(paths) - set(known_paths))))
     for key, value in paths.items():
         if value is not None:
@@ -216,7 +214,7 @@ def load_project(filename, create=False):
     henv = dict(env)
     henv.update(environment(hpc.get('environment', {}), 'hpc.environment'))
     return {'filename': filename, 'hash': hashlib.sha256(raw).hexdigest(), 'raw': obj,
-            'variant': variant, 'source': source, 'run_dir': run_dir, 'image': image,
+            'source': source, 'run_dir': run_dir, 'image': image,
             'ranks': ranks, 'jobs': jobs, 'mounts': resolved, 'paths': paths,
             'env': env, 'hpc_env': henv, 'sif': sif, 'runtime': runtime, 'srun_args': srun_args,
             'catalogue': catalogue}
@@ -459,7 +457,7 @@ def validate_ini(p, content):
                 if kind == 'columns':
                     require(bool(vs) and all(re.fullmatch(r'\+?[0-9]+', v) and int(v) > 0 for v in vs),
                             'input_columns requires a non-empty list of positive integers')
-            if full in path_keys(p['variant']):
+            if full in path_keys():
                 require(full in p['paths'] and value == p['paths'][full],
                         'Edit this path in JSON paths, then run configure: ' + full)
             active[full] = value

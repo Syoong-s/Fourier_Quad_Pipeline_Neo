@@ -51,15 +51,15 @@ class RepositoryLayoutTests(unittest.TestCase):
         for name in ('project.example.json', 'project.full.example.json'):
             path = ROOT / 'cpp_docker' / name
             config = json.loads(path.read_text(encoding='utf-8'))
-            self.assertEqual(config.get('variant', 'standard'), 'standard')
+            self.assertNotIn('variant', config)
             source = (path.parent / config['source']).resolve()
             self.assertEqual(source, CPP.resolve())
             self.assertTrue((source / 'Makefile').is_file())
 
-    def test_launcher_supports_only_existing_variant(self):
-        self.assertTrue(sections('standard'))
-        with self.assertRaises(ValueError):
-            sections('lite')
+    def test_single_source_schema_needs_no_variant(self):
+        self.assertTrue(sections())
+        from schema import path_keys
+        self.assertIn('init.output_root', path_keys())
 
 
 if __name__ == '__main__':

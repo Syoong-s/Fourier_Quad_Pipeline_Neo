@@ -31,7 +31,7 @@ class LauncherTests(unittest.TestCase):
         (self.root / 'inputs/list.txt').write_text('fixture\n')
         self.cfg = self.root / 'project.json'
         self.obj = {
-            'version':1, 'variant':'standard', 'source':'source code',
+            'version':1, 'source':'source code',
             'run_directory':'generated config', 'ranks':4, 'build_jobs':2,
             'mounts':[
                 {'host':'inputs','container':'/data/input','mode':'ro'},
@@ -124,10 +124,13 @@ class LauncherTests(unittest.TestCase):
         self.obj['paths'].update({'extcat.output_directory':'/data/output/a', 'lensing.source_cat':'/data/output/b'})
         with self.assertRaises(fq.ConfigError): self.load()
 
-    def test_removed_variant_is_rejected(self):
-        self.obj['variant'] = 'lite'
-        with self.assertRaises(fq.ConfigError):
-            self.load()
+    def test_legacy_variant_field_is_rejected(self):
+        for old_variant in ('standard', 'lite'):
+            with self.subTest(old_variant=old_variant):
+                self.obj['variant'] = old_variant
+                with self.assertRaises(fq.ConfigError):
+                    self.load()
+        self.obj.pop('variant', None)
 
     def test_null_path_inherits_and_empty_path_clears(self):
         self.obj['paths'].update({'process.fd_expo_list':None, 'process.fd_output_base_directory':''})
